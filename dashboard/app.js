@@ -239,7 +239,7 @@ function machinePhase(mid) {
   const stop = (S.index.meta && S.index.meta.stop_bin) ?? 16, nb = (S.index.meta && S.index.meta.phase_bins) || 16;
   const per = periodOf(mid);
   if (b == null && S.layers.cycle && per) {            // phase not streamed: preview the learned cycle from its start
-    const g = ((nowS() - S.anchor.wall) * CYCLE_RATE) / per; return g - Math.floor(g);
+    const g = (nowS() * CYCLE_RATE) / per; return g - Math.floor(g);   // free-running: not reset per snapshot
   }
   if (b == null || b < 0 || b >= stop) return null;
   let f = (b + 0.5) / nb;
