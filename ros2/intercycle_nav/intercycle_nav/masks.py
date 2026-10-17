@@ -33,7 +33,7 @@ import numpy as np
 from intercycle.codec import ble
 from intercycle.codec import maplayer as ML
 from intercycle.codec import trust as TR
-from intercycle.codec.sign import Keyring, demo_key, keyring_from
+from intercycle.codec.sign import Keyring, demo_key
 from intercycle.observer import mapping as M
 from intercycle.robot.predict import idle_windows
 from intercycle.types import DAY0_UNIX, MachineModel, MachineNow, State
@@ -45,11 +45,14 @@ KEEP_OUT, FREE = 100, 0
 
 
 TRUTH_PREFIXES = ("intercycle.truth", "intercycle.sim", "twin.")   # twin.: PLAN_TWIN §2 "Truth guards"
+# exact module names: the bare twin package (`import twin`) and S7b's offline M-W7 margin calibration (it reads truth on
+# dev worlds and writes a frozen constant; the robot must never import it)
+TRUTH_MODULES = ("twin", "intercycle.eval.conformal_margin")
 FEED_CONDITIONS = ("learned", "oracle")                            # conditions that consume the signed broadcast
 
 
 def assert_no_truth() -> None:
-    bad = [m for m in sys.modules if m.startswith(TRUTH_PREFIXES)]
+    bad = [m for m in sys.modules if m.startswith(TRUTH_PREFIXES) or m in TRUTH_MODULES]
     if bad:
         raise RuntimeError(f"ground-truth / simulator modules imported in the robot process: {bad}")
 
@@ -58,14 +61,27 @@ class KeyringError(RuntimeError):
     """No usable keyring: the robot refuses to start rather than trust a key it was not given (C-W5, fail closed)."""
 
 
-def demo_keyring(key_id: int) -> Keyring:
-    """DEV ONLY: verify key of the PUBLIC demo signing key (codec.sign.demo_key; anyone can compute it, so it proves
-    nothing). Used only when the bridge runs with dev=true, and by tests."""
-    return keyring_from({key_id: demo_key(key_id)})
+def demo_keyring(seed: int) -> Keyring:
+    """DEV ONLY: verify key of the PUBLIC demo signing key demo_key(seed) (codec.sign; anyone can compute it, so it
+    proves nothing), filed under its derived key_id like every key. Used only when the bridge runs with dev=true (seed =
+    the site's key_id, as devfeed signs), and by tests."""
+    vk = demo_key(seed).verify_key
+    return {TR.key_id_of(vk): vk}
+
+
+def check_derived_key_ids(keyring: Keyring) -> Keyring:
+    """C-W5: key_id is derived from the key (sha256(vk)[:2], codec.trust.key_id_of), never a configured constant. A
+    keyring that files a key under any other id raises KeyringError (fail closed: the bridge refuses to start)."""
+    bad = TR.non_derived_ids(keyring)
+    if bad:
+        raise KeyringError(f"keyring ids {bad} are not derived from their keys (key_id must be sha256(vk)[:2]: "
+                           f"{[TR.key_id_of(keyring[k]) for k in bad]})")
+    return keyring
 
 
 def keyring_from_hex(spec: str) -> Keyring:
-    """'1:abcd...,2:...' (key_id:hex 32-byte verify key) -> Keyring. Any malformed entry raises KeyringError."""
+    """'kid:hex,...' (kid = key_id_of(vk), hex = 32-byte verify key) -> Keyring. A malformed entry or a kid that is not
+    derived from its key raises KeyringError."""
     from nacl.signing import VerifyKey
 
     out = {}
@@ -80,7 +96,7 @@ def keyring_from_hex(spec: str) -> Keyring:
             raise KeyringError(f"bad keyring entry {part!r}: {e}") from None
     if not out:
         raise KeyringError(f"empty keyring {spec!r}")
-    return out
+    return check_derived_key_ids(out)
 
 
 def resolve_keyring(site: Site, condition: str, keyring_hex: str = "", keyring_file: str = "",
@@ -221,13 +237,17 @@ class ObserverState:
         self.trust: TR.TrustStore | None = None
         self._pinned: Keyring | None = None
         if isinstance(keyring, TR.TrustStore):
-            self.trust = keyring
+            self.trust = keyring                       # certs bind derived ids (codec.trust.parse_cert)
         else:
-            self._pinned = dict(keyring)
+            self._pinned = check_derived_key_ids(dict(keyring))
         kr = self._keyring_at(0.0)
         self.rx = ble.Receiver(kr, site.site_id)
         self.map_rx = ML.MapReceiver(kr, site.site_id)
-        self._map_key: dict[int, int] = {}             # map version -> key_id of the manifest that delivered it
+        # map version -> sha of the payload that completed it, and the key_ids of every verified manifest that attested
+        # that same payload (the delivering one, plus re-announcements by a rotated key: the map stays trusted while
+        # any of them is valid)
+        self._map_sha: dict[int, bytes] = {}
+        self._map_key: dict[int, set[int]] = {}
         self.fast_max_age_s = fast_max_age_s
         self.stats: Counter[str] = Counter()
 
@@ -245,11 +265,23 @@ class ObserverState:
         kind, data = record[:1], record[1:]
         if kind == FRAME:
             if ML.is_map_frame(data):
+                prev, n_cached = self.map_rx.manifest, self.map_rx.stats["cached"]
                 if self.map_rx.ingest(t_rx, data) is not None:
                     man = self.map_rx.manifest
                     assert man is not None
-                    self._map_key[int(man.version)] = int(man.key_id)
+                    self._map_sha[int(man.version)] = man.sha
+                    self._map_key[int(man.version)] = {int(man.key_id)}
                     self.stats["map_complete"] += 1
+                elif self.map_rx.stats["cached"] > n_cached and self.map_rx.manifest is not prev:
+                    # a verified manifest (signed by a key valid now) for a version already held: it vouches for the
+                    # cached map only if it names the same payload sha
+                    man = self.map_rx.manifest
+                    assert man is not None
+                    if self._map_sha.get(int(man.version)) == man.sha:
+                        self._map_key[int(man.version)].add(int(man.key_id))
+                        self.stats["map_reattested"] += 1
+                    else:
+                        self.stats["map_reattest_other_sha"] += 1
             else:
                 d = self.rx.ingest(t_rx, data)
                 if d is not None:
@@ -265,13 +297,14 @@ class ObserverState:
 
     # ---- views
     def map_view(self, t: float) -> ML.DecodedMap | None:
-        """Newest verified, unexpired map whose signing key is still valid at t (expired / revoked cert -> None)."""
+        """Newest verified, unexpired map attested by at least one key still valid at t (every attesting key expired /
+        revoked -> None)."""
         view = self.map_rx.latest(t)
         if view is None:
             return None
         newest = self.map_rx.cache.newest(self.site.site_id)
-        kid = self._map_key.get(newest[0]) if newest is not None else None
-        if kid is None or kid not in self._keyring_at(t):
+        kids = self._map_key.get(newest[0], set()) if newest is not None else set()
+        if not kids & self._keyring_at(t).keys():
             self.stats["map_key_not_valid"] += 1
             return None
         return view

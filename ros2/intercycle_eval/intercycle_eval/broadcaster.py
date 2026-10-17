@@ -17,7 +17,10 @@ observer sees the floor the robot actually changed. It never sees the robot.
 Conditions none / static need no feed (the bridge builds the static keep-out from the provisioned site map).
 
 Keys: a fresh Ed25519 key per episode (never written to disk except the PUBLIC verify key `observer_vk.txt`, which the
-bridge's keyring parameter reads). Feed: R2's FeedWriter("unix://$IC_WORK/observer.sock") + Broadcaster(...).tick(plant_t).
+bridge's keyring parameter reads). Its key_id is DERIVED from the key (codec.trust.key_id_of, C-W5): observer_vk.txt
+reads "<key_id_of(vk)>:<vk hex>", the map manifest is packed under that id (pack_map_for_key) and Broadcaster writes it
+into every slow / fast header, so the scenario's constant key_id never reaches the air.
+Feed: R2's FeedWriter("unix://$IC_WORK/observer.sock") + Broadcaster(...).tick(plant_t).
 """
 from __future__ import annotations
 
@@ -27,6 +30,14 @@ import os
 import time
 
 from nacl.signing import SigningKey
+
+
+def episode_key() -> tuple[SigningKey, str]:
+    """(fresh signing key, its keyring line "key_id:hex" with key_id = key_id_of(verify key))."""
+    from intercycle.codec.trust import key_id_of
+
+    key = SigningKey.generate()
+    return key, f"{key_id_of(key.verify_key)}:{key.verify_key.encode().hex()}"
 
 
 def _models_patch(path: str):
@@ -89,25 +100,23 @@ def main() -> None:
     log = open(os.path.join(out_dir, "broadcaster.jsonl"), "a")
 
     from intercycle import scenario as S
-    from intercycle.codec import maplayer as ML
     from intercycle.observer import mapping as M
     from intercycle.sim.world import Freeze, World
     from intercycle.types import DAY0_UNIX
-    from intercycle_nav.broadcast import Broadcaster
+    from intercycle_nav.broadcast import Broadcaster, pack_map_for_key
     from intercycle_nav.feed import FeedWriter
 
     scn = S.load()
     seed, t0 = int(pcfg["seed"]), float(pcfg["plant_t0"])
     T = float(cfg.get("seconds", 600.0))
     world = World(scn, seed, t0, t0 + T + 120.0)
-    key = SigningKey.generate()
-    vk = f"{scn.key_id}:{key.verify_key.encode().hex()}"
+    key, vk = episode_key()
     with open(os.path.join(work, "observer_vk.txt.tmp"), "w") as f:
         f.write(vk)
     os.replace(os.path.join(work, "observer_vk.txt.tmp"), os.path.join(work, "observer_vk.txt"))
 
     lm = M.LayeredMap.load(os.path.join(wdir, a.map))
-    bundle = ML.pack_map(lm, key, version=1, issue_time=DAY0_UNIX + t0 - 60.0)
+    bundle = pack_map_for_key(lm, key, version=1, issue_time=DAY0_UNIX + t0 - 60.0)
     info = {"t_wall": time.time(), "condition": a.condition, "seed": seed, "plant_t0": t0,
             "map": a.map, "map_bytes": bundle.stats.get("compressed_bytes"), "verify_key": vk}
     if a.condition == "learned":

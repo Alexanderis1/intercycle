@@ -66,8 +66,13 @@ The world frame is ROS `map`, with x = plan x (along the line) and y = plan z (a
 - Start your nodes with `cfg["extra_launch"]`. It takes a list of shell commands, run in the Humble env with
   cwd `/root/ros2`. The env adds `IC_WORK` (temp dir), `IC_WORLD` (world files: `map.yaml`, `boxes.json`, ...) and
   `IC_OUT` (episode output dir on the Volume). Example:
-  `["ros2 launch /root/ros2/intercycle_nav/launch/observer.launch.py use_sim_time:=True"]` or
-  `["python3 -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true"]`.
+  `["ros2 launch /root/ros2/intercycle_nav/launch/observer.launch.py use_sim_time:=True keyring_file:=/path/keyring.json"]` or
+  `["python3 -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true -p keyring:=\"$(cat $IC_WORK/observer_vk.txt)\""]`.
+  The bridge refuses to start (C-W5, fail closed) when condition is learned or oracle (learned is the default) and it
+  has no keyring: pass `keyring_file` (the site's root-signed cert keyring, `intercycle/codec/trust.py`) or `keyring`
+  (`key_id:hex` pinned verify keys, key_id = sha256(vk)[:2]; the eval broadcaster writes this line to
+  `$IC_WORK/observer_vk.txt`). For wiring tests only, `dev:=true` (or `devfeed:=True` in the launch file) trusts the
+  PUBLIC demo key; nothing such a run produces is a result.
 - **`cfg["nav2_cmd"]`** (a shell string, or a list with `$VAR` expansion) **replaces** the stock
   `ros2 launch nav2_bringup bringup_launch.py ...`. Use it, for example, to chain velocity_smoother -> collision_monitor
   -> `/cmd_vel`:

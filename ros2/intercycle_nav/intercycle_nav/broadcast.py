@@ -7,10 +7,18 @@ The observer itself is the caller's business:
   condition "oracle":  the episode runner's oracle (truth -> SlowLayer/FastLayer), an upper bound labelled as such
   dev / wiring only:   `SyntheticSchedule` below (SYNTHETIC periodic cycles, no truth, never a result)
 Time `t` is plant time (sim seconds since 00:00 of day 0); unix = DAY0_UNIX + t, as everywhere in the codec.
+
+Key ids (WEAKNESSES C-W5): the header key_id is DERIVED from the signing key (codec.trust.key_id_of = sha256(vk)[:2]),
+never the scenario's constant. `Broadcaster` writes key_id_of(its key) into every slow / fast header it signs, whatever
+id the observer model carries, and refuses a map bundle whose manifest names another id; `pack_map_for_key` packs a
+map under the derived id.
 """
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
+from dataclasses import replace
+from typing import TYPE_CHECKING, Protocol
 
 from nacl.signing import SigningKey
 
@@ -18,24 +26,43 @@ from intercycle.codec import ble
 from intercycle.codec import maplayer as ML
 from intercycle.codec.layout import FAST, SLOW, encode_fast, encode_slow
 from intercycle.codec.sign import sign
+from intercycle.codec.trust import key_id_of
 from intercycle.types import DAY0_UNIX, FastLayer, MachineModel, MachineNow, SlowLayer, State
 
-from intercycle_nav.feed import FeedWriter
+if TYPE_CHECKING:
+    from intercycle.observer.mapping import LayeredMap
+
+
+class FrameSink(Protocol):
+    """Where signed frames go: `intercycle_nav.feed.FeedWriter`, or an in-memory writer in tests."""
+
+    def frames(self, frs: list[bytes], /) -> object: ...
+
+
+def pack_map_for_key(m: LayeredMap, key: SigningKey, version: int, **kw) -> ML.MapBundle:
+    """ML.pack_map with the manifest's key_id = key_id_of(key) (the caller's map is not modified)."""
+    m2 = copy.copy(m)
+    m2.spec = dict(m.spec, key_id=key_id_of(key.verify_key))
+    return ML.pack_map(m2, key, version, **kw)
 
 
 class Broadcaster:
-    def __init__(self, writer: FeedWriter, key: SigningKey, bundle: ML.MapBundle | None = None,
+    def __init__(self, writer: FrameSink, key: SigningKey, bundle: ML.MapBundle | None = None,
                  slow_fn: Callable[[float], SlowLayer | None] | None = None,
                  fast_fn: Callable[[float], FastLayer | None] | None = None,
                  frame_hz: float = 20.0, fast_every_s: float = 0.5, slow_every_s: float = 10.0):
-        self.w, self.key, self.bundle = writer, key, bundle
+        self.w, self.key, self.key_id = writer, key, key_id_of(key.verify_key)
         self.slow_fn, self.fast_fn = slow_fn, fast_fn
         self.frame_hz, self.fast_every, self.slow_every = frame_hz, fast_every_s, slow_every_s
-        self.loop = bundle.carousel() if bundle is not None else []
-        self.k = 0
+        self.bundle, self.loop, self.k = None, [], 0
+        if bundle is not None:
+            self.set_map(bundle)
         self.t_frames = self.t_fast = self.t_slow = None
 
     def set_map(self, bundle: ML.MapBundle) -> None:
+        if bundle.manifest.key_id != self.key_id:
+            raise ValueError(f"map bundle manifest key_id {bundle.manifest.key_id} != key_id_of(signing key) "
+                             f"{self.key_id}: pack it with pack_map_for_key (C-W5)")
         self.bundle, self.loop, self.k = bundle, bundle.carousel(), 0
 
     def tick(self, t: float) -> None:
@@ -51,11 +78,13 @@ class Broadcaster:
         if self.slow_fn is not None and (self.t_slow is None or t - self.t_slow >= self.slow_every):
             s = self.slow_fn(t)
             if s is not None:
+                s = replace(s, key_id=self.key_id)
                 self.w.frames(ble.frame(sign(encode_slow(s), self.key), layer=SLOW))
             self.t_slow = t
         if self.fast_fn is not None and (self.t_fast is None or t - self.t_fast >= self.fast_every):
             f = self.fast_fn(t)
             if f is not None:
+                f = replace(f, key_id=self.key_id)
                 self.w.frames(ble.frame(sign(encode_fast(f), self.key), layer=FAST))
             self.t_fast = t
 

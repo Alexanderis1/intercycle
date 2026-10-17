@@ -136,6 +136,36 @@ def test_keyring_file_roundtrip_and_errors(tmp_path):
         TR.load_trust_store(p, SITE)                                   # the only cert is revoked by the file's CRL
 
 
+def test_keyring_file_crl_refuses_only_the_revoked_certs(tmp_path):
+    """Audit S3b #2: revoking a key by adding a CRL to the keyring file must drop that key only, not the whole file
+    (which would stop the robot until someone also edits the cert list)."""
+    root, op = _keys()
+    _, op2 = _keys()
+    good = TR.issue_cert(root, op.verify_key, SITE, NOW, NOW + 100)
+    bad = TR.issue_cert(root, op2.verify_key, SITE, NOW, NOW + 100)
+    crl = TR.make_crl(root, SITE, 1, NOW, [op2.verify_key])
+    p = tmp_path / "keyring.json"
+    p.write_text(TR.keyring_file_json(root.verify_key, SITE, [bad, good], crl), encoding="utf-8")
+    st = TR.load_trust_store(p, SITE)
+    assert set(st.keyring_at(NOW + 1)) == {TR.key_id_of(op.verify_key)}
+    assert st.stats["cert_revoked_skipped"] == 1 and st.stats["cert_ok"] == 1
+
+
+def test_keyring_file_revoked_but_invalid_cert_is_still_an_error(tmp_path):
+    """Only a GENUINE cert of a revoked key is skipped: a forged / foreign-site cert is a provisioning error even when
+    its key is on the CRL (fail closed)."""
+    root, op = _keys()
+    _, op2 = _keys()
+    good = TR.issue_cert(root, op.verify_key, SITE, NOW, NOW + 100)
+    crl = TR.make_crl(root, SITE, 1, NOW, [op2.verify_key])
+    p = tmp_path / "keyring.json"
+    for forged in (TR.issue_cert(TR.SigningKey.generate(), op2.verify_key, SITE, NOW, NOW + 100),   # other root
+                   TR.issue_cert(root, op2.verify_key, SITE + 1, NOW, NOW + 100)):                 # other site
+        p.write_text(TR.keyring_file_json(root.verify_key, SITE, [good, forged], crl), encoding="utf-8")
+        with pytest.raises(TR.TrustError):
+            TR.load_trust_store(p, SITE)
+
+
 # ------------------------------------------------------------------------------------------------ signing-key files
 def test_signing_key_file_roundtrip(tmp_path):
     sk = TR.SigningKey.generate()

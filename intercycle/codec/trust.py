@@ -47,9 +47,9 @@ from nacl.signing import SigningKey, VerifyKey
 
 from intercycle.codec.sign import SIG_LEN, Keyring
 
-__all__ = ["Cert", "Crl", "KeyPermissionError", "SigningKey", "TrustError", "TrustStore", "VerifyKey", "fingerprint",
-           "issue_cert", "key_id_of", "keyring_file_json", "load_signing_key", "load_trust_store", "make_crl",
-           "write_signing_key"]
+__all__ = ["Cert", "Crl", "KeyPermissionError", "RevokedKeyError", "SigningKey", "TrustError", "TrustStore",
+           "VerifyKey", "fingerprint", "issue_cert", "key_id_of", "keyring_file_json", "load_signing_key",
+           "load_trust_store", "make_crl", "non_derived_ids", "write_signing_key"]
 
 CERT_MAGIC, CRL_MAGIC = b"ICC1", b"ICR1"
 _CERT = struct.Struct(">4sIHQQI32s")
@@ -59,6 +59,10 @@ KEYRING_FORMAT = "intercycle-keyring/1"
 
 class TrustError(ValueError):
     """A certificate, revocation list or keyring file that must not be trusted (the message says why)."""
+
+
+class RevokedKeyError(TrustError):
+    """A genuine root-signed cert for this site whose key is on the revocation list held."""
 
 
 class KeyPermissionError(PermissionError):
@@ -72,6 +76,11 @@ def fingerprint(vk: VerifyKey) -> bytes:
 def key_id_of(vk: VerifyKey) -> int:
     """key_id = sha256(verify key)[:2] as a big-endian u16 (the 16-bit header field)."""
     return int.from_bytes(fingerprint(vk)[:2], "big")
+
+
+def non_derived_ids(keyring: Keyring) -> list[int]:
+    """The ids of a keyring whose key is not filed under key_id_of(key) (a constant / configured id): must be empty."""
+    return sorted(k for k, vk in keyring.items() if k != key_id_of(vk))
 
 
 # ------------------------------------------------------------------------------------------------ certificates / CRL
@@ -166,7 +175,7 @@ class TrustStore:
             if c.site_id != self.site_id:
                 raise TrustError("cert: wrong site")
             if fingerprint(c.vk) in self.revoked:
-                raise TrustError("cert: key is revoked")
+                raise RevokedKeyError("cert: key is revoked")
             old = self.certs.get(c.key_id)
             if old is not None and old.vk.encode() != c.vk.encode():
                 raise TrustError("cert: key_id collision with a different certified key")
@@ -204,7 +213,10 @@ def keyring_file_json(root_vk: VerifyKey, site_id: int, certs: list[bytes], crl:
 
 def load_trust_store(path: str | os.PathLike, site_id: int) -> TrustStore:
     """Read a keyring file. Every malformed field, a site mismatch, or any cert / CRL that fails to verify raises
-    TrustError: a provisioning error must stop the robot, never degrade into trusting less-checked keys."""
+    TrustError: a provisioning error must stop the robot, never degrade into trusting less-checked keys.
+    A genuine cert (root-signed, this site) whose key the file's own CRL revokes is skipped, not an error: adding a CRL
+    to the file is how a key is revoked, and it must drop that key only (counted in stats["cert_revoked_skipped"]).
+    A file left with no unrevoked cert raises."""
     try:
         d = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
@@ -225,7 +237,12 @@ def load_trust_store(path: str | os.PathLike, site_id: int) -> TrustStore:
     if crl is not None:
         st.apply_crl(crl)
     for c in certs:
-        st.add_cert(c)
+        try:
+            st.add_cert(c)
+        except RevokedKeyError:
+            st.stats["cert_revoked_skipped"] += 1
+    if not st.certs:
+        raise TrustError(f"keyring file {path}: every certificate is revoked by its CRL")
     return st
 
 

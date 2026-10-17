@@ -16,7 +16,8 @@ ROS time 0), rate_hz, horizon_s, step_s, k_sigma, pad_bins, inflate_m, static_ma
 ("key_id:hex,..." pinned verify keys), dev (default false). C-W5, fail closed: there is NO default key. With condition
 learned / oracle and neither keyring_file nor keyring the node refuses to start, unless dev:=true (the PUBLIC demo key,
 wiring tests only, never a result). Any malformed keyring is a startup error. Signatures are checked against the keys
-valid at each message's receive time (cert nbf/exp, revocation list).
+valid at each message's receive time (cert nbf/exp, revocation list). A pinned key_id must be key_id_of(vk) =
+sha256(vk)[:2] (derived, never the scenario constant), else a startup error.
 scenario (site-map YAML path; default scenario/bodyshop.yaml), log_path (JSONL; default $IC_OUT/observer_bridge.jsonl).
 
 The robot pose for the HELD rule is the localisation estimate (TF map -> base_link from AMCL), never simulator truth.

@@ -19,16 +19,16 @@ sys.path.insert(0, str(PKG))
 
 from intercycle import scenario as S  # noqa: E402
 from intercycle.codec import ble  # noqa: E402
-from intercycle.codec import maplayer as ML  # noqa: E402
 from intercycle.codec.layout import FAST, encode_fast  # noqa: E402
 from intercycle.codec.sign import demo_key, sign  # noqa: E402
+from intercycle.codec.trust import key_id_of  # noqa: E402
 from intercycle.observer import mapping as M  # noqa: E402
 from intercycle.types import DAY0_UNIX, State  # noqa: E402
 
 from intercycle_nav import feed as F  # noqa: E402
 from intercycle_nav import masks as K  # noqa: E402
 from intercycle_nav import timing as T  # noqa: E402
-from intercycle_nav.broadcast import Broadcaster, SyntheticSchedule  # noqa: E402
+from intercycle_nav.broadcast import Broadcaster, SyntheticSchedule, pack_map_for_key  # noqa: E402
 
 NPZ = REPO / "out" / "layered_map.npz"
 SITE = K.Site.from_scenario()
@@ -47,7 +47,8 @@ class _MemWriter:
 
 def _sched():
     scn = S.load()
-    return SyntheticSchedule(scn.site_id, scn.key_id, [60.0] * 8 + [45.0, 60.0], [m.busy for m in scn.machines])
+    return SyntheticSchedule(scn.site_id, key_id_of(demo_key(scn.key_id).verify_key), [60.0] * 8 + [45.0, 60.0],
+                             [m.busy for m in scn.machines])
 
 
 def _cell(x, y):
@@ -60,7 +61,7 @@ def learned():
         pytest.skip("out/layered_map.npz not built (scripts/build_map.py)")
     lm = M.LayeredMap.load(NPZ)
     key = demo_key(SITE.key_id)
-    return ML.pack_map(lm, key, version=2, issue_time=DAY0_UNIX + T0 - 60.0)
+    return pack_map_for_key(lm, key, version=2, issue_time=DAY0_UNIX + T0 - 60.0)
 
 
 def _run(state, bc, tr, t0, t1, dt=0.05):
