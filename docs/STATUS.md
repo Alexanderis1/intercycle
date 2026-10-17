@@ -27,6 +27,10 @@
 
 **Sat 20:00 checkpoint (R1): met early, ~17:30.** Modal image `intercycle-isaac-robot`: Isaac Sim 5.1, IsaacLab 2.3, torch 2.7.0 pinned, Humble + Nav2. Pretrained FLAT ANYmal-D policy. `/cmd_vel` 0.6 m/s goes through a Unix-socket lockstep bridge (Isaac py3.11 ↔ rclpy py3.10, `/clock` from Isaac). Result: 11.34 m in 20 s sim, heading drift 0.007 rad, RTF 0.78 on an L4. The CPU test double reached a 16 m Nav2 goal (SmacPlanner2D + MPPI Omni + AMCL Omni). Next: the 22:30 gate in the factory scene.
 
+### Audit (monitor `amd-ce`, ~18:30): confirmed by the user directly (~19:20)
+Full list in `docs/AUDIT.md`. The user confirmed: all 3 tiers (Tier 1 before the robot map freezes; Tier 2 before the batch and at the freeze; Tier 3 as disclosures). **Isaac budget up to $25 for the full 40-episode batch** (≈ $22 total; ask before anything beyond). Rule-4 waivers: (a) shim at the measured perception error + one map rebuild; (b) noisy own-camera for B in the event sim; (c) ±5 % per-seed robot speed/dwell jitter; (d) break-timing fix. Slot order: **R4, V, T, C** (T after the batch launch, hard stop 08:00, cut DINOv2/broadcast field first).
+Owners: M (#1 calendar → line_state, measured-shim rebuild, #4 margin on days 5–6, held-out seeds 1–2, Brier skill); P (#2 re-score on untouched seed 2 + disclosures); lead (#3 event-sim own-camera noise, faults, jitter, break fix, A/A0 walkway rule, wording); G (#5 hint=None headline, real change events, baselines, HTTP 500); R3 (Tier 2 robot items, SpeedFilter state from the observer not the calendar, rebuilt map); D (dashboard export into dashboard/, no true-period fallback); X (wording).
+
 ### Proposed (needs the user's OK)
 - **APPROVED by the user directly (17 Oct ~17:40); scheduled after R3 and G are running.** From the monitor session `amd-ce`:
   1. Workstream V: a cross-camera **fused** tracker on SmartSpaces (floor point per box → per-frame cross-camera clustering → one world-frame tracker → offline tracklet stitching). L2/L3 = occupied / observed frames, unseen = UNKNOWN. HOTA + IDF1 before/after. No BEV training. ~6–8 h, Modal L4 (inside the $4 perception cap).
