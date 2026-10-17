@@ -1,6 +1,7 @@
 """Static world for the legged-robot sim: the L0 plant geometry as ONE static triangle mesh + the Nav2 occupancy map.
 
-Source of truth: scenario/bodyshop.yaml via intercycle.sim.geometry.build_rects / StaticMap (run locally, where the
+Source of truth: scenario/bodyshop.yaml via intercycle.sim.geometry.build_rects / StaticMap, or for the press-shop twin
+the rects + extent from twin/compile.py (build_world_files(rects=, extent=)) (run locally, where the
 repo's .venv has scipy + pydantic).  The output is a dict of files (name -> bytes) that the Modal functions write to a
 temp dir, so the Isaac python never needs our dependencies:
 
@@ -107,13 +108,23 @@ def map_yaml(res: float, x0: float, y0: float) -> bytes:
             f"occupied_thresh: 0.65\nfree_thresh: 0.25\n").encode()
 
 
-def build_world_files(empty: bool = False, scenario_path: str | None = None) -> dict[str, bytes]:
-    """Build every world file.  empty=True: no factory (flat floor, closed only by the map border) for smoke tests."""
+def build_world_files(empty: bool = False, scenario_path: str | None = None, rects: list[dict] | None = None,
+                      extent: tuple[float, float, float, float] | None = None) -> dict[str, bytes]:
+    """Build every world file.  empty=True: no factory (flat floor, closed only by the map border) for smoke tests.
+
+    rects/extent (twin/compile.py): the static bodies and the plan-view extent (x0, z0, x1, z1) of a twin zone, used
+    instead of the body-shop layout (see geometry.StaticMap).  The USD boxes and the map come from the same
+    StaticMap.rects(), which in that mode includes the extent's border ring, so unseen floor (passed as wall rects) and
+    everything outside the extent are walls in both.  rects needs the twin's own scenario_path (for the dock), so the
+    body-shop scenario is never used for a twin by default.
+    """
     from intercycle import scenario as scn_mod
     from intercycle.sim import geometry as G
 
+    if rects is not None and not scenario_path:
+        raise ValueError("build_world_files(rects=...) needs the twin's scenario_path")
     scn = scn_mod.load(scenario_path) if scenario_path else scn_mod.load()
-    sm = G.StaticMap(scn)
+    sm = G.StaticMap(scn, rects=rects, extent=extent)
     boxes = [] if empty else boxes_from_rects(sm.rects())
     V, F = boxes_to_mesh(boxes)
     buf = io.BytesIO()
@@ -123,14 +134,14 @@ def build_world_files(empty: bool = False, scenario_path: str | None = None) -> 
         grid[:] = False
         grid[:2, :] = grid[-2:, :] = grid[:, :2] = grid[:, -2:] = True
     meta = {"empty": empty, "n_boxes": len(boxes), "n_tris": int(len(F)), "res": G.RES,
-            "extent": [G.X0, G.Z0, G.X1, G.Z1], "dock": list(scn.robot.get("dock", [4, 32])),
+            "extent": list(sm.extent), "dock": list(scn.robot.get("dock", [4, 32])),
             "frames": "ROS x = plan x, ROS y = plan z, z up; psi = pi/2 - plan_yaw"}
     return {
         "boxes.json": json.dumps(boxes).encode(),
         "factory_l0.usda": mesh_to_usda(V, F).encode(),
         "mesh.npz": buf.getvalue(),
         "map.pgm": occupancy_pgm(grid),
-        "map.yaml": map_yaml(G.RES, G.X0, G.Z0),
+        "map.yaml": map_yaml(G.RES, sm.x0, sm.z0),
         "world.json": json.dumps(meta).encode(),
     }
 

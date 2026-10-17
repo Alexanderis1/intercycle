@@ -12,6 +12,9 @@ Conventions (match intercycle/truth/agents.py)
 
 Static map
   The plant is rasterised at RES = 0.1 m over x -2..122, z -2..50 (border ring = solid, so the world is closed).
+  Twin mode (twin/compile.py): StaticMap(None, rects=[...], extent=(x0, z0, x1, z1)) rasterises the caller's
+  axis-aligned rects (press footprints, unseen floor as walls) over that extent instead of the body-shop layout; the
+  module constants X0..Z1/NX/NZ stay the body-shop values, so code that needs the extent of a map reads sm.extent.
   A cell is occupied when its centre lies within 2.5 cm of a body (so even a 12 cm light-curtain post has >= 1 cell).
   `dist` is the Euclidean distance (scipy EDT) from a free cell centre to the nearest occupied cell *face*
   (EDT to cell centres minus RES/2), 0 inside.  `clearance()` bilinearly interpolates a signed version of it, so it
@@ -45,8 +48,8 @@ import numpy as np
 from scipy import ndimage
 
 __all__ = [
-    "RES", "X0", "X1", "Z0", "Z1", "StaticMap", "footprint", "overlaps", "min_gap", "static_hit", "static_gap",
-    "lidar", "segment_hit", "CLASSES", "DIMS",
+    "RES", "X0", "X1", "Z0", "Z1", "StaticMap", "border_rects", "footprint", "overlaps", "min_gap", "static_hit",
+    "static_gap", "lidar", "segment_hit", "CLASSES", "DIMS",
 ]
 
 RES = 0.1
@@ -204,38 +207,104 @@ def build_rects(scn) -> tuple[list[dict], list[tuple[str, float, float]]]:
 
 
 # ----------------------------------------------------------------------------------------------- static map
-def _paint(grid: np.ndarray, r: dict) -> None:
+def _paint(grid: np.ndarray, r: dict, cx0: float = _CX0, cz0: float = _CZ0) -> None:
+    """Mark the cells of `grid` whose centre lies within _INFL of rect r; (cx0, cz0) = centre of cell (0, 0)."""
+    nx, nz = grid.shape
     cx, cz, hw, hd, yaw = r["cx"], r["cz"], r["w"] / 2 + _INFL, r["d"] / 2 + _INFL, r["yaw"]
     if yaw == 0.0:
         ex, ez = hw, hd
     else:
         c, s = abs(math.cos(yaw)), abs(math.sin(yaw))
         ex, ez = hw * c + hd * s, hw * s + hd * c
-    i0 = max(int(math.ceil((cx - ex - _CX0) * _INV - 1e-9)), 0)
-    i1 = min(int(math.floor((cx + ex - _CX0) * _INV + 1e-9)), NX - 1)
-    j0 = max(int(math.ceil((cz - ez - _CZ0) * _INV - 1e-9)), 0)
-    j1 = min(int(math.floor((cz + ez - _CZ0) * _INV + 1e-9)), NZ - 1)
+    i0 = max(int(math.ceil((cx - ex - cx0) * _INV - 1e-9)), 0)
+    i1 = min(int(math.floor((cx + ex - cx0) * _INV + 1e-9)), nx - 1)
+    j0 = max(int(math.ceil((cz - ez - cz0) * _INV - 1e-9)), 0)
+    j1 = min(int(math.floor((cz + ez - cz0) * _INV + 1e-9)), nz - 1)
     if i1 < i0 or j1 < j0:
         return
     if yaw == 0.0:
         grid[i0:i1 + 1, j0:j1 + 1] = True
         return
-    xs = _CX0 + np.arange(i0, i1 + 1) * RES - cx
-    zs = _CZ0 + np.arange(j0, j1 + 1) * RES - cz
+    xs = cx0 + np.arange(i0, i1 + 1) * RES - cx
+    zs = cz0 + np.arange(j0, j1 + 1) * RES - cz
     c, s = math.cos(yaw), math.sin(yaw)
     u = xs[:, None] * c - zs[None, :] * s
     v = xs[:, None] * s + zs[None, :] * c
     grid[i0:i1 + 1, j0:j1 + 1] |= (np.abs(u) <= hw) & (np.abs(v) <= hd)
 
 
-class StaticMap:
-    """Rasterised static obstacles of the plant."""
+def _check_extent(extent) -> tuple[float, float, float, float]:
+    try:
+        x0, z0, x1, z1 = (float(v) for v in extent)
+    except (TypeError, ValueError):
+        raise ValueError(f"extent must be (x0, z0, x1, z1) in metres, got {extent!r}") from None
+    for lo, hi, ax in ((x0, x1, "x"), (z0, z1, "z")):
+        n = (hi - lo) / RES
+        if not (math.isfinite(lo) and math.isfinite(hi)) or n < 8 or abs(n - round(n)) > 1e-6:
+            raise ValueError(f"extent {ax} {lo}..{hi} must be finite and a whole number (>= 8) of {RES} m cells")
+    return x0, z0, x1, z1
 
-    def __init__(self, scn):
-        self._rects, self.arm_bases = build_rects(scn)
-        grid = np.zeros((NX, NZ), dtype=bool)
+
+def _check_rect(r: dict, ext: tuple[float, float, float, float]) -> dict:
+    """A caller's rect as a normalised rect dict (yaw defaults to 0); refuses malformed or entirely-outside rects."""
+    try:
+        out = _rect(str(r["id"]), str(r["cls"]), r["cx"], r["cz"], r["w"], r["d"], r.get("yaw", 0.0))
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError(f"rect needs id, cls, cx, cz, w, d (and optional yaw): {r!r} ({e})") from None
+    vals = (out["cx"], out["cz"], out["w"], out["d"], out["yaw"])
+    if not all(math.isfinite(v) for v in vals) or out["w"] <= 0.0 or out["d"] <= 0.0:
+        raise ValueError(f"rect {out['id']!r} must have finite values and w, d > 0: {r!r}")
+    c, s = abs(math.cos(out["yaw"])), abs(math.sin(out["yaw"]))
+    ex, ez = out["w"] / 2 * c + out["d"] / 2 * s, out["w"] / 2 * s + out["d"] / 2 * c
+    if not _overlap((out["cx"] - ex, out["cz"] - ez, out["cx"] + ex, out["cz"] + ez), ext):
+        raise ValueError(f"rect {out['id']!r} lies entirely outside the extent {ext}")
+    return out
+
+
+def border_rects(extent: tuple[float, float, float, float]) -> list[dict]:
+    """The 2-cell wall ring just inside the extent, as wall rects (ids BORDER_W/E/S/N): the raster's closing ring."""
+    x0, z0, x1, z1 = extent
+    t = 2 * RES
+    return [_box("BORDER_W", "wall", x0, z0, x0 + t, z1), _box("BORDER_E", "wall", x1 - t, z0, x1, z1),
+            _box("BORDER_S", "wall", x0 + t, z0, x1 - t, z0 + t), _box("BORDER_N", "wall", x0 + t, z1 - t, x1 - t, z1)]
+
+
+class StaticMap:
+    """Rasterised static obstacles of the plant.
+
+    StaticMap(scn): the body-shop layout from build_rects(scn) over the module extent (X0, Z0, X1, Z1).
+    StaticMap(scn, rects=[...], extent=(x0, z0, x1, z1)): the caller's static bodies (twin/compile.py: press footprints
+    and the unseen floor as wall rects) instead of build_rects; scn is not read and may be None, arm_bases is [].
+    The 2-cell ring just inside the extent is always solid; in rects mode it is also returned by rects() as the four
+    BORDER_* wall rects, so the USD built from rects() is closed exactly like the map (unseen floor is a wall in both).
+    extent (default: the module extent) must span a whole number of RES cells; the raster and every query follow it.
+    """
+
+    def __init__(self, scn, rects: list[dict] | None = None, extent=None):
+        x0, z0, x1, z1 = (X0, Z0, X1, Z1) if extent is None else _check_extent(extent)
+        nx, nz = int(round((x1 - x0) / RES)), int(round((z1 - z0) / RES))
+        self.extent = (x0, z0, x1, z1)
+        self.x0, self.z0, self.x1, self.z1, self.nx, self.nz = x0, z0, x1, z1, nx, nz
+        self._cx0, self._cz0 = x0 + RES / 2, z0 + RES / 2
+        self._c2 = np.array([[self._cx0], [self._cz0]])
+        self._hi = np.array([[nx - 1.0001], [nz - 1.0001]])
+        self._nzp = nz + 2 * _PAD
+        if rects is None:
+            if scn is None:
+                raise ValueError("StaticMap needs a scenario (body-shop layout) or rects")
+            self._rects, self.arm_bases = build_rects(scn)
+        else:
+            own = [_check_rect(r, self.extent) for r in rects]
+            have = {r["id"]: r for r in own}
+            for b in border_rects(self.extent):              # re-passing rects() is allowed: the ring is not doubled
+                if b["id"] not in have:
+                    own.append(b)
+                elif have[b["id"]] != b:
+                    raise ValueError(f"rect id {b['id']!r} is reserved for the extent's border ring")
+            self._rects, self.arm_bases = own, []
+        grid = np.zeros((nx, nz), dtype=bool)
         for r in self._rects:
-            _paint(grid, r)
+            _paint(grid, r, self._cx0, self._cz0)
         grid[:2, :] = grid[-2:, :] = grid[:, :2] = grid[:, -2:] = True   # the world is closed (2-cell border ring)
         self.grid = grid
         d_free = ndimage.distance_transform_edt(~grid) * RES
@@ -245,11 +314,11 @@ class StaticMap:
         self._sdf = sdf
         # bilinear coefficients per cell: value = c0 + u*c1 + v*c2 + u*v*c3 (u, v = fractions toward +x, +z cell centres)
         a_, b_, c_, d_ = sdf[:-1, :-1], sdf[1:, :-1], sdf[:-1, 1:], sdf[1:, 1:]
-        cf = np.zeros((NX, NZ, 4))
+        cf = np.zeros((nx, nz, 4))
         cf[:-1, :-1, 0], cf[:-1, :-1, 1], cf[:-1, :-1, 2], cf[:-1, :-1, 3] = a_, b_ - a_, c_ - a_, a_ - b_ - c_ + d_
-        self._cf = cf.reshape(NX * NZ, 4)
-        occ = np.ones((NX + 2 * _PAD, NZ + 2 * _PAD), dtype=np.uint8)      # padded so marching never indexes outside
-        occ[_PAD:_PAD + NX, _PAD:_PAD + NZ] = grid
+        self._cf = cf.reshape(nx * nz, 4)
+        occ = np.ones((nx + 2 * _PAD, nz + 2 * _PAD), dtype=np.uint8)      # padded so marching never indexes outside
+        occ[_PAD:_PAD + nx, _PAD:_PAD + nz] = grid
         self._occ = occ.ravel()
 
     # ---- queries
@@ -258,28 +327,28 @@ class StaticMap:
         return [dict(r) for r in self._rects]
 
     def cell(self, x: float, z: float) -> tuple[int, int]:
-        return int(math.floor((x - X0) * _INV)), int(math.floor((z - Z0) * _INV))
+        return int(math.floor((x - self.x0) * _INV)), int(math.floor((z - self.z0) * _INV))
 
     def _bilinear(self, P: np.ndarray) -> np.ndarray:
         """Signed distance at the points P (2, N) = (x row, z row), by bilinear interpolation of cell-centre values."""
-        f = (P - _C2) * _INV
+        f = (P - self._c2) * _INV
         np.maximum(f, 0.0, out=f)
-        np.minimum(f, _HI, out=f)
+        np.minimum(f, self._hi, out=f)
         ij = f.astype(np.intp)
         f -= ij
-        g = self._cf.take(ij[0] * NZ + ij[1], axis=0)
+        g = self._cf.take(ij[0] * self.nz + ij[1], axis=0)
         u, v = f[0], f[1]
         return g[:, 0] + u * (g[:, 1] + v * g[:, 3]) + v * g[:, 2]
 
     def _sdf1(self, x: float, z: float) -> float:
         """Signed distance at one point in pure Python (faster than numpy below ~10 points); -1 outside the world."""
-        fx = (x - _CX0) * _INV
-        fz = (z - _CZ0) * _INV
-        if not (0.0 <= fx <= NX - 1.0001 and 0.0 <= fz <= NZ - 1.0001):
+        fx = (x - self._cx0) * _INV
+        fz = (z - self._cz0) * _INV
+        if not (0.0 <= fx <= self.nx - 1.0001 and 0.0 <= fz <= self.nz - 1.0001):
             return -1.0
         i = int(fx)
         j = int(fz)
-        c0, c1, c2, c3 = self._cf[i * NZ + j].tolist()
+        c0, c1, c2, c3 = self._cf[i * self.nz + j].tolist()
         u = fx - i
         v = fz - j
         return c0 + u * (c1 + v * c3) + v * c2
@@ -308,17 +377,17 @@ class StaticMap:
         that first enters an occupied cell, so +-2.5 cm.  A ray that clips only the corner of a 12 cm post can slip
         between two samples; neighbouring rays (1 deg apart) still see it.  `trace_sphere` is the exact reference.
         """
-        if not (X0 + RES < x < X1 - RES and Z0 + RES < z < Z1 - RES):
+        if not (self.x0 + RES < x < self.x1 - RES and self.z0 + RES < z < self.z1 - RES):
             return np.zeros(ux.shape[0])
         steps = _march_steps(min(rmax, _PAD * RES))
-        bx = np.float32((x - _CX0) * _INV + 0.5 + _PAD)
-        bz = np.float32((z - _CZ0) * _INV + 0.5 + _PAD)
+        bx = np.float32((x - self._cx0) * _INV + 0.5 + _PAD)
+        bz = np.float32((z - self._cz0) * _INV + 0.5 + _PAD)
         fx = np.multiply.outer((ux * _INV).astype(np.float32), steps)
         fx += bx
         fz = np.multiply.outer((uz * _INV).astype(np.float32), steps)
         fz += bz
         k = fx.astype(np.intp)
-        k *= NZP
+        k *= self._nzp
         k += fz.astype(np.intp)
         hit = self._occ[k]
         first = hit.argmax(axis=1)
@@ -351,9 +420,6 @@ class StaticMap:
 
 
 _PAD = 250                                          # 25 m of solid padding around the raster (max lidar range)
-NZP = NZ + 2 * _PAD
-_C2 = np.array([[_CX0], [_CZ0]])
-_HI = np.array([[NX - 1.0001], [NZ - 1.0001]])
 _MARCH_H = 0.05
 _MARCH: dict[float, np.ndarray] = {}
 _HIT_EPS = 0.02
