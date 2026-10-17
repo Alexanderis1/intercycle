@@ -136,7 +136,7 @@ The relay is the only backend: an asyncio `websockets` server in a daemon thread
 
 ```bash
 node dashboard/record_frames.mjs --url "file:///C:/AMD/intercycle/out/stream/dashboard_bundle.html?machine=S30" \
-     --frames out/stream/rec --seconds 30 --fps 15        # headless Chrome via CDP; ~1 s per 1920x1080 frame
+     --frames out/stream/rec --seconds 30 --fps 15        # headless Chrome via CDP; ~0.6 s per 1920x1080 frame (450 frames ≈ 4.5 min)
 FF=$(.venv/Scripts/python.exe -c "import imageio_ffmpeg;print(imageio_ffmpeg.get_ffmpeg_exe())")
 "$FF" -framerate 15 -i out/stream/rec/f_%04d.png -c:v libx264 -pix_fmt yuv420p -crf 20 out/stream/map.mp4
 ```
