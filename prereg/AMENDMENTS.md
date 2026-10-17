@@ -101,3 +101,5 @@ record and is never edited.
 - **Scratch tables scrubbed:** the per-clip registration numbers (inliers, corner displacement) of the 104 test clips
   that P6 had registered were removed from the session's P6 result files (`p6/p6.json`, `p6/p6b.json`).
 - Scratch images of P5 and P6 are named by index or framing and show only viewed clips, which are never test.
+- **After Pass 2** (565 train+dev clips and 1,130 keyframes on the volume and in `$INTERCYCLE_DATA`), the check was run
+  again: volume 3,958 files, local 2,329 files, 0 test traces. `inventory.parquet` equals `split_a1.csv`.

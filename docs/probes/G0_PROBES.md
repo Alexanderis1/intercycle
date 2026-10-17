@@ -3,7 +3,84 @@
 Sat 17 Oct, 22:55-23:25 CEST. Dataset: HF `Voxel51/Safe_and_Unsafe_Behaviours`, revision `7369ff18…`, 691 mp4 clips
 (1920×1080, H.264), 96.78 min in total. Credit: Önal & Dandıl (2024), Data in Brief 56, 110791, CC BY 4.0.
 
-## STOP: the pre-registered split is degenerate, and a decision is needed before Pass 2
+## Amendment 1 (A1+): the split now in force
+
+Sun 18 Oct, ~01:30-02:30 CEST, lane S3a-a1. The user chose A1+ at ~00:45 (verbatim decision, evidence, exact rule
+and deviations in `prereg/AMENDMENTS.md`). The split is `prereg/split_a1.csv` (clip_id, group_id, split, sha256,
+framing_id), named by `prereg/ACTIVE_SPLIT`. `prereg/split.csv` stays as the original record. Everything below this
+section describes the committed (original) split and is superseded where it disagrees.
+
+**Rule in one line.** Groups = the 21 + 36 agglomerative clusters (no pHash link), merged where they share a
+byte-identical file; groups holding an agent-viewed clip (`prereg/viewed_clips.txt`, 96 ids) or a framing with no train
+clip cannot go to test; then the committed 60/20/20 rule (strata camera × safe/unsafe, seed 20261017).
+
+**Risk, disclosed.** Real sessions may be split across groups, so near-duplicate footage can sit in train and test.
+
+### P1 under A1+ (clip-seconds per camera × split; durations from container PTS)
+
+| split | camera | groups | clips | clip-seconds | minutes |
+|---|---|---|---|---|---|
+| train | 9 | 11 | 361 | 2899.2 | 48.32 |
+| train | 14 | 12 | 55 | 433.7 | 7.23 |
+| dev | 9 | 6 | 130 | 1205.5 | 20.09 |
+| dev | 14 | 12 | 19 | 104.6 | 1.74 |
+| test | 9 | 4 | 114 | 1090.3 | 18.17 |
+| test | 14 | 12 | 12 | 73.2 | 1.22 |
+
+- **N (train minutes) = 55.6** (48.3 + 7.2). **M (camera-14 train minutes) = 7.2.** These replace the plan's estimates
+  58 and 6 and the committed-split values 48.8 and 10.2.
+- **Small-group rule (§5): applies to camera 9** (4 test groups < 5): per-group recall with n, plus a frame-level
+  Clopper-Pearson interval labelled "ignores clustering (only k groups)". Camera 14 has 12 test groups, so bootstrap by
+  group is allowed there, but each group is a single clip (12 clips, 73 s).
+- **Framings.** All 3 framings have train clips: c9_f0 252, c9_f1 109, c14_f0 55 (dev 59 / 71 / 19; test 1 / 113 / 12).
+  The registration reproduced P6's framing id on 669 of 669 train+dev clips. Camera-9 test is almost all c9_f1, which
+  had no k1 and no CAL under P6: **CAL (S2) must now fit c9_f1 from its 109 train clips**.
+
+### P3 under A1+ (balance; test rows are aggregates computed on Modal before the purge)
+
+Same definitions as below (RF-DETR-M on the t = 0.5 s frame, person conf ≥ 0.5, occlusion = ≥ 10 % of the box under
+another box; luma = mean of the 160×90 luma).
+
+| split × camera | clips | median length s | luma mean (p10-p90) | people/frame mean (p50, p90) | frames with ≥1 person | occlusion share (boxes) |
+|---|---|---|---|---|---|---|
+| train × 9 | 361 | 7.8 | 113.0 (102.4-121.5) | 2.38 (2, 4) | 338 | 0.162 (139/858) |
+| train × 14 | 55 | 8.0 | 109.9 (105.4-115.3) | 1.44 (1, 3) | 48 | 0.316 (25/79) |
+| dev × 9 | 130 | 8.7 | 110.7 (103.8-116.2) | 2.32 (2, 4) | 122 | 0.070 (21/302) |
+| dev × 14 | 19 | 4.0 | 107.9 (103.8-114.0) | 1.21 (1, 2) | 16 | 0.261 (6/23) |
+| test × 9 | 114 | 7.0 | 111.3 (103.2-118.7) | 2.29 (2, 4) | 101 | 0.077 (20/261) |
+| test × 14 | 12 | 4.5 | 109.9 (105.1-113.8) | 1.42 (1, 2) | 12 | 0.353 (6/17) |
+
+- Luma is now within ±3 levels across splits (it was −5 / +7 under the committed split). Occlusion still differs:
+  camera-9 train 0.16 against dev/test 0.07-0.08.
+- **Safe/unsafe balance is poor in camera-9 test:** 109 unsafe, 5 safe clips (train 260 / 101, dev 91 / 39). Test has no
+  class-2 or class-4 clip. Camera 14 test: 9 unsafe, 3 safe.
+- **Authors' tr/te overlap:** 16 of the 57 groups hold both authors' train and authors' test clips; 116 of the 125
+  authors' test clips sit in such a group.
+- **Byte-identical files:** 13 byte-identical pairs lie inside test (26 clips), 25 such clips are train and 14 dev; no set
+  spans two groups. Every set carries more than one class label (`inventory.parquet` `dup_of`, `dup_classes`).
+
+### Staging under A1+
+
+- **Purge:** frame, features (pHash, median background, luma), meta and detections of the 126 test clips deleted on the
+  volume; sha256 and camera/class counts kept (`esk/split/test_manifest_a1.json`). `check_no_test_images` now walks the
+  whole volume (except `esk/split/`) plus `$INTERCYCLE_DATA` and the session scratch root: 0 test files (volume 2,263
+  files checked; local 619 before Pass 2).
+- **Desktop clean-up:** 13 P5 frame copies of now-test clips deleted and their rows removed from `p5/detections.json`
+  (ids in `prereg/AMENDMENTS.md`).
+- **Pass 2:** 565 train+dev clips fetched by id from HF on Modal (sha256 checked against split_a1.csv; 0 failures,
+  184 s wall), keyframes 2 per clip at 960 px. Copied to `$INTERCYCLE_DATA/clips/` (565 files, 7.75 GB) and
+  `$INTERCYCLE_DATA/keyframes/` (1,130 files). Every local clip was re-hashed against split_a1.csv: one copy (3_tr20)
+  arrived corrupted, was fetched again from the volume and then matched. `$INTERCYCLE_DATA/inventory.parquet`
+  (691 rows; §2 columns incl. framing_id, plus dup_of and dup_classes) equals split_a1.csv.
+- **Check re-run after Pass 2:** volume 3,958 files and local 2,329 files (data root + scratch root), 0 test traces.
+- **Modal cost of this lane:** $0.075 of compute (split $0.021, Pass 2 $0.053, report/purge/checks < $0.001), from
+  `modal billing report --for today`. The 7.75 GB volume download may add egress, which the report does not list; at
+  $0.04/GiB that would be about $0.29.
+- **Needs re-checking by other lanes:** `twin/cal/k1_v0.json` sources (8 of 25 c9_f0 and 11 of 25 c14_f0 are now dev;
+  the c9_f0 reference 0_te21 is dev) and `twin/cal/scale_v0.json` (its people fit used 13 clips that are now test) are
+  no longer train-only, against §5 "CAL uses only train frames".
+
+## STOP (resolved by Amendment 1): the pre-registered split is degenerate, and a decision is needed before Pass 2
 
 `scripts/esk_split.py` (commit 55ffd1e, before Pass 1) ran **once** on Modal. Its output is committed as
 `prereg/split.csv`, unchanged. It gives **5 groups in total**:
