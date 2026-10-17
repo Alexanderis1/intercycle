@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -266,9 +266,171 @@ class Observation:
     moving: np.ndarray          # (n,) bool, frame-differencing motion flag
     machine: np.ndarray         # (n,) int16 index of the machine zone the detection falls inside, -1 none
     cam_ok: np.ndarray          # (n_cam,) bool heartbeat: False while a camera region is blacked out
+    # ---- Observation v2 (None on a v1 observation; `obs_v1_to_v2` fills them, see OBS_V2_FIELDS)
+    zone_motion: np.ndarray | None = None    # (M,) float32 motion evidence >= 0 per machine zone; NaN = MISSING
+    zone_vis: np.ndarray | None = None       # (M,) float32 in [0, 1]: share of the zone's floor seen by a healthy camera
+    cam_floor_ok: np.ndarray | None = None   # (n_cam,) bool per camera polygon: the view of the floor is valid
 
     def __len__(self) -> int:
         return len(self.cls)
+
+    @property
+    def is_v2(self) -> bool:
+        return self.zone_motion is not None and self.zone_vis is not None and self.cam_floor_ok is not None
+
+
+# ------------------------------------------------------------------------------------------------ observation v2
+# Contract (PLAN_TWIN §2, lane S4; WEAKNESSES T-W6, M-W10, M-W2). Every v1 field is kept unchanged; v2 adds, per tick:
+#   zone_motion  (M,) float32  motion evidence in machine zone m (>= 0, units set by the source: the v1 converter
+#                              counts moving PART detections in the zone, stat_v1 / the pixel adapter give ROI motion
+#                              energy). NaN = MISSING: the zone was not fully observed this tick. MISSING is never
+#                              "no motion" (T-W6: occlusion or a dead camera must not read as an idle machine).
+#   zone_vis     (M,) float32  share in [0, 1] of zone m's floor (rect + margin) that a camera with cam_floor_ok sees
+#                              this tick (and, once T-W6 lands, not hidden behind a person / vehicle). zone_vis <
+#                              ZONE_VIS_MIN forces zone_motion NaN.
+#   cam_floor_ok (n_cam,) bool one per camera polygon (the camera's visible floor), same order as cam_ok: the image is
+#                              valid for floor observation. Implies cam_ok. The v1 converter copies the heartbeat
+#                              (cam_ok); the M-W10 watchdog (frozen / obstructed / dark image) sets it False on its own.
+# Zones are indexed like `Observation.machine` (scenario / site machine order); cameras like `cam_ok`.
+OBS_V1_FIELDS = ("t", "t_cap", "cls", "x", "z", "r", "heading", "moving", "machine", "cam_ok")
+OBS_V2_FIELDS = ("zone_motion", "zone_vis", "cam_floor_ok")
+OBS_DTYPES = dict(t=np.float64, t_cap=np.float64, cls=np.int8, x=np.float64, z=np.float64, r=np.float64, heading=np.float64,
+                  moving=np.bool_, machine=np.int16, cam_ok=np.bool_, zone_motion=np.float32, zone_vis=np.float32,
+                  cam_floor_ok=np.bool_)
+_DET_FIELDS = ("cls", "x", "z", "r", "heading", "moving", "machine")
+ZONE_VIS_MIN = 1.0      # fail closed: a zone that is not fully seen is MISSING (T-W6 may refine with occlusion geometry)
+
+
+def zone_camera_share(rects, cams, margin: float = 1.0, res: float = 0.25) -> np.ndarray:
+    """(M, n_cam) float64: share of each zone's floor (rect grown by `margin`) inside each camera's polygon. Rows sum
+    to 1. The body-shop cameras' polygons are the Voronoi cells of the camera positions (CameraShim.camera_of), sampled
+    on a `res` grid of cell centres; the twin passes its own shares from the per-camera visible-floor polygons."""
+    R = np.asarray(rects, float).reshape(-1, 4)
+    C = np.asarray(cams, float).reshape(-1, 2)
+    W = np.zeros((len(R), len(C)))
+    for i, (x0, z0, x1, z1) in enumerate(R):
+        nx = max(1, int(math.ceil((x1 - x0 + 2 * margin) / res)))
+        nz = max(1, int(math.ceil((z1 - z0 + 2 * margin) / res)))
+        gx = x0 - margin + (np.arange(nx) + 0.5) * (x1 - x0 + 2 * margin) / nx
+        gz = z0 - margin + (np.arange(nz) + 0.5) * (z1 - z0 + 2 * margin) / nz
+        px, pz = np.meshgrid(gx, gz, indexing="ij")
+        cam = np.hypot(px.reshape(-1, 1) - C[None, :, 0], pz.reshape(-1, 1) - C[None, :, 1]).argmin(1)
+        W[i] = np.bincount(cam, minlength=len(C)) / cam.size
+    return W
+
+
+def obs_v1_to_v2(obs: Observation, share: np.ndarray, vis_min: float = ZONE_VIS_MIN) -> Observation:
+    """v1 -> v2. `share` = zone_camera_share(...) (M, n_cam). cam_floor_ok = the heartbeat (v1 has no image watchdog);
+    zone_vis = share @ cam_floor_ok; zone_motion = moving PART detections per zone, NaN where zone_vis < vis_min.
+    The v1 fields are passed through untouched (same arrays)."""
+    share = np.asarray(share, float)
+    n_zone, n_cam = share.shape
+    cam_ok = np.asarray(obs.cam_ok, bool)
+    if cam_ok.shape != (n_cam,):
+        raise ValueError(f"cam_ok has shape {cam_ok.shape}, share expects ({n_cam},)")
+    floor_ok = cam_ok.copy()
+    vis = np.clip(share @ floor_ok.astype(float), 0.0, 1.0)
+    vis = np.where(vis > 1.0 - 1e-9, 1.0, vis)            # rows of `share` sum to 1 up to rounding
+    motion = np.zeros(n_zone)
+    sel = (obs.cls == PART) & obs.moving & (obs.machine >= 0) & (obs.machine < n_zone)
+    if sel.any():
+        np.add.at(motion, obs.machine[sel].astype(np.int64), 1.0)
+    motion[vis < vis_min] = np.nan
+    return replace(obs, zone_motion=motion.astype(np.float32), zone_vis=vis.astype(np.float32), cam_floor_ok=floor_ok)
+
+
+def check_obs_v2(obs: Observation, n_zone: int | None = None, n_cam: int | None = None) -> None:
+    """Raise ValueError unless `obs` is a well-formed v2 observation (shapes, dtypes, ranges, MISSING rules)."""
+    if not obs.is_v2:
+        raise ValueError("not a v2 observation (zone_motion / zone_vis / cam_floor_ok missing)")
+    zm, zv, cf = obs.zone_motion, obs.zone_vis, obs.cam_floor_ok
+    assert zm is not None and zv is not None and cf is not None
+    n = len(obs.cls)
+    for f in _DET_FIELDS:
+        a = getattr(obs, f)
+        if a.shape != (n,) or a.dtype != OBS_DTYPES[f]:
+            raise ValueError(f"{f}: shape {a.shape} dtype {a.dtype}, want ({n},) {np.dtype(OBS_DTYPES[f])}")
+    for f, a in (("zone_motion", zm), ("zone_vis", zv), ("cam_floor_ok", cf), ("cam_ok", obs.cam_ok)):
+        if a.ndim != 1 or a.dtype != OBS_DTYPES[f]:
+            raise ValueError(f"{f}: shape {a.shape} dtype {a.dtype}, want 1-D {np.dtype(OBS_DTYPES[f])}")
+    if zm.shape != zv.shape:
+        raise ValueError(f"zone_motion {zm.shape} and zone_vis {zv.shape} differ")
+    if cf.shape != obs.cam_ok.shape:
+        raise ValueError(f"cam_floor_ok {cf.shape} and cam_ok {obs.cam_ok.shape} differ")
+    if n_zone is not None and zm.shape != (n_zone,):
+        raise ValueError(f"zone arrays have {zm.shape[0]} zones, want {n_zone}")
+    if n_cam is not None and cf.shape != (n_cam,):
+        raise ValueError(f"camera arrays have {cf.shape[0]} cameras, want {n_cam}")
+    if not (np.isfinite(zv).all() and (zv >= 0).all() and (zv <= 1).all()):
+        raise ValueError("zone_vis must be finite and in [0, 1]")
+    if (np.isfinite(zm) & (zm < 0)).any() or np.isinf(zm).any():
+        raise ValueError("zone_motion must be >= 0 or NaN")
+    if np.isfinite(zm[zv == 0]).any():
+        raise ValueError("an unseen zone (zone_vis 0) must have zone_motion NaN (MISSING), not a value")
+    if (cf & ~obs.cam_ok).any():
+        raise ValueError("cam_floor_ok True on a camera whose heartbeat cam_ok is False")
+
+
+def obs_to_dict(obs: Observation) -> dict:
+    """JSON-safe dict (one line of obs_v2.jsonl). NaN -> null; v2 fields are omitted on a v1 observation."""
+    def lst(a):
+        a = np.asarray(a)
+        if a.dtype.kind == "f":
+            return [None if not math.isfinite(v) else float(v) for v in a.tolist()]
+        return a.tolist()
+    d: dict = dict(v=2 if obs.is_v2 else 1, t=float(obs.t), t_cap=float(obs.t_cap))
+    for f in OBS_V1_FIELDS[2:] + (OBS_V2_FIELDS if obs.is_v2 else ()):
+        d[f] = lst(getattr(obs, f))
+    return d
+
+
+def obs_from_dict(d: dict) -> Observation:
+    """Inverse of obs_to_dict (null -> NaN, dtypes per OBS_DTYPES)."""
+    def arr(f):
+        dt = OBS_DTYPES[f]
+        v = d[f]
+        if np.dtype(dt).kind == "f":
+            v = [math.nan if x is None else x for x in v]
+        return np.asarray(v, dt).reshape(-1)
+    kw = {f: arr(f) for f in OBS_V1_FIELDS[2:]}
+    if all(f in d for f in OBS_V2_FIELDS):
+        kw.update({f: arr(f) for f in OBS_V2_FIELDS})
+    return Observation(t=float(d["t"]), t_cap=float(d["t_cap"]), **kw)
+
+
+def save_obs_npz(path, observations, **extra) -> None:
+    """A tick sequence as one .npz: per-tick arrays (t, t_cap, cam_ok and, for v2, zone_motion, zone_vis, cam_floor_ok
+    stacked to (T, ...)), detections concatenated with `offsets` (T + 1). All ticks must be v1 or all v2. `extra` arrays
+    (e.g. the zone_camera_share used) are stored as given."""
+    obs = list(observations)
+    v2 = [o.is_v2 for o in obs]
+    if any(v2) and not all(v2):
+        raise ValueError("mixed v1 / v2 observations")
+    out: dict = dict(format=np.array("obs_v2" if obs and all(v2) else "obs_v1"),
+                     t=np.array([o.t for o in obs], np.float64), t_cap=np.array([o.t_cap for o in obs], np.float64),
+                     offsets=np.r_[0, np.cumsum([len(o.cls) for o in obs])].astype(np.int64))
+    for f in _DET_FIELDS:
+        out[f] = np.concatenate([np.asarray(getattr(o, f), OBS_DTYPES[f]) for o in obs]) if obs else np.zeros(0, OBS_DTYPES[f])
+    for f in ("cam_ok",) + (OBS_V2_FIELDS if obs and all(v2) else ()):
+        out[f] = np.stack([np.asarray(getattr(o, f), OBS_DTYPES[f]) for o in obs]) if obs else np.zeros((0, 0), OBS_DTYPES[f])
+    for k in extra:
+        if k in out:
+            raise ValueError(f"extra key {k!r} clashes with an observation field")
+    np.savez_compressed(path, **out, **extra)
+
+
+def load_obs_npz(path) -> tuple[list[Observation], dict]:
+    """Inverse of save_obs_npz: (observations, extra arrays)."""
+    with np.load(path, allow_pickle=False) as z:
+        d = {k: z[k] for k in z.files}
+    off = d.pop("offsets")
+    fmt = str(d.pop("format"))
+    t, t_cap = d.pop("t"), d.pop("t_cap")
+    det = {f: d.pop(f) for f in _DET_FIELDS}
+    per = {f: d.pop(f) for f in ("cam_ok",) + (OBS_V2_FIELDS if fmt == "obs_v2" else ())}
+    obs = [Observation(t=float(t[i]), t_cap=float(t_cap[i]), **{f: a[off[i]:off[i + 1]] for f, a in det.items()},
+                       **{f: a[i] for f, a in per.items()}) for i in range(len(t))]
+    return obs, d
 
 
 class CameraShim:
@@ -973,8 +1135,9 @@ class LayeredMap(MapView):
         keep = ~np.isin(self.cam_of_cell[ix, iz], list(self.cam_offline))
         ok = obs.cam_ok.copy()
         ok[list(self.cam_offline)] = False
-        return Observation(obs.t, obs.t_cap, obs.cls[keep], obs.x[keep], obs.z[keep], obs.r[keep], obs.heading[keep],
-                           obs.moving[keep], obs.machine[keep], ok)
+        floor_ok = None if obs.cam_floor_ok is None else obs.cam_floor_ok & ok     # v2 fields kept (cam_floor_ok implies cam_ok)
+        return replace(obs, cls=obs.cls[keep], x=obs.x[keep], z=obs.z[keep], r=obs.r[keep], heading=obs.heading[keep],
+                       moving=obs.moving[keep], machine=obs.machine[keep], cam_ok=ok, cam_floor_ok=floor_ok)
 
     def merge(self, other: LayeredMap) -> None:
         """Add another map's counts (maps built on separate windows / processes combine exactly)."""
