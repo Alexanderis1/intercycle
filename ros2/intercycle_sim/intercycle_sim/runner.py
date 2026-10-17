@@ -169,6 +169,8 @@ def main() -> None:
             w_ = time.time()
             fr = suite.frame(t, st["pos_w"], st["quat_wxyz"], st["v_w"], st["v_b"], st["omega_b"], prims)
             prof["sensors"] += time.time() - w_
+            if hasattr(be, "set_estimate"):                  # R-W6: stand mode holds against the robot's own odometry
+                be.set_estimate(fr["odom"]["x"], fr["odom"]["y"], fr["odom"]["psi"])
             if k == 0:
                 fr["mounts"] = mounts
             if "scan" in fr:
