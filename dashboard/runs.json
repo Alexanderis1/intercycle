@@ -8,13 +8,7 @@
  {
   "id": "newmachine",
   "title": "New machine installed (observer not told)",
-  "path": "../out/stream/newmachine",
+  "path": "data/newmachine",
   "note": ""
- },
- {
-  "id": "build_map_72h",
-  "title": "Final map, 72 h observed (one day replay)",
-  "path": "../out/stream/build_map_72h",
-  "note": "skeleton stand-in, does not grow"
  }
 ]

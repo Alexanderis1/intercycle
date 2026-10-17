@@ -43,8 +43,13 @@ URL parameters:
 | `layers=l1,l2,l3,unk,dir,cycle` | Layers switched on at load |
 | `base=<dir>` | Folder holding the run folders (default `../out/stream`) |
 
-**GitHub Pages:** `out/` is gitignored, so a published page needs its runs under `dashboard/` (or the bundle). This is
-**Proposed** for the lead: at freeze, copy the final runs to `dashboard/data/` and point `runs.json` at them.
+**Published runs live in `dashboard/data/<run>/`** (committed), so the page and GitHub Pages don't depend on the
+gitignored `out/`. `export_static.py publish --run <run> [--max-snaps 80]` does three things:
+* copies a finished run from `out/stream/<run>/`;
+* thins it evenly to at most 80 snapshots (about 5 MB per run; the bundle of two runs stays under the 16 MB artifact cap);
+* points `runs.json` at `data/<run>`.
+
+It refuses an incomplete run unless you pass `--allow-incomplete`.
 
 ## The page
 
@@ -59,7 +64,12 @@ URL parameters:
 
   A machine that appears in `l1` but not in L0 (the new machine) is drawn in yellow and labelled "learned". Events with a
   location pulse on the map.
-* **HUD:** sim time, observation time, the discovered production state (colour + text) and the UNKNOWN area.
+* **HUD:** sim time, observation time, the production state (colour + text) and the UNKNOWN area.
+  * The state label says where the state comes from, read from the run's `meta.prod_state_source`: "discovered",
+    "public calendar", "calendar + discovered", or "source not stated". The full text is in the tooltip.
+* **Periods:** only periods the observer reported are shown. They come from `meta.period_s`, a `period_<mid>` metric,
+  P's `phases.json`, or a new machine's `machine_spawned` / `machine_converged` `period_s`. Otherwise the page shows
+  "period: learning…". It never falls back to the design period (that was removed from `layout.json`).
 * **Replay:** time slider with play/pause and ¼×–4× speed. A full sweep takes 30 s at 1×.
   * The axis is **log observation time** (ticks at 1 h, 6 h, 1 day, 3 days, 1 week) when `t_obs` grows across the run.
   * It is **sim clock time** when `t_obs` is constant, or when `meta.axis` says so.

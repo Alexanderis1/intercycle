@@ -9,6 +9,7 @@
     python dashboard/export_static.py register --run week1 --title "1 week"   # add a run to dashboard/runs.json
     python dashboard/export_static.py phases [--model out/phases/model_final_train.pkl]
         # dashboard/phases.json: workstream P's discovered sub-phases per machine (cycle fractions, names p0.., idle)
+    python dashboard/export_static.py publish --run week1 [--max-snaps 80]   # out/stream/week1 -> dashboard/data/week1
     python dashboard/export_static.py gemma     # dashboard/gemma_names.json from out/gemma/phase_names.json (else a FIXTURE)
 
 Light job (loads one .npz, no simulation).
@@ -45,8 +46,7 @@ def cmd_layout(args) -> None:
                line=dict(x=list(G.LINE_X), z=G.LINE_Z, width=G.CONV_W, walk_x=G.WALK_X, walk_gap=G.WALK_GAP),
                rects=[dict(id=r["id"], cls=r["cls"], cx=round(r["cx"], 3), cz=round(r["cz"], 3), w=round(r["w"], 3), d=round(r["d"], 3),
                            yaw=round(r["yaw"], 4)) for r in rects],
-               machines=[dict(id=m.id, kind=m.kind, on_line=bool(m.on_line), rect=[float(v) for v in m.rect],
-                              period_nominal=float(scn.line.takt_s if m.on_line else m.period_s)) for m in scn.machines],
+               machines=[dict(id=m.id, kind=m.kind, on_line=bool(m.on_line), rect=[float(v) for v in m.rect]) for m in scn.machines],
                arms=[dict(machine=a, x=x, z=z) for a, x, z in arms], cameras=[list(map(float, c)) for c in scn.cameras],
                breaks=[dict(start=a, end=b, kind=k) for a, b, k in scn.line_stops()])
     p = DASH / "layout.json"
@@ -98,10 +98,42 @@ def cmd_gemma(args) -> None:
     print(f"wrote {dst}")
 
 
-def register(run: str, title: str, note: str = "") -> None:
+def cmd_publish(args) -> None:
+    """Copy a finished run from out/stream/<run>/ into dashboard/data/<run>/ (thinned to --max-snaps, evenly in index)
+    and point runs.json at it, so the static page and GitHub Pages do not depend on the gitignored out/."""
+    import shutil
+
+    src = STREAM / args.run
+    idx = json.loads((src / "index.json").read_text(encoding="utf-8"))
+    if not idx.get("complete") and not args.allow_incomplete:
+        raise SystemExit(f"{src} is not complete (index.json complete=false); pass --allow-incomplete to export anyway")
+    L = idx["snapshots"]
+    if args.max_snaps and len(L) > args.max_snaps:
+        keep = sorted(set(np.linspace(0, len(L) - 1, args.max_snaps).round().astype(int).tolist()))
+        idx = dict(idx, snapshots=[L[k] for k in keep], thinned_from=len(L))
+    dst = DASH / "data" / args.run
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.mkdir(parents=True)
+    for s_ in idx["snapshots"]:
+        shutil.copyfile(src / s_["file"], dst / s_["file"])
+    if (src / "events.jsonl").exists():
+        shutil.copyfile(src / "events.jsonl", dst / "events.jsonl")
+    (dst / "index.json").write_text(json.dumps(idx, separators=(",", ":")), encoding="utf-8")
+    mb = sum(f.stat().st_size for f in dst.iterdir()) / 1e6
+    print(f"published {args.run}: {len(idx['snapshots'])} of {len(L)} snapshots, {mb:.2f} MB -> {dst}")
+    register(args.run, args.title or idx.get("meta", {}).get("title") or args.run, args.note, path=f"data/{args.run}")
+
+
+def register(run: str, title: str, note: str = "", path: str | None = None) -> None:
     p = DASH / "runs.json"
     runs = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
-    runs = [r for r in runs if r["id"] != run] + [dict(id=run, title=title, path=f"../out/stream/{run}", note=note)]
+    old = [r for r in runs if r["id"] == run]
+    entry = dict(id=run, title=title, path=path or f"../out/stream/{run}", note=note)
+    if old:
+        runs = [entry if r["id"] == run else r for r in runs]                 # keep its place in the list
+    else:
+        runs = runs + [entry]
     p.write_text(json.dumps(runs, indent=1), encoding="utf-8")
     print(f"registered {run} in {p}")
 
@@ -128,7 +160,7 @@ def cmd_npz(args) -> None:
         l1[mid] = rows
     sw = StreamWriter(args.run, out_root=STREAM, meta=dict(
         title=f"build_map.py final map ({hours:.0f} h observed), replayed over one day",
-        source=str(args.npz), hours_observed=round(hours, 2), axis="t_sim", period_s={k: (None if not math.isfinite(v) else float(v)) for k, v in zip(ids, m.period)},
+        source=str(args.npz), hours_observed=round(hours, 2), axis="t_sim", prod_state_source="public calendar (external input)", period_s={k: (None if not math.isfinite(v) else float(v)) for k, v in zip(ids, m.period)},
         phase_bins=M.N_PHASE, stop_bin=M.STOP_BIN, l1_area_m2=area, prod_names=list(M.PROD_NAMES),
         note="Skeleton stand-in: one final map (does not grow); L2/L3 follow the time-of-day slice, production state from the "
              "public calendar, phase-now projected from the learned period. Map statistics only, no accuracy metrics."))
@@ -171,7 +203,7 @@ def cmd_bundle(args) -> None:
     for r in runs_meta:
         if r["id"] not in want:
             continue
-        d = STREAM / r["id"]
+        d = (DASH / r["path"]).resolve() if r.get("path") else STREAM / r["id"]
         if not (d / "index.json").exists():
             print(f"skip {r['id']}: no {d / 'index.json'}")
             continue
@@ -217,6 +249,12 @@ def main() -> None:
     b.add_argument("--artifact", action="store_true", help="strip doctype/html/head/body for a claude.ai artifact publish")
     ph = sub.add_parser("phases")
     ph.add_argument("--model", default="out/phases/model_final_train.pkl")
+    pb = sub.add_parser("publish")
+    pb.add_argument("--run", required=True)
+    pb.add_argument("--title", default="")
+    pb.add_argument("--note", default="")
+    pb.add_argument("--max-snaps", type=int, default=80)
+    pb.add_argument("--allow-incomplete", action="store_true")
     gm = sub.add_parser("gemma")
     gm.add_argument("--src", default="out/gemma/phase_names.json")
     r = sub.add_parser("register")
@@ -227,7 +265,7 @@ def main() -> None:
     if args.cmd == "register":
         register(args.run, args.title, args.note)
     else:
-        dict(layout=cmd_layout, npz=cmd_npz, bundle=cmd_bundle, phases=cmd_phases, gemma=cmd_gemma)[args.cmd](args)
+        dict(layout=cmd_layout, npz=cmd_npz, bundle=cmd_bundle, phases=cmd_phases, gemma=cmd_gemma, publish=cmd_publish)[args.cmd](args)
 
 
 if __name__ == "__main__":

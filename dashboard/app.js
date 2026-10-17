@@ -42,7 +42,7 @@ async function getJSON(url) {
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
   return r.json();
 }
-function runBase(run) { return run.path || `${Q.get("base") || "../out/stream"}/${run.id}`; }
+function runBase(run) { return run.path || `${Q.get("base") || "data"}/${run.id}`; }
 
 async function loadSnap(file) {
   if (S.snaps.has(file)) return S.snaps.get(file);
@@ -250,9 +250,12 @@ function periodOf(mid) {
   const m = S.index && S.index.meta;
   if (m && m.period_s && m.period_s[mid]) return m.period_s[mid];
   if (S.cur && S.cur.metrics && S.cur.metrics[`period_${mid}`]) return S.cur.metrics[`period_${mid}`];
-  if (S.phases && S.phases.machines[mid]) return S.phases.machines[mid].period_s;
-  const lm = S.layout.machines.find((x) => x.id === mid);
-  return lm ? lm.period_nominal : null;
+  if (S.phases && S.phases.machines[mid]) return S.phases.machines[mid].period_s;   // learned by the observer (P)
+  let ep = null;                                                                    // a new machine: period from its events
+  if (S.index && S.index.events) { const v = uToVal(S.u) + 1e-6;
+    for (const ev of S.index.events) if (ev.machine === mid && ev.period_s && evAxis(ev) <= v) ep = ev.period_s; }
+  if (ep) return ep;
+  return null;                                                                      // never the design period
 }
 function phaseBinNow(mid) {
   const f = machinePhase(mid), nb = (S.index.meta && S.index.meta.phase_bins) || 16, stop = (S.index.meta && S.index.meta.stop_bin) ?? 16;
@@ -423,7 +426,7 @@ function renderMachines() {
     const id = el.dataset.id, b = S.index ? phaseBinNow(id) : null, cells = el.querySelectorAll(".pbar i");
     cells.forEach((c, i) => c.classList.toggle("on", (i < 16 && i === b) || (i === 17 && b === stop)));
     const per = S.index ? periodOf(id) : null;
-    el.querySelector(".per").textContent = per ? `${per.toFixed(1)} s` : "–";
+    el.querySelector(".per").textContent = per ? `${per.toFixed(1)} s` : "learning…";
     el.setAttribute("aria-selected", String(id === S.machine));
   });
 }
@@ -612,7 +615,7 @@ function drawStrip() {
   const per = periodOf(mid), A = binAreas(mid), nb = 16, stopW = Math.max(0.07 * w, 34 * dpr), gap = 6 * dpr, cw = w - stopW - gap;
   const gtag = S.gemma && S.gemma.machines && S.gemma.machines[mid]
     ? (S.gemma.fixture ? " · FIXTURE names" : " · named by Gemma 4 on AMD") : "";
-  $("stripTitle").textContent = `${mid} · cycle ${per ? per.toFixed(1) + " s" : "unknown"}${gtag}`;
+  $("stripTitle").textContent = `${mid} · ${per ? "period " + per.toFixed(1) + " s (learned)" : "period: learning…"}${gtag}`;
   const maxA = Math.max(...A, 1e-9), top = 26 * dpr, base = h - 16 * dpr, H = base - top;
   const named = namedPhases(mid), f0 = machinePhase(mid);
   // named / discovered segments band
@@ -665,6 +668,10 @@ async function applyCursor() {
   $("hudClock").textContent = fmtClock(snap.t_sim);
   $("hudObs").textContent = tInstall() != null ? fmtRel(snap.t_sim) : fmtDur(snap.t_obs);
   $("hudState").textContent = snap.prod_state.replace("_", " ");
+  const src = (S.index.meta && (S.index.meta.prod_state_source || S.index.meta.prod_source)) || "";
+  const tag = !src ? "source not stated" : /calendar/i.test(src) && /discover/i.test(src) ? "calendar + discovered"
+    : /calendar/i.test(src) ? "public calendar" : /discover/i.test(src) ? "discovered" : src.slice(0, 28);
+  $("hudStateK").textContent = `Production state · ${tag}`; $("hudStateK").title = src || "the run does not say how the state was obtained";
   $("hudStateSw").style.background = PROD_COLOR[snap.prod_state] || "#6f7b8b";
   const d = S.rasters && S.rasters.d;
   $("hudUnk").textContent = d ? `${(d.unkCells * d.grid.res * d.grid.res).toFixed(0)} m²` : "–";
