@@ -13,19 +13,24 @@ from pathlib import Path
 import numpy as np
 
 from intercycle.scenario import load
+from intercycle.sim.observer_learned import learned_models
 from intercycle.sim.run import STRATEGIES, run
 
 OUT = Path(__file__).resolve().parents[2] / "out"
 KEYS = ["machine_insp_per_prod_h", "line_time_lost_s", "line_cost_usd", "trips", "holds", "hold_s", "mean_wait_s", "zero_loss_share"]
 
 
-def _one(args):
-    strategy, seed, jitter, andon, t0, t1 = args
+def _scn(jitter, andon):
     scn = load()
     if jitter is not None or andon is not None:
         line = scn.line.model_copy(update={k: v for k, v in (("jitter", jitter), ("andon_stops_per_h", andon)) if v is not None})
         scn = scn.model_copy(update={"line": line})
-    return run(strategy, seed, t0, t1, scn=scn).metrics
+    return scn
+
+
+def _one(args):
+    strategy, seed, jitter, andon, t0, t1 = args
+    return run(strategy, seed, t0, t1, scn=_scn(jitter, andon)).metrics
 
 
 def aggregate(rows: list[dict]) -> dict:
@@ -45,7 +50,8 @@ def aggregate(rows: list[dict]) -> dict:
     return out
 
 
-def evaluate(seeds, t0=7 * 3600, t1=13 * 3600, jitter=None, andon=None, workers=8) -> dict:
+def evaluate(seeds, t0=7 * 3600, t1=13 * 3600, jitter=None, andon=None, workers=6) -> dict:
+    learned_models(_scn(jitter, andon))           # train the observer once (training day, disk-cached) before fanning out
     jobs = [(s, k, jitter, andon, t0, t1) for k in seeds for s in STRATEGIES]
     with ProcessPoolExecutor(workers) as ex:
         rows = list(ex.map(_one, jobs))

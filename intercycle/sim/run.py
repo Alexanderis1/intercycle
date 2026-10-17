@@ -11,7 +11,7 @@ from intercycle.robot.predict import transfer_windows_from_index
 from intercycle.robot.sipp import plan as sipp_plan
 from intercycle.robot.sitegraph import CROSS_X, TRANSFER_S, SiteGraph
 from intercycle.scenario import Scenario, load
-from intercycle.sim.observer_shim import ShimObserver
+from intercycle.sim.observer_learned import LearnedObserver, true_models
 from intercycle.sim.world import World, planned_stop_at
 from intercycle.types import DAY0_UNIX, State
 
@@ -55,7 +55,8 @@ class Runner:
         self.scn, self.strategy, self.seed, self.t0, self.t1, self.fault = scn, strategy, seed, t0, t1, fault
         self.world = World(scn, seed, t0, t1)
         self.g = SiteGraph(scn)
-        self.obs = ShimObserver(scn, self.world, seed, fault=fault if fault in ("phase", "flip") else None)
+        self.obs = LearnedObserver(scn, self.world, seed, t0, t1, fault=fault if fault in ("phase", "flip") else None)
+        self.true_models = true_models(scn)                    # oracle C only
         self.res = RunResult(strategy, seed, t0, t1)
         self.ins = scn.inspection
         self.need = self.ins.inside_s
@@ -73,12 +74,13 @@ class Runner:
             ti -= 600.0
         return ti
 
-    def _fast(self, ti: float):
-        if ti not in self._fast_cache:
-            self._fast_cache[ti] = quantize_fast(self.obs.fast(ti))
+    def _fast(self, ti: float, i: int):
+        key = (ti, i if i in self.obs.cells else -1)          # the line is nowcast together, cells one by one
+        if key not in self._fast_cache:
+            self._fast_cache[key] = quantize_fast(self.obs.fast(ti, want=i))
             if len(self._fast_cache) > 512:
                 self._fast_cache.pop(next(iter(self._fast_cache)))
-        return self._fast_cache[ti]
+        return self._fast_cache[key]
 
     def knowledge(self, mid: str):
         i = self.idx[mid]
@@ -87,7 +89,7 @@ class Runner:
             if self.fault == "forge":                           # receiver rejects every frame
                 return None, None, None
             ti = self._issue_time(t)
-            f = self._fast(ti)
+            f = self._fast(ti, i)
             return self.slow_model[i], f.machines[i], f.issue_time
         return k
 
@@ -240,7 +242,7 @@ class Runner:
                 continue
             if self.strategy in ("B", "C") and not in_break:
                 i = self.idx[target.machine]
-                model = self.slow_model[i] if self.strategy == "B" else self.obs.models[i]
+                model = self.slow_model[i] if self.strategy == "B" else self.true_models[i]
                 if not P.fits_ever(model, self.need + (self.ins.safety_margin_s if self.strategy == "B" else 0.0)):
                     if target not in deferred:
                         deferred.append(target)     # never fits during production: do it in the next break

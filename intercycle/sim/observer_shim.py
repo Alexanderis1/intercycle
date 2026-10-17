@@ -1,4 +1,6 @@
-"""Stand-in observer until the camera learner is wired in: past-only, model-based nowcasts.
+"""RETIRED for every result (17 Oct): robot B is fed by sim/observer_learned.py. Kept only for the retired 10 Hz physics sim.
+
+Stand-in observer until the camera learner is wired in: past-only, model-based nowcasts.
 
 It reads the floor's *past* state (what cameras would have seen up to `latency` ago) and predicts
 forward with a slightly-wrong model. It never reads future truth. Swappable with the learner.

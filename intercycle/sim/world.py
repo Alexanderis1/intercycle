@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from intercycle.scenario import Machine, Scenario
 from intercycle.truth.machines import all_windows, state_at
 from intercycle.types import Window
@@ -66,6 +68,23 @@ class World:
             return False
         _, w = state_at(self.W[mid], g.mt(t))
         return w is not None and g.mt(t) < w.is_
+
+    def active_many(self, mid: str, ts: np.ndarray) -> np.ndarray:
+        """`active` for an array of actual times (what a ceiling camera's motion detector sees, before noise)."""
+        ts = np.asarray(ts, float)
+        g, ws = self.group(mid), self.W[mid]
+        mt, frozen = ts.copy(), np.zeros(len(ts), bool)
+        for f in g.freezes:
+            mt -= np.clip(ts, f.t0, f.t1) - f.t0
+            frozen |= (f.t0 <= ts) & (ts < f.t1)
+        if not ws:
+            return np.zeros(len(ts), bool)
+        bs = np.array([w.bs for w in ws])
+        is_ = np.array([w.is_ for w in ws])
+        ie = np.array([w.ie for w in ws])
+        k = np.searchsorted(bs, mt, side="right") - 1
+        kk = np.maximum(k, 0)
+        return (k >= 0) & (mt < ie[kk]) & (mt < is_[kk]) & ~frozen
 
     def true_idle_windows(self, mid: str, t: float, horizon: float = 600.0) -> list[tuple[float, float]]:
         """Idle windows from t on, in actual time, assuming no further freezes (what a PLC oracle knows).
