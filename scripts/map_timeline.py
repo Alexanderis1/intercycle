@@ -92,6 +92,10 @@ def cumulative_maps(meta: dict):
                 cur = M.LayeredMap.load(f)
                 if base is not None:
                     cur.merge(base)
+                    # cycle models: the estimate from the completed windows (many cycles), not the young window's tracker
+                    for a_ in ("period", "busy", "jitter"):
+                        bv = getattr(base, a_)
+                        getattr(cur, a_)[np.isfinite(bv)] = bv[np.isfinite(bv)]
         if cur is None:
             if base is None:
                 continue
@@ -117,9 +121,15 @@ def main():
     r.add_argument("--pace", type=float, default=0.5, help="--live: wall seconds between snapshots")
     r.add_argument("--quick-all", action="store_true", help="score every snapshot on all held-out windows (slower)")
     sub.add_parser("report")
+    ph = sub.add_parser("phases", help="discovered (workstream P) vs equal-slice L1 bins, discovered vs calendar line state")
+    ph.add_argument("--workers", type=int, default=4)
+    ph.add_argument("--step", default="all", choices=["fit", "build", "heldout", "score", "all"])
     a = ap.parse_args()
     if a.cmd == "report":
         cmd_report(a)
+        return
+    if a.cmd == "phases":
+        cmd_phases(a)
         return
     if a.cmd == "build":
         cmd_build(a)
@@ -214,7 +224,8 @@ def fig_convergence(rows: list[dict], path: Path) -> None:
         ax.tick_params(labelsize=7)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
-    fig.suptitle("SYNTHETIC - map convergence, scored on held-out time (day 7)", fontsize=9, x=0.01, ha="left")
+    fig.suptitle("SYNTHETIC - map convergence, scored on held-out time (day 7, window 08:15-10:15: running, andon, 09:00 break; "
+                 "milestone tables use all 4 held-out windows)", fontsize=9, x=0.01, ha="left")
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -254,6 +265,10 @@ def cmd_replay(a) -> None:
             print(f"[{label}] T={T / H:.1f} h  " + "  ".join(f"{kk}={vv:.4g}" for kk, vv in hl.items()), flush=True)
         else:
             hl = MM.headline(MM.score(m, quick_recs, preds=QUICK_PREDS))
+        if label is not None:                                   # the curve uses one scoring set throughout
+            hl_all = hl
+            hl = MM.headline(MM.score(m, quick_recs, preds=QUICK_PREDS))
+            full[label]["headline_quick"] = hl
         row = dict(T=T, hours=hours, milestone=label, **hl)
         rows.append(row)
         L = snapshot_layers(m, T, scn)
@@ -292,14 +307,17 @@ def cmd_report(a) -> None:
     L = []
     sc = {lab: json.loads((OUT / f"score_{lab}.json").read_text()) for lab in MILESTONES if (OUT / f"score_{lab}.json").exists()}
     # ---- convergence table
-    L.append("| map built from | hours | L1 IoU (bin, p05 truth) | L1 recall | unsafe-free, robot boxes (overlap) | unsafe-free, robot boxes (centre) | "
-             "unsafe-free, raw bin envelope (centre) | false-occupied share (robot) | unknown-phase share | L2 Brier (known cells) | L2 AUROC | L3 Brier (known cells) | L3 AUROC |")
+    L.append("| map built from | hours | L1 IoU (bin, p05 truth) | L1 recall | **unsafe-free, robot boxes + 0.25 m (strict overlap)** | "
+             "false-occupied share (+0.25 m) | unsafe-free, robot boxes, no margin (strict / centre) | false-occupied share (no margin) | "
+             "traffic cells UNKNOWN | L2 Brier (known) | L2 AUROC | L3 Brier (known) | L3 AUROC |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for lab, s in sc.items():
         h = MM.headline(s)
+        d1 = s["l1"].get("box|robot|h0|d1", {})
         hrs = json.loads((OUT / "timeline.json").read_text())["milestones"][lab]["hours"]
-        L.append(f"| {lab} | {hrs:.1f} | {_f(h['l1_iou'], 3)} | {_f(h['l1_recall'], 3)} | {_f(h['unsafe_free'])} | {_f(h['unsafe_free_centre'])} | "
-                 f"{_f(h['env_unsafe_free'])} | {_f(h['false_occupied_share'], 3)} | {_f(h['unknown_share'], 4)} | {_f(h['l2_brier_known'])} | "
+        L.append(f"| {lab} | {hrs:.1f} | {_f(h['l1_iou'], 3)} | {_f(h['l1_recall'], 3)} | **{_f(d1.get('unsafe_free_overlap'))}** | "
+                 f"{_f(d1.get('false_occupied_share_overlap'), 3)} | {_f(h['unsafe_free'])} / {_f(h['unsafe_free_centre'])} | "
+                 f"{_f(h['false_occupied_share'], 3)} | {_f(h['l2_unknown_share'], 3)} | {_f(h['l2_brier_known'])} | "
                  f"{_f(h['l2_auroc'], 3)} | {_f(h['l3_brier_known'])} | {_f(h['l3_auroc'], 3)} |")
     if "1w" in sc:
         s = sc["1w"]
@@ -318,7 +336,7 @@ def cmd_report(a) -> None:
         L.append("\n| machine | IoU (mean over bins, p05 truth) | precision | recall | unsafe-free robot boxes (overlap) | unsafe-free raw envelope (centre) |")
         L.append("|---|---|---|---|---|---|")
         for mid in rob["per_machine_unsafe_free_overlap"]:
-            rr = [r for r in rows if r["machine"] == mid and r["truth"] == "p05"]
+            rr = [r for r in rows if r["machine"] == mid and r["truth"] == "p05" and not r.get("empty")]
             L.append(f"| {mid} | {_f(float(np.mean([r['iou'] for r in rr])), 3)} | {_f(float(np.mean([r['precision'] for r in rr])), 3)} | "
                      f"{_f(float(np.mean([r['recall'] for r in rr])), 3)} | {_f(rob['per_machine_unsafe_free_overlap'][mid])} | "
                      f"{_f(env['per_machine_unsafe_free_centre'][mid])} |")
@@ -354,6 +372,91 @@ def cmd_report(a) -> None:
                  ", ".join(f"{k} {v['p99']:.1f} / {v['max']:.1f}" for k, v in sp.items()))
     (OUT / "tables.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
+
+
+# ------------------------------------------------------------------------------------------------ discovered phases (P)
+
+PHD = OUT / "phases"
+PM_FIT = (6.0 * H, 9.75 * H)               # day 0, 06:00-09:45: running, andon stops and the 09:00 break
+
+
+def _pm_load():
+    from intercycle.observer import phases as PH
+    PH.MOTIF_ENGINE = "numpy"
+    return PH.PhaseModel.load(PHD / "pm.pkl", load())
+
+
+def _pm_window(args):
+    seed, t0, t1, path = args
+    pm = _pm_load()
+    t = time.time()
+    m, _, _ = B.run_window(seed, t0, t1, phase_model=pm, use_bins=True, use_line_state=True)
+    m.save(path)
+    return path, time.time() - t
+
+
+def _pm_record(args):
+    seed, t0, t1, path = args
+    from intercycle.eval import map_metrics as MM
+    pm = _pm_load()
+    scn = load()
+    rec = MM.Recorder(scn, t0)
+    t = time.time()
+    B.run_window(seed, t0 - MM.WARM_S, t1, scn=scn, tick_hook=rec, build=False, phase_model=pm, use_bins=True, use_line_state=True)
+    rec.save(Path(path))
+    return path, time.time() - t
+
+
+def cmd_phases(a) -> None:
+    from intercycle.eval import map_metrics as MM
+    PHD.mkdir(parents=True, exist_ok=True)
+    if a.step in ("fit", "all") and not (PHD / "pm.pkl").exists():
+        from intercycle.observer import phases as PH
+        PH.MOTIF_ENGINE = "numpy"
+        obs = []
+        B.run_window(0, *PM_FIT, tick_hook=lambda k, tc, st, o, c: obs.append(o), build=False)
+        t = time.time()
+        pm = PH.PhaseModel.fit(obs, load())
+        pm.save(PHD / "pm.pkl")
+        print(f"PhaseModel fitted on {len(obs)} ticks in {time.time() - t:.0f} s", flush=True)
+    if a.step in ("build", "all"):
+        jobs = [(s_, t0, t1, str(PHD / f"d{i:02d}.npz")) for i, (s_, t0, t1) in enumerate(windows(1))]
+        jobs = [j for j in jobs if not Path(j[3]).exists()]
+        with ProcessPoolExecutor(a.workers) as ex:
+            for pth, dt in ex.map(_pm_window, jobs):
+                print(f"  discovered-bin window {Path(pth).name} in {dt:.0f} s", flush=True)
+    if a.step in ("heldout", "all"):
+        jobs = [(0, t0, t1, str(PHD / f"heldout_{k}.npz")) for k, (t0, t1) in enumerate(MM.HELDOUT)]
+        jobs = [j for j in jobs if not Path(j[3]).exists()]
+        with ProcessPoolExecutor(min(a.workers, 4)) as ex:
+            for pth, dt in ex.map(_pm_record, jobs):
+                print(f"  discovered held-out {Path(pth).name} in {dt:.0f} s", flush=True)
+    if a.step in ("score", "all"):
+        parts = sorted(PHD.glob("d[0-9][0-9].npz"))
+        md = M.LayeredMap.load(parts[0])
+        for f in parts[1:]:
+            md.merge(M.LayeredMap.load(f))
+        md.save(PHD / "map_1d_discovered.npz")
+        me = M.LayeredMap.load(OUT / "map_1d.npz")
+        rd = [dict(np.load(f)) for f in sorted(PHD.glob("heldout_*.npz"))]
+        re_ = MM.load_records(OUT / "heldout")
+        preds = (("env", "bin", 0.0, 0), ("env", "bin", 0.0, 1))
+        res = {}
+        for name, mp, rr in (("equal_slices_calendar", me, re_), ("discovered_P", md, rd)):
+            sc = MM.score(mp, rr, preds=preds)
+            area = [r["area_m2"] for r in sc["l1_bins"]["rows"] if r["truth"] == "p05"]
+            res[name] = dict(l1={k: {kk: vv for kk, vv in v.items() if not kk.startswith("per_")} for k, v in sc["l1"].items()},
+                             l1_bins_mean=sc["l1_bins"]["mean"], mean_bin_envelope_m2=float(np.mean(area)) if area else None,
+                             n_bins_used=len(area),
+                             traffic={c: {k: sc["traffic"][c][k] for k in ("brier", "brier_known", "auroc", "unknown_share")} for c in ("vehicle", "person")},
+                             prod_share={M.PROD_NAMES[k]: float(np.mean(np.concatenate([r["l1_prod"] for r in rr]) == k)) for k in range(M.N_PROD)})
+        # line-state agreement on held-out time: discovered vs calendar rule (both are the observer's; truth = calendar + andon windows not used here)
+        pe = np.concatenate([r["l1_prod"] for r in re_])
+        pd_ = np.concatenate([r["l1_prod"] for r in rd])
+        n = min(len(pe), len(pd_))
+        res["line_state_agreement_with_calendar_rule"] = float((pe[:n] == pd_[:n]).mean())
+        (PHD / "compare.json").write_text(json.dumps(res, indent=1, default=float))
+        print(json.dumps(res, indent=1, default=float))
 
 
 if __name__ == "__main__":

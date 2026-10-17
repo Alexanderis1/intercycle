@@ -118,6 +118,8 @@ def run(a) -> dict:
                                 note="the observer is not told about the new machine; camera noise / clutter assumed"))
     S = dict(events=[], ticks=[], first_unknown=math.nan)
     acc = {k: dict(tp=0, fn=0, n=0, fo=0) for k in ("pre_detection", "transition", "learned")}
+    VARIANTS = (("centre", 0), ("overlap", 1), ("overlap_margin_0.25m", 1), ("overlap_margin_0.5m", 1))
+    accv = {k: {v: dict(tp=0, fn=0, fo=0) for v, _ in VARIANTS} for k in acc}
     tl = []
     last_snap = [-math.inf]
     t_wall = time.time()
@@ -133,7 +135,8 @@ def run(a) -> dict:
             print(f"  {tt / H - 8 * 24:7.3f} h (day 8)  {kind}  {e}", flush=True)
         if k % 2:
             return
-        truth = eg.truth(states[-1].parts.get(cfg["id"], np.zeros((0, 3))))
+        tcirc = states[-1].parts.get(cfg["id"], np.zeros((0, 3)))
+        truth = eg.truth(tcirc)
         U = eg.from_site(mp.unknown_mask(), site)
         pred = U.copy()
         cd = next((c for c in det.cands if c.spawned), None)
@@ -153,6 +156,14 @@ def run(a) -> dict:
             a_["fn"] += int((truth & ~pred).sum())
             a_["fo"] += int((pred & ~truth).sum())
             a_["n"] += 1
+            tc_ = M.mask_from_circles(tcirc, eg.x0, eg.z0, eg.nx, eg.nz, eg.res)
+            for vn, _ in VARIANTS:
+                tt = tc_ if vn == "centre" else truth
+                pp = M.dilate(pred, 1) if vn.endswith("0.25m") else M.dilate(pred, 2) if vn.endswith("0.5m") else pred
+                b_ = accv[stage][vn]
+                b_["tp"] += int((tt & pp).sum())
+                b_["fn"] += int((tt & ~pp).sum())
+                b_["fo"] += int((pp & ~tt).sum())
         if tc >= t_inst and not np.isfinite(S["first_unknown"]) and U.any() and (U & eg.truth(np.array([[nm.x, nm.z, 3.5]]))).any():
             S["first_unknown"] = tc
         if k % 20 == 0:
@@ -165,10 +176,9 @@ def run(a) -> dict:
             l2, h2 = mp.traffic(M.VEHICLE, tod, cond.prod_state)
             l3, h3 = mp.traffic(M.PERSON, tod, cond.prod_state)
             l1 = {}
-            for j, d in enumerate(mp.spec["machines"]):
-                b = int(cond.phase_bin[j]) if j < len(cond.phase_bin) else det.phase_bin(cd, tc) if cd and cd.machine_index == j else -1
-                bins = M.ALL_BINS if b < 0 else (b,)
-                l1[d["id"]] = [(b, *(round(float(v), 2) for v in bx)) for bx in mp.box_cover(d["id"], bins, 0.05, max_boxes=8)]
+            for j, d in enumerate(mp.spec["machines"]):            # every phase bin (as week1), the current one is in phase_now
+                l1[d["id"]] = [(b, *(round(float(v), 2) for v in bx)) for b in range(M.N_BINS)
+                               for bx in mp.box_cover(d["id"], b, 0.05, max_boxes=8)]
             pn = {d["id"]: (int(cond.phase_bin[j]) if j < len(cond.phase_bin) and cond.phase_bin[j] >= 0 else None)
                   for j, d in enumerate(mp.spec["machines"])}
             if cd is not None:
@@ -223,6 +233,9 @@ def run(a) -> dict:
         unsafe_free={k: dict(rate=(v["fn"] / max(v["tp"] + v["fn"], 1)) if v["n"] else None, instants=v["n"],
                              truly_occupied_cells=v["tp"] + v["fn"], missed_cells=v["fn"],
                              false_occupied_m2_mean=v["fo"] * 0.0625 / max(v["n"], 1)) for k, v in acc.items()},
+        unsafe_free_variants={k: {vn: dict(rate=(b["fn"] / max(b["tp"] + b["fn"], 1)) if acc[k]["n"] else None,
+                                           false_occupied_m2_mean=b["fo"] * eg.res ** 2 / max(acc[k]["n"], 1))
+                                  for vn, b in vv.items()} for k, vv in accv.items()},
         events=ev, timeline=tl)
     # envelope quality of the spawned model vs the true swept area (union over the learned period)
     cd = next((c for c in det.cands if c.spawned), None)

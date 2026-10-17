@@ -158,7 +158,7 @@ def run_window(seed: int, t0: float, t1: float, scn: Scenario | None = None, shi
             if build:
                 cond = builder.feed(obs)
             else:
-                cond = builder.tracker.step(obs)
+                cond = builder.condition(obs)
             if tick_hook is not None:
                 tick_hook(int(k), tc, states, obs, cond)
             while cps and float(t_now[j]) >= cps[0]:

@@ -63,6 +63,8 @@ class Candidate:
     last_rise: float = math.nan
     spawn_rise_n: int = 0
     rect: tuple = ()
+    last_fall: float = math.nan
+    idle_s: float = math.nan                         # learned idle length per cycle (cycle starts follow it)
     rise_phases: list = field(default_factory=list)  # known machines' phases (observer's tracker) at this candidate's rises
     explained_by: str = ""                           # phase-locked to a known machine next to it: displaced, not new
     yt: list = field(default_factory=list)           # motion signal buffer for the cycle learner
@@ -254,12 +256,16 @@ class ChangeDetector:
             return
         rising = cd.cur == 0
         cd.cur, cd.opp = (1 if rising else 0), 0
-        if not rising:
-            return
         te = cd.opp_t0 - 0.5 / self.hz
+        if not rising:
+            cd.last_fall = te
+            return
         if not cd.spawned:
             return
-        # spawned: a rise is a new cycle start only well after the previous start (pauses inside a cycle are not starts)
+        # spawned: a rise is a new cycle start only well after the previous start and after a still run as long as the
+        # learned idle part of the cycle (short pauses inside the active part - dwells, a blackout - are not starts)
+        if np.isfinite(cd.idle_s) and np.isfinite(cd.last_fall) and te - cd.last_fall < 0.5 * cd.idle_s:
+            return
         if np.isfinite(cd.last_rise) and te - cd.last_rise < 0.75 * cd.period:
             return
         iv = te - cd.last_rise if np.isfinite(cd.last_rise) else math.nan
@@ -309,6 +315,7 @@ class ChangeDetector:
             return
         cd.rises = [float(r) for r in rises[-8:]]
         cd.last_rise = float(rises[-1])
+        cd.idle_s = float(L.idle_s) if np.isfinite(L.idle_s) and L.idle_s >= 2.0 else math.nan
         self._spawn(cd, t, P, ev, conf=int(mod.confidence), n_cycles=n, jitter=float(mod.jitter))
 
     def _locked_to(self, cd: Candidate) -> str:

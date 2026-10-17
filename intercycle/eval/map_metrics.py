@@ -356,12 +356,16 @@ def score_bins(mp: M.MapView, recs: list[dict]) -> dict:
             c = cnt[b, sl]
             for tname, t in (("any", c > 0), ("p05", c >= 0.05 * nn[i, b])):
                 inter, uni = (e & t).sum(), (e | t).sum()
+                if uni == 0:                                   # nothing on the floor in this bin, learned and true: agreed
+                    rows.append(dict(machine=mid, bin=b, truth=tname, n=int(nn[i, b]), empty=True, iou=1.0, precision=1.0,
+                                     recall=1.0, area_m2=0.0, truth_m2=0.0))
+                    continue
                 rows.append(dict(machine=mid, bin=b, truth=tname, n=int(nn[i, b]), iou=float(inter / max(uni, 1)),
                                  precision=float(inter / max(e.sum(), 1)), recall=float(inter / max(t.sum(), 1)),
                                  area_m2=float(e.sum() * g.res ** 2), truth_m2=float(t.sum() * g.res ** 2)))
     agg = {}
     for tname in ("any", "p05"):
-        rr = [r for r in rows if r["truth"] == tname]
+        rr = [r for r in rows if r["truth"] == tname and not r.get("empty")]      # empty-empty bins excluded from the means
         if rr:
             agg[tname] = {k: float(np.mean([r[k] for r in rr])) for k in ("iou", "precision", "recall")}
     return dict(rows=rows, mean=agg)

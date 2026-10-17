@@ -1097,20 +1097,42 @@ class LayeredMap(MapView):
 
 
 class MapBuilder:
-    """Convenience driver: observation -> conditioning -> map."""
+    """Convenience driver: observation -> conditioning -> map.
+
+    phase_model (optional, duck-typed: workstream P's observer/phases.PhaseModel, never imported here): fed every tick
+    before the tracker. use_bins=True replaces the tracker's 16 equal-slice bins for L1 by the discovered sub-phases
+    (sub-phase k -> bin k, P's "blocked" bin -> STOP_BIN, -1 unknown). use_line_state=True makes the discovered line
+    state the production state (no calendar; "unknown" falls back to the motion rule)."""
 
     def __init__(self, scn: Scenario, map_: LayeredMap | None = None, tracker: ConditionTracker | None = None,
-                 binner: Callable | None = None, **map_kw):
-        """binner(t, cond) -> (M,) int phase bins (0..15, STOP_BIN, -1 unknown), optional: replaces the tracker's
-        equal-slice bins for L1 (e.g. discovered sub-phases, observer/phases.py); the returned Cond carries them."""
+                 phase_model=None, use_bins: bool = True, use_line_state: bool = False, **map_kw):
         self.scn = scn
         self.map = map_ or LayeredMap(scn, **map_kw)
-        self.tracker = tracker or ConditionTracker(scn)
-        self.binner = binner
+        self.pm = phase_model
+        self.use_bins = phase_model is not None and use_bins
+        ls = None
+        if phase_model is not None and use_line_state:
+            names = {n: i for i, n in enumerate(PROD_NAMES)}
+            ls = lambda t: names.get(phase_model.line_state(t))
+        self.tracker = tracker or ConditionTracker(scn, line_state=ls)
+        if tracker is not None and ls is not None:
+            tracker.line_state = ls
+        self.mids = [m.id for m in scn.machines]
+
+    def condition(self, obs: Observation) -> Cond:
+        if self.pm is not None:
+            self.pm.update(obs)
+        cond = self.tracker.step(obs)
+        if self.use_bins:
+            b = np.full(len(self.mids), -1, np.int16)
+            for i, mid in enumerate(self.mids):
+                k = int(self.pm.phase_bin(mid, obs.t_cap))
+                n = int(self.pm.n_bins(mid))
+                b[i] = -1 if k < 0 else (STOP_BIN if k == n - 1 else min(k, N_PHASE - 1))
+            cond.phase_bin = b
+        return cond
 
     def feed(self, obs: Observation) -> Cond:
-        cond = self.tracker.step(obs)
-        if self.binner is not None:
-            cond.phase_bin = np.asarray(self.binner(obs.t_cap, cond), np.int16)
+        cond = self.condition(obs)
         self.map.update(obs, obs.t_cap, cond)
         return cond
