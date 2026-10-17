@@ -179,14 +179,16 @@ def stripe_mat(bs, name, c1, c2, period=0.25, rough=0.55):
 
 
 def corrugated(bs, name, rgb, axis="z", pitch=0.2, metal=0.6, rough=0.42):
-    """Trapezoidal sheet look: wave bump along `axis` (z = vertical ribs on walls, x/y = roof deck)."""
+    """Trapezoidal sheet look: ribs RUN ALONG `axis` (the wave varies across it).
+    z = vertical ribs on walls; x / y = horizontal ribs on the roof deck; h = horizontal slats on a wall
+    (roller shutters)."""
     if name in bs.mats:
         return bs.mats[name]
     m = bs.bpy.data.materials.new(name)
     t = _NT(m)
     b = t.bsdf()
     x, y, z = t.xyz()
-    coord = t.math("ADD", x, y) if axis == "z" else (x if axis == "y" else y)
+    coord = {"z": lambda: t.math("ADD", x, y), "y": lambda: x, "x": lambda: y, "h": lambda: z}[axis]()
     w = t.math("SINE", t.math("MULTIPLY", coord, 2 * math.pi / pitch))
     rib = t.math("SMOOTH_MAX", w, 0.2, 0.3)
     col = t.ramp(t.noise(0.8), [(0.3, _darker(rgb, 0.85)), (0.75, rgb)])
@@ -199,15 +201,21 @@ def corrugated(bs, name, rgb, axis="z", pitch=0.2, metal=0.6, rough=0.42):
 
 
 def mesh_mat(bs, name, rgb=(0.04, 0.04, 0.045), cell=0.05, wire=0.07):
-    """Welded wire mesh (guard panels, grating): wires are opaque metal, holes transparent."""
+    """Welded wire mesh (guard panels, grating): wires are opaque metal, holes transparent.
+    The grid uses (x+y, z) on vertical faces and (x, y) on horizontal ones (tray bottoms, platform deck)."""
     if name in bs.mats:
         return bs.mats[name]
     m = bs.bpy.data.materials.new(name)
     t = _NT(m)
     b = t.bsdf()
     x, y, z = t.xyz()
-    u = t.math("FRACT", t.math("DIVIDE", t.math("ADD", x, y), cell))
-    v = t.math("FRACT", t.math("DIVIDE", z, cell))
+    sn = t.n("ShaderNodeSeparateXYZ")
+    t.link(t.n("ShaderNodeNewGeometry").outputs["Normal"], sn.inputs[0])
+    flat = t.math("GREATER_THAN", t.math("ABSOLUTE", sn.outputs[2]), 0.5)
+    uc = t.math("SUBTRACT", t.math("ADD", x, y), t.math("MULTIPLY", flat, y))        # x+y, or x when flat
+    vc = t.math("ADD", z, t.math("MULTIPLY", flat, t.math("SUBTRACT", y, z)))       # z, or y when flat
+    u = t.math("FRACT", t.math("DIVIDE", uc, cell))
+    v = t.math("FRACT", t.math("DIVIDE", vc, cell))
     hole = t.math("MULTIPLY", t.math("GREATER_THAN", u, wire), t.math("GREATER_THAN", v, wire))
     t.link(t.math("SUBTRACT", 1.0, hole), b.inputs["Alpha"])
     b.inputs["Base Color"].default_value = (*rgb, 1.0)
@@ -339,9 +347,9 @@ def building(bs, rng: random.Random):
     for k, (a, b) in enumerate(((z0, door_y - 1.6), (door_y + 1.6, z1))):
         bs.box(f"dh_front{k}", (0.25, b - a, 5.2), (X + 0.1, (a + b) / 2, 2.6), mat(bs, "ral7035"))
     bs.box("dh_door_frame", (0.3, 3.4, 0.25), (X + 0.1, door_y, 3.2), mat(bs, "safety_yellow"))
-    # roller doors on the west wall (dock / transport aisle) and on the south wall
+    # two roller doors on the west wall: transport aisle and dock aisle (horizontal slats)
     for k, (cy, w) in enumerate(((8.0, 4.5), (32.0, 4.5))):
-        bs.box(f"rdoor{k}", (0.12, w, 4.8), (0.05, cy, 2.4), corrugated(bs, "rdoor", (0.55, 0.57, 0.6), axis="x", pitch=0.11))
+        bs.box(f"rdoor{k}", (0.12, w, 4.8), (0.05, cy, 2.4), corrugated(bs, "rdoor", (0.55, 0.57, 0.6), axis="h", pitch=0.11))
         bs.box(f"rdoor{k}_box", (0.6, w + 0.4, 0.6), (0.3, cy, 5.1), mat(bs, "ral7035"))
         for sgn in (-1, 1):
             bs.box(f"rdoor{k}_g{sgn}", (0.2, 0.2, 4.8), (0.15, cy + sgn * (w / 2 + 0.1), 2.4), mat(bs, "hazard"))

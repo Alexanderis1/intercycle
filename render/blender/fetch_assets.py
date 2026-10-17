@@ -7,7 +7,7 @@ Stdlib only (runs in Store Python or Blender's Python). The bucket is anonymousl
 (S3 ListObjectsV2). Files land under <dest>/<root>/<prefix...>, keeping the bucket layout so relative
 USD references keep resolving. Thumbnails (.thumbs/) and Omniverse sidecars (.wrapp) are skipped.
 Each call appends what it saw to <dest>/manifest.json: per asset folder, the licence file found
-(LICENSE / LICENSE.txt / license.txt) and its first line, so render/credits.json can be built from it.
+(LICENSE / LICENSE.txt / LICENSE.md, any case) and its first line, so render/credits.json can be built from it.
 Assets are NEVER committed to git.
 """
 from __future__ import annotations

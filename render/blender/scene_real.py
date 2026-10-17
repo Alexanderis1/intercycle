@@ -69,6 +69,11 @@ class RealScene(rb.BScene):
             nt.links.new(vs.outputs[0], out.inputs["Volume"])
             self.scene.cycles.volume_bounces = 1
 
+    def set_thermal(self, on: bool):
+        super().set_thermal(on)                      # BScene resets the world to its own 0.15 when leaving thermal
+        if not on:
+            self.world_bg.inputs["Strength"].default_value = self.args.sky_strength
+
     def _hide_hero(self):
         r = self.prims.pop(self.ctx.hero.entity_id, None)
         if r is not None:
@@ -288,6 +293,9 @@ class RealScene(rb.BScene):
                 fanuc.set_q(joints, fanuc.weld_q(ph, k) if on else fanuc.HOME)
             if mid in self.sparks:
                 self._sparks(mid, t, on, ph)
+        if shot is not None and shot.thermal:        # data-hall thermal pass (SYNTHETIC temperatures)
+            for mp, row, idx, zf in self.skins:
+                self.set_emit(mp, core.thermal_lut((core.rack_temp_c(row, idx, zf, t) - 20.0) / 22.0), 1.3)
 
     def _sparks(self, mid, t, on, ph):
         pool, flash, _ = self.sparks[mid]
@@ -392,11 +400,13 @@ def write_gt(bs, stem: str, gt_dir: Path, ids: dict) -> None:
     saved = (st.media_type, st.file_format, st.color_depth, st.use_exr_interleave)
     # Blender 5.x: set media_type MULTI_LAYER_IMAGE first (its only format is OPEN_EXR_MULTILAYER); interleaved =
     # one part, so the channels come back as "<layer>.Object Index.X" / "<layer>.Depth.Z"
-    st.media_type = "MULTI_LAYER_IMAGE"
-    st.file_format, st.color_depth, st.use_exr_interleave = "OPEN_EXR_MULTILAYER", "32", True
-    bs.bpy.data.images["Render Result"].save_render(str(exr), scene=bs.scene)
-    st.media_type = saved[0]
-    st.file_format, st.color_depth, st.use_exr_interleave = saved[1:]
+    try:
+        st.media_type = "MULTI_LAYER_IMAGE"
+        st.file_format, st.color_depth, st.use_exr_interleave = "OPEN_EXR_MULTILAYER", "32", True
+        bs.bpy.data.images["Render Result"].save_render(str(exr), scene=bs.scene)
+    finally:
+        st.media_type = saved[0]
+        st.file_format, st.color_depth, st.use_exr_interleave = saved[1:]
     with OpenEXR.File(str(exr), separate_channels=True) as f:
         ch = f.channels()
         idx = next(v.pixels for k, v in ch.items() if k.endswith(("Object Index.X", "IndexOB.X")))   # 5.x name, 4.x name
