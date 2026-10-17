@@ -26,9 +26,11 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
+from intercycle.observer.occlusion import OCC_EPS, OCC_PAD_M, HoldGate, ZoneCells, hold_ticks, occluded_zones
 from intercycle.scenario import Scenario
 
 DAY = 86_400.0
@@ -286,8 +288,14 @@ class Observation:
 #                              energy). NaN = MISSING: the zone was not fully observed this tick. MISSING is never
 #                              "no motion" (T-W6: occlusion or a dead camera must not read as an idle machine).
 #   zone_vis     (M,) float32  share in [0, 1] of zone m's floor (rect + margin) that a camera with cam_floor_ok sees
-#                              this tick (and, once T-W6 lands, not hidden behind a person / vehicle). zone_vis <
-#                              ZONE_VIS_MIN forces zone_motion NaN.
+#                              this tick, minus the share hidden by person / vehicle detections (T-W6): a lower bound
+#                              on the visible share. zone_vis < ZONE_VIS_MIN forces zone_motion NaN.
+#   T-W6 (occlusion = MISSING): zone_motion is NaN while a person or vehicle detection (circle r + OCC_PAD_M) touches
+#                              the zone (rect grown by the zone margin), held OCC_HOLD_S after the last such detection
+#                              so missed detections inside an occlusion never leak a "no motion" sample
+#                              (`ObsV2Converter`; `intercycle/observer/occlusion.py` holds the geometry and the image-
+#                              space ram-ROI rule for the real clips). It can be NaN at zone_vis 1 when an occluder only
+#                              touches the zone between grid cells, or while the hold bridges a missed detection.
 #   cam_floor_ok (n_cam,) bool one per camera polygon (the camera's visible floor), same order as cam_ok: the image is
 #                              valid for floor observation. Implies cam_ok. The v1 converter copies the heartbeat
 #                              (cam_ok); the M-W10 watchdog (frozen / obstructed / dark image) sets it False on its own.
@@ -298,7 +306,14 @@ OBS_DTYPES = dict(t=np.float64, t_cap=np.float64, cls=np.int8, x=np.float64, z=n
                   moving=np.bool_, machine=np.int16, cam_ok=np.bool_, zone_motion=np.float32, zone_vis=np.float32,
                   cam_floor_ok=np.bool_)
 _DET_FIELDS = ("cls", "x", "z", "r", "heading", "moving", "machine")
-ZONE_VIS_MIN = 1.0      # fail closed: a zone that is not fully seen is MISSING (T-W6 may refine with occlusion geometry)
+ZONE_VIS_MIN = 1.0      # fail closed: a zone that is not fully seen is MISSING
+OCC_CLASSES = (PERSON, VEHICLE)          # detections that occlude a machine zone (T-W6)
+ZONE_MARGIN_M = 1.0                      # zone = rect grown by this (CameraShim.zone_margin_m, zone_camera_share)
+# Per-tick probability that the camera misses an occluder standing at the zone under MEASURED_SHIM (dropped, or
+# thrown 5-20 m away by a gross error); the hold is sized so an occlusion leaks with probability <= OCC_EPS per tick
+# for iid misses (16 ticks = 8 s). A camera model with miss bursts (stat_v1) passes its own hold_s.
+OCC_P_MISS = 1.0 - (1.0 - cast(float, MEASURED_SHIM["p_drop"])) * (1.0 - cast(float, MEASURED_SHIM["gross_p"]))
+OCC_HOLD_S = hold_ticks(OCC_P_MISS, OCC_EPS) / FRAME_HZ
 
 
 def zone_camera_share(rects, cams, margin: float = 1.0, res: float = 0.25) -> np.ndarray:
@@ -319,10 +334,24 @@ def zone_camera_share(rects, cams, margin: float = 1.0, res: float = 0.25) -> np
     return W
 
 
-def obs_v1_to_v2(obs: Observation, share: np.ndarray, vis_min: float = ZONE_VIS_MIN) -> Observation:
-    """v1 -> v2. `share` = zone_camera_share(...) (M, n_cam). cam_floor_ok = the heartbeat (v1 has no image watchdog);
-    zone_vis = share @ cam_floor_ok; zone_motion = moving PART detections per zone, NaN where zone_vis < vis_min.
+def _occluders(obs: Observation, occ_classes) -> np.ndarray:
+    return np.isin(obs.cls, np.asarray(occ_classes, np.int8))
+
+
+def obs_v1_to_v2(obs: Observation, share: np.ndarray, vis_min: float = ZONE_VIS_MIN, *, zones,
+                 margin: float = ZONE_MARGIN_M, pad: float = OCC_PAD_M, occ_classes=OCC_CLASSES) -> Observation:
+    """v1 -> v2 for ONE tick, no hold (a sequence goes through `ObsV2Converter`, which holds occlusions across missed
+    detections). `share` = zone_camera_share(...) (M, n_cam); `zones` = the M zone rects (x0, z0, x1, z1) or polygons,
+    same order (required: without the geometry occlusion cannot be checked, and T-W6 fails closed).
+    cam_floor_ok = the heartbeat (v1 has no image watchdog); zone_vis = share @ cam_floor_ok minus the floor share
+    hidden by person / vehicle detections; zone_motion = moving PART detections per zone, NaN where zone_vis < vis_min
+    or a person / vehicle detection (r + pad) touches the zone grown by `margin` (T-W6).
     The v1 fields are passed through untouched (same arrays)."""
+    return _to_v2(obs, share, vis_min, zones, margin, pad, occ_classes, None, None)
+
+
+def _camera_v2(obs: Observation, share: np.ndarray, vis_min: float) -> Observation:
+    """The camera-health part of the v1 -> v2 conversion (no occlusion)."""
     share = np.asarray(share, float)
     n_zone, n_cam = share.shape
     cam_ok = np.asarray(obs.cam_ok, bool)
@@ -337,6 +366,68 @@ def obs_v1_to_v2(obs: Observation, share: np.ndarray, vis_min: float = ZONE_VIS_
         np.add.at(motion, obs.machine[sel].astype(np.int64), 1.0)
     motion[vis < vis_min] = np.nan
     return replace(obs, zone_motion=motion.astype(np.float32), zone_vis=vis.astype(np.float32), cam_floor_ok=floor_ok)
+
+
+def _occlude(v: Observation, zones: list, vis_min: float, margin: float, pad: float, occ_classes,
+             gate: HoldGate | None, cells: ZoneCells | None) -> Observation:
+    """T-W6 on a v2 observation: NaN zone_motion where a person / vehicle detection touches the zone (held by `gate`),
+    zone_vis lowered by the hidden floor share. Returns a new Observation; the input arrays are not modified."""
+    zm, zv = v.zone_motion, v.zone_vis
+    assert zm is not None and zv is not None
+    if len(zones) != len(zm):
+        raise ValueError(f"{len(zones)} zones for {len(zm)} zone_motion entries")
+    occ = _occluders(v, occ_classes)
+    hit = occluded_zones(v.x[occ], v.z[occ], v.r[occ], zones, margin=margin, pad=pad)
+    hidden = np.zeros(len(zones))
+    if hit.any():
+        if cells is None:
+            cells = ZoneCells(zones, margin=margin)
+        hidden[hit] = cells.hidden_share(v.x[occ], v.z[occ], v.r[occ], pad=pad)[hit]
+    if gate is not None:
+        missing, hidden = gate.step(v.t_cap, hit, hidden)
+    else:
+        missing = hit
+    vis = np.maximum(zv.astype(float) - hidden, 0.0)
+    motion = zm.astype(float)
+    motion[missing | (vis < vis_min)] = np.nan
+    return replace(v, zone_motion=motion.astype(np.float32), zone_vis=vis.astype(np.float32))
+
+
+def _to_v2(obs: Observation, share, vis_min: float, zones, margin: float, pad: float, occ_classes,
+           gate: HoldGate | None, cells: ZoneCells | None) -> Observation:
+    zones = list(zones)
+    n_zone = np.asarray(share).shape[0]
+    if len(zones) != n_zone:
+        raise ValueError(f"{len(zones)} zones but share has {n_zone} rows")
+    v = obs if obs.is_v2 else _camera_v2(obs, share, vis_min)
+    return _occlude(v, zones, vis_min, margin, pad, occ_classes, gate, cells)
+
+
+class ObsV2Converter:
+    """Stateful v1 -> v2 adapter for a tick sequence, with the T-W6 hold. Call it on every tick in time order:
+      * a v1 observation (CameraShim, the body-shop / A-lite path) is converted (camera health + occlusion);
+      * a v2 observation (a camera model that already writes zone_motion, e.g. twin/camera.py stat_v1) gets the
+        observer-side occlusion rule applied on its own person / vehicle detections (its NaNs are kept).
+    `zones` = the M zone rects / polygons in zone order; `hold_s` keeps a zone MISSING after the last occluder
+    detection (default OCC_HOLD_S, sized for MEASURED_SHIM's iid misses)."""
+
+    def __init__(self, share: np.ndarray, zones, vis_min: float = ZONE_VIS_MIN, margin: float = ZONE_MARGIN_M,
+                 pad: float = OCC_PAD_M, hold_s: float = OCC_HOLD_S, occ_classes=OCC_CLASSES, res: float = 0.25):
+        self.share = np.asarray(share, float)
+        self.zones = list(zones)
+        if len(self.zones) != self.share.shape[0]:
+            raise ValueError(f"{len(self.zones)} zones but share has {self.share.shape[0]} rows")
+        self.vis_min, self.margin, self.pad, self.hold_s = vis_min, margin, pad, hold_s
+        self.occ_classes = tuple(occ_classes)
+        self.cells = ZoneCells(self.zones, margin=margin, res=res)
+        self.gate = HoldGate(len(self.zones), hold_s)
+
+    def reset(self) -> None:
+        self.gate.reset()
+
+    def __call__(self, obs: Observation) -> Observation:
+        return _to_v2(obs, self.share, self.vis_min, self.zones, self.margin, self.pad, self.occ_classes, self.gate,
+                      self.cells)
 
 
 def check_obs_v2(obs: Observation, n_zone: int | None = None, n_cam: int | None = None) -> None:

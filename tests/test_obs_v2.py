@@ -78,13 +78,14 @@ def test_zone_camera_share_rows_sum_to_one_and_follow_the_camera_cells():
 
 
 def test_convert_counts_moving_parts_per_zone_and_keeps_v1_fields():
-    o = _obs(xs=[10, 11, 12, 30, 20, 21], zs=[20, 21, 22, 20, 40, 41],
+    o = _obs(xs=[10, 11, 12, 30, 60, 21], zs=[20, 21, 22, 20, 33, 41],
              cls=[M.PART, M.PART, M.PART, M.PART, M.PERSON, M.SKID],
              moving=[True, True, False, True, True, True], machine=[0, 0, 0, 2, -1, 8])
-    v = M.obs_v1_to_v2(o, SHARE)
+    v = M.obs_v1_to_v2(o, SHARE, zones=RECTS)
     M.check_obs_v2(v, NZ, NCAM)
     want = np.zeros(NZ, np.float32)
-    want[0], want[2] = 2, 1                     # still parts, people and skids are not machine motion
+    want[0], want[2] = 2, 1                     # still parts, people (here away from every zone) and skids
+    #                                           are not machine motion
     _same(v.zone_motion, want)
     _same(v.zone_vis, np.ones(NZ, np.float32))
     _same(v.cam_floor_ok, o.cam_ok)
@@ -98,7 +99,7 @@ def test_dead_camera_makes_its_zones_missing_never_idle():
     assert 0 < SHARE[0, k] < 1
     ok = np.ones(NCAM, bool)
     ok[k] = False
-    v = M.obs_v1_to_v2(_obs(cam_ok=ok), SHARE)
+    v = M.obs_v1_to_v2(_obs(cam_ok=ok), SHARE, zones=RECTS)
     M.check_obs_v2(v, NZ, NCAM)
     hit = SHARE[:, k] > 0
     zm, zv, cf = _v2(v)
@@ -107,12 +108,12 @@ def test_dead_camera_makes_its_zones_missing_never_idle():
     np.testing.assert_allclose(zv[hit], 1 - SHARE[hit, k], rtol=1e-6)
     assert not cf[k] and cf.sum() == NCAM - 1
     # all cameras down: every zone MISSING with zone_vis 0
-    v0 = M.obs_v1_to_v2(_obs(cam_ok=np.zeros(NCAM, bool)), SHARE)
+    v0 = M.obs_v1_to_v2(_obs(cam_ok=np.zeros(NCAM, bool)), SHARE, zones=RECTS)
     M.check_obs_v2(v0)
     zm0, zv0, _ = _v2(v0)
     assert np.isnan(zm0).all() and (zv0 == 0).all()
     # an explicit lower vis_min keeps a partly seen zone observed
-    vl = M.obs_v1_to_v2(_obs(cam_ok=ok), SHARE, vis_min=0.4)
+    vl = M.obs_v1_to_v2(_obs(cam_ok=ok), SHARE, vis_min=0.4, zones=RECTS)
     assert np.isfinite(_v2(vl)[0][hit & (zv >= 0.4)]).all()
 
 
@@ -126,14 +127,14 @@ def test_dead_camera_makes_its_zones_missing_never_idle():
     (dict(cam_floor_ok=np.zeros(NCAM - 1, bool)), "differ"),
 ])
 def test_check_rejects_malformed(bad, msg):
-    v = M.obs_v1_to_v2(_obs(), SHARE)
+    v = M.obs_v1_to_v2(_obs(), SHARE, zones=RECTS)
     from dataclasses import replace
     with pytest.raises(ValueError, match=msg):
         M.check_obs_v2(replace(v, **bad))
 
 
 def test_check_rejects_floor_ok_on_dead_heartbeat_and_wrong_counts():
-    v = M.obs_v1_to_v2(_obs(), SHARE)
+    v = M.obs_v1_to_v2(_obs(), SHARE, zones=RECTS)
     from dataclasses import replace
     ok = np.ones(NCAM, bool)
     ok[0] = False
@@ -148,9 +149,9 @@ def test_check_rejects_floor_ok_on_dead_heartbeat_and_wrong_counts():
 def test_jsonl_and_npz_round_trip(tmp_path):
     ok = np.ones(NCAM, bool)
     ok[3] = False
-    seq = [M.obs_v1_to_v2(_obs(t=1.0, xs=[10, 30], zs=[20, 20], machine=[0, 2]), SHARE),
-           M.obs_v1_to_v2(_obs(t=1.5, cam_ok=ok), SHARE),
-           M.obs_v1_to_v2(_obs(t=2.0, xs=[50], zs=[40], cls=M.PERSON, moving=False), SHARE)]
+    seq = [M.obs_v1_to_v2(_obs(t=1.0, xs=[10, 30], zs=[20, 20], machine=[0, 2]), SHARE, zones=RECTS),
+           M.obs_v1_to_v2(_obs(t=1.5, cam_ok=ok), SHARE, zones=RECTS),
+           M.obs_v1_to_v2(_obs(t=2.0, xs=[50], zs=[40], cls=M.PERSON, moving=False), SHARE, zones=RECTS)]
     for o in seq:
         line = json.dumps(M.obs_to_dict(o), allow_nan=False)        # strict JSON: NaN written as null
         o2 = M.obs_from_dict(json.loads(line))
@@ -178,7 +179,7 @@ def test_jsonl_and_npz_round_trip(tmp_path):
 def test_layered_map_accepts_v2_and_drop_offline_keeps_v2_fields():
     m = M.LayeredMap(SCN)
     m.cam_offline = {1}
-    v = M.obs_v1_to_v2(_obs(xs=[10, 30], zs=[20, 20], machine=[0, 2]), SHARE)
+    v = M.obs_v1_to_v2(_obs(xs=[10, 30], zs=[20, 20], machine=[0, 2]), SHARE, zones=RECTS)
     d = m._drop_offline(v)
     assert d.is_v2
     _same(d.zone_motion, v.zone_motion)
@@ -224,8 +225,9 @@ def _cases_sequence():
 def make_fixtures(out: Path = FIX) -> None:
     out.mkdir(parents=True, exist_ok=True)
     for name, seq in (("obs_v2_shim.npz", _shim_sequence()), ("obs_v2_cases.npz", _cases_sequence())):
-        v2 = [M.obs_v1_to_v2(o, SHARE) for o in seq]
-        M.save_obs_npz(out / name, v2, zone_camera_share=SHARE)
+        conv = M.ObsV2Converter(SHARE, RECTS)
+        v2 = [conv(o) for o in seq]
+        M.save_obs_npz(out / name, v2, zone_camera_share=SHARE, zones=np.asarray(RECTS, float))
 
 
 @pytest.mark.parametrize("name", ["obs_v2_shim.npz", "obs_v2_cases.npz"])
@@ -233,11 +235,13 @@ def test_golden_fixture_reconverts_identically(name):
     obs, extra = M.load_obs_npz(FIX / name)
     W = extra["zone_camera_share"]
     np.testing.assert_allclose(W, SHARE, atol=1e-12)
+    np.testing.assert_array_equal(extra["zones"], np.asarray(RECTS, float))
     assert obs and all(o.is_v2 for o in obs)
+    conv = M.ObsV2Converter(W, [tuple(z) for z in extra["zones"]])
     for o in obs:
         M.check_obs_v2(o, NZ, NCAM)
         v1 = M.Observation(**{f: getattr(o, f) for f in M.OBS_V1_FIELDS})
-        _same_obs(M.obs_v1_to_v2(v1, W), o)
+        _same_obs(conv(v1), o)
     zm = np.stack([_v2(o)[0] for o in obs])
     assert np.isnan(zm).any() and np.nanmax(zm) > 0, "fixture must exercise both MISSING and motion"
 
@@ -245,7 +249,8 @@ def test_golden_fixture_reconverts_identically(name):
 def test_golden_shim_fixture_matches_the_camera_shim():
     """Pins CameraShim + converter end to end: a change to either must regenerate the fixture on purpose."""
     obs, _ = M.load_obs_npz(FIX / "obs_v2_shim.npz")
-    fresh = [M.obs_v1_to_v2(o, SHARE) for o in _shim_sequence(len(obs))]
+    conv = M.ObsV2Converter(SHARE, RECTS)
+    fresh = [conv(o) for o in _shim_sequence(len(obs))]
     for a, b in zip(obs, fresh):
         _same_obs(a, b)
 
