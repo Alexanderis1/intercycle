@@ -437,6 +437,59 @@ def run_stills(scn, ctx, args, out_dir: Path) -> list[str]:
     return outs
 
 
+def _key_pose(bs, frame: int) -> None:
+    """Keyframe everything apply() moves (entity roots, arm joints) so Cycles can motion-blur between frames."""
+    for o in bs.prims.values():
+        o.keyframe_insert("location", frame=frame)
+        o.keyframe_insert("rotation_euler", frame=frame)
+    for arms in bs.arms.values():
+        for joints, _, _ in arms:
+            for j in joints.values():
+                j.keyframe_insert("rotation_euler", frame=frame)
+
+
+def run_cctv_seq(scn, ctx, args, out_dir: Path) -> Path:
+    """One CCTV camera over [t, t + seconds] at --fps: clean frames (overscanned) + GT per frame, with motion blur
+    over a 1/(2*fps) s shutter that ends on the frame (like a CCTV sensor exposing the frame interval).
+    Feed the result to render/cctv: python -m render.cctv.cctv_post --in <out>/frames --gt <out>/gt --overscan ..."""
+    bs = RealScene(scn, ctx, args)
+    bs.build()
+    ids = assign_ids(bs) if args.gt else {}
+    bpy, sc = bs.bpy, bs.scene
+    bpy.context.preferences.edit.keyframe_new_interpolation_type = "LINEAR"
+    sc.render.use_motion_blur = True
+    sc.render.motion_blur_shutter = 0.5
+    sc.render.motion_blur_position = "END"
+    W, H = (int(v) for v in args.res.split("x"))
+    k = 1.0 / (1.0 - 2.0 * args.overscan)
+    bs.cam_obj.data.sensor_width = 36.0 * k
+    sc.render.resolution_x, sc.render.resolution_y = round(W * k), round(H * k)
+    bs.point_camera(still_cam(args.cctv_seq, scn))
+    seq = out_dir / args.cctv_seq
+    frames = seq / "frames"
+    frames.mkdir(parents=True, exist_ok=True)
+    n = max(1, int(round(args.seconds * args.fps)))
+    dt = 1.0 / args.fps
+    bs.apply(args.t - dt)
+    _key_pose(bs, 0)
+    for i in range(1, n + 1):
+        t = args.t + (i - 1) * dt
+        bs.apply(t)
+        _key_pose(bs, i)
+        sc.frame_set(i)
+        bs.apply(t)                      # frame_set re-evaluates the curves; re-apply for the non-keyed state (sparks, lamps)
+        dst = frames / f"f_{i - 1:05d}.png"
+        sc.render.filepath = str(dst)
+        bpy.ops.render.render(write_still=True)
+        if args.gt:
+            write_gt(bs, dst.stem, seq / "gt", ids)
+        if (i - 1) % 25 == 0:
+            rb.log(f"[{args.cctv_seq}] frame {i}/{n} t={t:.2f}s")
+    (seq / "seq_manifest.json").write_text(json.dumps(dict(cam=args.cctv_seq, t0=args.t, fps=args.fps, frames=n, overscan=args.overscan,
+                                                          device=bs.device, args=vars(args)), indent=2, default=str))
+    return seq
+
+
 def main(argv=None) -> int:
     ap = rb.build_parser()
     ap.add_argument("--stills", default="", help="comma list: wide, weld_close, cctv_<i>")
@@ -444,6 +497,8 @@ def main(argv=None) -> int:
     ap.add_argument("--light-e", type=float, default=60.0, help="power of each LED high-bay area light (W)")
     ap.add_argument("--sky-strength", type=float, default=1.0)
     ap.add_argument("--overscan", type=float, default=0.055, help="extra field per side for cctv_* stills (fraction of the rendered width)")
+    ap.add_argument("--cctv-seq", default="", help="render a CCTV sequence from camera cctv_<i> starting at --t")
+    ap.add_argument("--seconds", type=float, default=4.0, help="length of --cctv-seq (s)")
     ap.add_argument("--gt", action="store_true", help="also write instance/depth ground truth for cctv_* stills (<out>/gt)")
     ap.add_argument("--haze", type=float, default=0.0, help="world volume scatter density (1/m), e.g. 0.002; 0 = off")
     ap.set_defaults(hdri_id="kloofendal_overcast_puresky", cache=r"D:\icdata\assets\ph_cache")
@@ -454,6 +509,9 @@ def main(argv=None) -> int:
     ctx = core.build_ctx(scn, core.load_trace(args.trace), args.hero, args.synth_bodies)
     if args.stills:
         run_stills(scn, ctx, args, out_dir)
+        return 0
+    if args.cctv_seq:
+        run_cctv_seq(scn, ctx, args, out_dir)
         return 0
     shots = [s.strip() for s in args.shots.split(",") if s.strip()]
     rb.run_bpy(scn, ctx, shots, args, out_dir, scene_cls=RealScene)

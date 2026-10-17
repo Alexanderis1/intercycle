@@ -1,4 +1,34 @@
-> **Partly outdated (17 Oct 14:40).** Isaac Sim is a **no-go** (it segfaults on Modal and needs NVIDIA RTX). Ignore §1 recommendation, §3 gate and every Isaac-only step. The Kenney low-poly car is dropped. **Still valid:** the asset and licence research (§4), the trace contract (§5), cost (§7) and the shot list (§8). The current plan is `docs/DIRECTION.md` §7 X.
+> **Partly outdated (17 Oct 14:40).** Isaac Sim is a **no-go** (it segfaults on Modal and needs NVIDIA RTX). Ignore §1 recommendation, §3 gate and every Isaac-only step. The Kenney low-poly car is dropped. **Still valid:** the asset and licence research (§4), the trace contract (§5), cost (§7) and the shot list (§8). The current plan is `docs/DIRECTION.md` §7 X; the pipeline that implements it is **§0 below**.
+
+## 0. Workstream X: realistic renders on the user's desktop (current, 17 Oct evening)
+
+Machine: user's desktop, standalone Blender 5.1 (Python 3.13), Cycles + **OptiX** on the RTX 4060 Ti 8 GB. No Modal spend.
+Large files never go to git: assets in `D:\icdata\assets\`, renders in `D:\icdata\renders\`, extra Python packages in `D:\icdata\pylib\`.
+
+| Piece | File | What |
+|---|---|---|
+| launcher | `render/blender/bl_run.py` | `blender -b --factory-startup --python render/blender/bl_run.py -- <script> [args]`; adds the package folder (`INTERCYCLE_PYLIB`) |
+| plant | `render/blender/plant.py` | hall shell, roof trusses + skylight strips, 128 LED high-bays, column grid between the sim zones, aisle markings from `zones`, overhead trays/ducts/sprinklers, clutter, dressing only on floor no sim zone uses |
+| scene | `render/blender/scene_real.py` | `RealScene(BScene)`: stations (roller-skid conveyor, fixtures, mesh guards with light-curtain openings, stack lights from machine state, signs, controller platform), FANUC arms, spark bursts; stills, CCTV sequences with motion blur, ground truth |
+| robot arm | `render/blender/fanuc.py` | FANUC R-2000iC/210F from the NVIDIA USD (CC-BY 4.0) as a joint chain a1..a6 + servo C-gun; `weld_q(phase, k)` |
+| CCTV look | `render/cctv/` | distortion, vignetting, sensor noise, burned-in timestamp + **SYNTHETIC**, real x264 round trip; GT warped by the same map -> boxes + COCO (`pytest render/cctv/test_cctv.py`) |
+| assets | `render/blender/fetch_assets.py` | NVIDIA bucket downloader that records each asset's licence file (`manifest.json`) |
+
+What the realistic look deliberately does **not** show: glowing hazard-zone decals and curtain planes (map overlays, not
+visible to a camera), capsule people (persons stay hidden until rigged workers exist), the wheeled AMR (robot shots are R4's).
+
+Commands (repo root, PowerShell; `$B` = `C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`):
+```powershell
+& $B -b --factory-startup --python render\blender\bl_run.py -- render\blender\scene_real.py --trace <trace.parquet> --synth-bodies `
+    --out D:\icdata\renders\stills --stills wide,weld_close,cctv_1,cctv_5 --t 36620 --samples 128 --res 1920x1080 --gt
+& $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\seq --cctv-seq cctv_1 --t 36620 --seconds 10 --fps 25 --gt
+$env:PYTHONPATH="D:\icdata\pylib"; python -m render.cctv.cctv_post --in D:\icdata\renders\seq\cctv_1\frames --gt D:\icdata\renders\seq\cctv_1\gt `
+    --out D:\icdata\renders\seq\cctv_1\cctv --cam CAM02 --cam-label "BODY SHOP S20" --t0 "2026-10-17 10:10:20" --fps 25 --overscan 0.055 --video
+```
+`cctv_<i>` is camera i of `bodyshop.yaml` `cameras` at 9 m, ~91° horizontal; CCTV renders carry 5.5 % overscan per side
+(`--overscan`, pass the same value to `cctv_post`). Ground truth per frame: `<stem>_inst.png` (uint16 object index, 0 =
+background/static plant), `<stem>_depth.npy` (m), `<stem>_ids.json` (`{id: {cls, entity_id}}`; classes: robot_arm,
+body, forklift, agv, tugger, person). Speed: ~5-10 s per 1080p frame at 64 spp.
 
 # Photoreal render tier: decision, research, shot list
 
