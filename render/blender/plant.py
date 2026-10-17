@@ -142,10 +142,17 @@ def concrete_floor(bs, name="plant_floor"):
         return t.math("LESS_THAN", d, 0.0009)
 
     j = t.math("MAXIMUM", joint(x), joint(y))
-    base = t.ramp(t.noise(0.35, detail=8.0), [(0.25, (0.30, 0.30, 0.29)), (0.55, (0.42, 0.415, 0.40)), (0.8, (0.50, 0.49, 0.47))])
+    base = t.ramp(t.noise(0.35, detail=8.0), [(0.25, (0.27, 0.27, 0.26)), (0.55, (0.41, 0.405, 0.39)), (0.8, (0.52, 0.51, 0.49))])
     stain = t.math("SMOOTH_MIN", t.noise(0.06, detail=4.0, rough=0.7), 0.58, 0.05)
-    sk = t.math("MULTIPLY_ADD", t.math("SUBTRACT", 0.58, stain), -2.2, 1.0)
-    k = t.math("MULTIPLY", sk, t.math("MULTIPLY_ADD", j, -0.6, 1.0))
+    sk = t.math("MULTIPLY_ADD", t.math("SUBTRACT", 0.58, stain), -3.0, 1.0)
+    # tyre scuffs: noise stretched along x (traffic runs along the hall), thresholded into dark streaks
+    sv = t.n("ShaderNodeVectorMath", operation="MULTIPLY")
+    t.link(t.pos(), sv.inputs[0])
+    sv.inputs[1].default_value = (0.08, 2.5, 1.0)
+    scuff = t.math("GREATER_THAN", t.noise(1.0, detail=3.0, vec=sv.outputs["Vector"]), 0.66)
+    sc = t.math("MULTIPLY_ADD", scuff, -0.18, 1.0)
+    fleck = t.math("MULTIPLY_ADD", t.noise(9.0, detail=2.0), 0.25, 0.88)
+    k = t.math("MULTIPLY", t.math("MULTIPLY", sk, sc), t.math("MULTIPLY", fleck, t.math("MULTIPLY_ADD", j, -0.6, 1.0)))
     t.link(t.scale_col(base, k), b.inputs["Base Color"])
     t.link(t.math("MULTIPLY_ADD", t.noise(0.8), 0.35, 0.28), b.inputs["Roughness"])
     nb = t.bump(t.noise(40.0, detail=3.0), 0.08, 0.002)
@@ -547,6 +554,112 @@ def extinguisher(bs, name, x, y):
     bs.box(name + "_sign", (0.02, 0.3, 0.3), (x + 0.05, y, 2.2), glow_cam_only(bs, "sign_red", (0.8, 0.05, 0.03), 0.6))
 
 
+# =====================================================================================
+# dressing of the floor the sim never uses
+# =====================================================================================
+def blocked_rects(scn: dict, margin: float = 0.8) -> list[tuple[float, float, float, float]]:
+    """Every rectangle the sim uses (traffic zones, machine footprints + margin, the conveyor strip)."""
+    out = [tuple(z["rect"]) for z in scn["zones"]]
+    for m in scn["machines"]:
+        w, d = m["size"]
+        out.append((m["x"] - w / 2 - margin, m["z"] - d / 2 - margin, m["x"] + w / 2 + margin, m["z"] + d / 2 + margin))
+    xs = [m["x"] for m in scn["machines"] if m.get("on_line")]
+    out.append((min(xs) - 7.5, 22.5, max(xs) + 7.5, 25.5))
+    return out
+
+
+def is_free(rects, x0, y0, x1, y1, hall) -> bool:
+    if x0 < 0.6 or y0 < 0.6 or x1 > hall[0] - 0.6 or y1 > hall[1] - 0.6:
+        return False
+    for i in range(0, int(hall[0] / COL_DX) + 1):              # keep 0.5 m off the columns
+        for cy in COL_ROWS_Y:
+            cx = i * COL_DX
+            if x0 - 0.5 < cx < x1 + 0.5 and y0 - 0.5 < cy < y1 + 0.5:
+                return False
+    return not any(x0 < r[2] and r[0] < x1 and y0 < r[3] and r[1] < y1 for r in rects)
+
+
+def dressing(bs, rng: random.Random):
+    """Fill the unused floor (outside all sim zones) so cells never sit on an empty slab: panel storage
+    racks, a maintenance corner, a shop-floor office, stacked empty skids, sealer drums."""
+    s = bs.scn
+    hall = (s["hall"]["x"][1], s["hall"]["z"][1])
+    rects = blocked_rects(s)
+    placed: list[tuple[float, float, float, float]] = []
+    kinds = [("office", 6.0, 2.5, 1), ("skids", 5.2, 1.4, 4), ("maint", 3.2, 1.6, 3), ("drums", 1.3, 1.3, 6), ("panels", 2.6, 1.3, 40)]
+    n = 0
+    for kind, w, d, limit in kinds:
+        got = 0
+        for yi in range(int(hall[1] * 2), 0, -1):               # north first: the closures side is the emptiest
+            for xi in range(int(hall[0] * 2)):
+                if got >= limit:
+                    break
+                x, y = xi * 0.5 + w / 2, yi * 0.5 - d / 2
+                box = (x - w / 2 - 0.4, y - d / 2 - 0.4, x + w / 2 + 0.4, y + d / 2 + 0.4)
+                if not is_free(rects + placed, *box, hall):
+                    continue
+                placed.append(box)
+                n += 1
+                got += 1
+                {"office": office, "skids": skid_stack, "maint": maintenance, "drums": drums, "panels": panel_rack}[kind](bs, f"dr{n}", x, y, rng)
+    return n
+
+
+def panel_rack(bs, name, x, y, rng: random.Random):
+    """A-frame steel rack holding pressed door/hood panels on edge."""
+    st, biw = mat(bs, "steel_grey"), proc_mat(bs, "biw_steel", (0.6, 0.62, 0.64), rough=0.32, metal=0.85, var=0.1, scale=3.0, bump=0.05, grime=0.15)
+    bs.box(name + "_base", (2.4, 1.2, 0.15), (x, y, 0.15), st)
+    for sx in (-1, 1):
+        bs.box(name + f"_post{sx}", (0.08, 0.08, 1.9), (x + sx * 1.15, y, 1.1), st)
+    bs.box(name + "_top", (2.4, 0.08, 0.08), (x, y, 2.05), st)
+    for k in range(rng.randint(3, 8)):
+        o = bs.box(name + f"_p{k}", (1.3, 0.025, 1.05), (x - 0.9 + k * 0.25, y, 0.85), biw)
+        o.rotation_euler = (0.0, 0.0, math.radians(90 + rng.uniform(-6, 6)))
+
+
+def office(bs, name, x, y, rng: random.Random):
+    """Shop-floor office container: ribbed walls, a window band lit from inside, a door."""
+    bs.box(name + "_body", (6.0, 2.5, 2.8), (x, y, 1.4), corrugated(bs, "container", (0.62, 0.64, 0.62), axis="z", pitch=0.3, metal=0.4))
+    bs.box(name + "_win", (4.0, 2.52, 0.8), (x - 0.6, y, 1.6), glow_cam_only(bs, "office_win", (0.75, 0.82, 0.9), 2.5))
+    bs.box(name + "_door", (0.9, 2.52, 2.0), (x + 2.4, y, 1.0), mat(bs, "steel_grey"))
+    bs.box(name + "_roof", (6.1, 2.6, 0.08), (x, y, 2.84), mat(bs, "galv"))
+    bs.box(name + "_sign", (1.2, 0.02, 0.3), (x - 0.6, y - 1.27, 2.45), glow_cam_only(bs, "sign_green", (0.05, 0.6, 0.2), 0.8))
+
+
+def skid_stack(bs, name, x, y, rng: random.Random):
+    """Empty BIW skids (two runners + cross members) stacked four high."""
+    st = mat(bs, "dark_steel")
+    for lv in range(rng.randint(2, 5)):
+        z = 0.12 + lv * 0.3
+        for s in (-1, 1):
+            bs.box(f"{name}_r{lv}{s}", (5.0, 0.12, 0.16), (x, y + s * 0.5, z), st)
+        for k in range(4):
+            bs.box(f"{name}_c{lv}{k}", (0.1, 1.2, 0.1), (x - 2.0 + k * 1.33, y, z + 0.1), st)
+
+
+def maintenance(bs, name, x, y, rng: random.Random):
+    """Workbench with vise and parts, a red tool trolley, a tall grey cabinet."""
+    wood, st, red = mat(bs, "wood"), mat(bs, "steel_grey"), mat(bs, "red_paint")
+    bs.box(name + "_top", (2.0, 0.8, 0.05), (x - 0.5, y, 0.9), wood)
+    for sx in (-1, 1):
+        bs.box(name + f"_leg{sx}", (0.06, 0.7, 0.88), (x - 0.5 + sx * 0.95, y, 0.44), st)
+    bs.box(name + "_vise", (0.25, 0.15, 0.15), (x - 1.3, y, 1.0), mat(bs, "dark_steel"))
+    for k in range(3):
+        bs.box(name + f"_part{k}", (rng.uniform(0.1, 0.3), rng.uniform(0.1, 0.3), rng.uniform(0.05, 0.2)), (x - 0.6 + k * 0.35, y + 0.1, 1.0), mat(bs, "galv"))
+    bs.box(name + "_trolley", (0.7, 0.5, 1.0), (x + 0.95, y + 0.1, 0.55), red)
+    bs.box(name + "_cab", (1.0, 0.5, 1.95), (x + 1.0, y - 0.5, 0.98), mat(bs, "ral7035"))
+
+
+def drums(bs, name, x, y, rng: random.Random):
+    """Sealer / adhesive drums on a pallet (four 200 l drums)."""
+    bs.box(name + "_pal", (1.2, 1.2, 0.144), (x, y, 0.072), mat(bs, "wood"))
+    col = proc_mat(bs, "drum_blue", (0.04, 0.12, 0.4), rough=0.4, metal=0.5, var=0.1, bump=0.05)
+    for ix in (-1, 1):
+        for iy in (-1, 1):
+            if rng.random() < 0.9:
+                bs.cyl(f"{name}_d{ix}{iy}", 0.29, 0.88, (x + ix * 0.3, y + iy * 0.3, 0.144 + 0.44), col)
+
+
 def build(bs, light_energy: float, seed: int = 11):
     rng = random.Random(seed)
     building(bs, rng)
@@ -554,3 +667,4 @@ def build(bs, light_energy: float, seed: int = 11):
     floor_markings(bs)
     overhead_services(bs, rng)
     clutter(bs, rng)
+    dressing(bs, rng)

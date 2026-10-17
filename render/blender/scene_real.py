@@ -27,6 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import fanuc  # noqa: E402
 import plant  # noqa: E402
 import replay_bpy as rb  # noqa: E402
 
@@ -59,6 +60,14 @@ class RealScene(rb.BScene):
     def _world(self):
         super()._world()
         self.world_bg.inputs["Strength"].default_value = self.args.sky_strength
+        if self.args.haze > 0:                                  # weld-fume haze: soft shafts under the skylights
+            nt = self.scene.world.node_tree
+            vs = nt.nodes.new("ShaderNodeVolumeScatter")
+            vs.inputs["Density"].default_value = self.args.haze
+            vs.inputs["Anisotropy"].default_value = 0.3
+            out = next(n for n in nt.nodes if n.bl_idname == "ShaderNodeOutputWorld")
+            nt.links.new(vs.outputs[0], out.inputs["Volume"])
+            self.scene.cycles.volume_bounces = 1
 
     def _hide_hero(self):
         r = self.prims.pop(self.ctx.hero.entity_id, None)
@@ -92,7 +101,7 @@ class RealScene(rb.BScene):
                     self.box(f"lifter_{mid}_col{sx}", (0.4, 0.4, 4.5), (cx + sx * (w / 2 - 1.5), cy - 2.0, 2.25), plant.mat(self, "ral7035"))
             self.arms[mid] = []
             for pl in core.arm_layout(m):
-                joints, tip = self._kuka(pl.path.replace("/", "_"), pl.x, pl.y, pl.yaw_deg)
+                joints, tip = fanuc.build_fanuc(pl.path.replace("/", "_"), (pl.x, pl.y, 0.0), pl.yaw_deg, collection=self.col_real)
                 self.arms[mid].append((joints, pl.meta["idx"] + (2 if pl.meta["side"] == "S" else 0), tip))
                 self.box(pl.path.replace("/", "_") + "_riser", (1.0, 1.0, 0.05), (pl.x, pl.y, 0.025), dark)
 
@@ -275,13 +284,8 @@ class RealScene(rb.BScene):
                 self.set_emit(mm, rgb, 25.0 if col == lit else 0.0)
             active = tr.intervals("ACTIVE") if tr else []
             on, ph = core.phase_of(active, t) if active else (False, 0.0)
-            for joints, k, tip in self.arms.get(mid, []):
-                q = self.kuka_q(ph, k) if on else self.KUKA_HOME
-                for jn, ang in zip(("a1", "a2", "a3", "a4", "a5", "a6"), q):
-                    ax = {"a1": 2, "a2": 1, "a3": 1, "a4": 0, "a5": 1, "a6": 0}[jn]
-                    e3 = [0.0, 0.0, 0.0]
-                    e3[ax] = ang
-                    joints[jn].rotation_euler = e3
+            for joints, k, _tip in self.arms.get(mid, []):
+                fanuc.set_q(joints, fanuc.weld_q(ph, k) if on else fanuc.HOME)
             if mid in self.sparks:
                 self._sparks(mid, t, on, ph)
 
@@ -350,18 +354,83 @@ def label_synthetic(png: Path) -> None:
     im.save(png)
 
 
+# =====================================================================================
+# ground truth (CCTV frames): instance ids + depth, in the layout render/cctv/gt.py reads
+# =====================================================================================
+def assign_ids(bs) -> dict[str, dict]:
+    """Give every mesh of every tracked entity, and of every welding arm, an object pass index.
+    Returns {id: {"cls", "entity_id"}}; 0 stays background/static plant."""
+    ids: dict[str, dict] = {}
+    nxt = 1
+    groups = [(eid, bs.ctx.tracks[eid].cls, root) for eid, root in bs.prims.items() if eid in bs.ctx.tracks]
+    for mid, arms in bs.arms.items():
+        for k, (joints, _, _) in enumerate(arms):
+            root = joints["a1"]
+            while root.parent is not None:
+                root = root.parent
+            groups.append((f"{mid}/arm{k}", "robot_arm", root))
+    for eid, cls, root in groups:
+        for o in [root, *root.children_recursive]:
+            o.pass_index = nxt
+        ids[str(nxt)] = {"cls": cls, "entity_id": eid}
+        nxt += 1
+    vl = bs.scene.view_layers[0]
+    vl.use_pass_object_index = True
+    vl.use_pass_z = True
+    return ids
+
+
+def write_gt(bs, stem: str, gt_dir: Path, ids: dict) -> None:
+    """Save the render result's passes as multilayer EXR, then split into <stem>_inst.png (uint16),
+    <stem>_depth.npy (float32 m, inf = sky/none) and <stem>_ids.json."""
+    import numpy as np
+    import OpenEXR  # type: ignore
+    from PIL import Image
+    gt_dir.mkdir(parents=True, exist_ok=True)
+    exr = gt_dir / f"{stem}.exr"
+    st = bs.scene.render.image_settings
+    saved = (st.media_type, st.file_format, st.color_depth, st.use_exr_interleave)
+    # Blender 5.x: set media_type MULTI_LAYER_IMAGE first (its only format is OPEN_EXR_MULTILAYER); interleaved =
+    # one part, so the channels come back as "<layer>.Object Index.X" / "<layer>.Depth.Z"
+    st.media_type = "MULTI_LAYER_IMAGE"
+    st.file_format, st.color_depth, st.use_exr_interleave = "OPEN_EXR_MULTILAYER", "32", True
+    bs.bpy.data.images["Render Result"].save_render(str(exr), scene=bs.scene)
+    st.media_type = saved[0]
+    st.file_format, st.color_depth, st.use_exr_interleave = saved[1:]
+    with OpenEXR.File(str(exr), separate_channels=True) as f:
+        ch = f.channels()
+        idx = next(v.pixels for k, v in ch.items() if k.endswith(("Object Index.X", "IndexOB.X")))   # 5.x name, 4.x name
+        z = next(v.pixels for k, v in ch.items() if k.endswith("Depth.Z"))
+    inst = np.rint(idx).astype(np.uint16)
+    Image.fromarray(inst).save(gt_dir / f"{stem}_inst.png")
+    z = z.astype(np.float32)
+    z[z > 1e6] = np.inf
+    np.save(gt_dir / f"{stem}_depth.npy", z)
+    (gt_dir / f"{stem}_ids.json").write_text(json.dumps(ids, indent=1))
+    exr.unlink()
+
+
 def run_stills(scn, ctx, args, out_dir: Path) -> list[str]:
     bs = RealScene(scn, ctx, args)
     bs.build()
+    ids = assign_ids(bs) if args.gt else {}
     outs = []
+    W, H = (int(v) for v in args.res.split("x"))
     for name in [s.strip() for s in args.stills.split(",") if s.strip()]:
         bs.apply(args.t)
         bs.point_camera(still_cam(name, scn))
+        # CCTV stills are rendered with `--overscan` extra field per side (same focal, wider sensor) so the
+        # barrel distortion in render/cctv can keep the full nominal view: pass the same value to cctv_post.
+        k = 1.0 / (1.0 - 2.0 * args.overscan) if name.startswith("cctv_") else 1.0
+        bs.cam_obj.data.sensor_width = 36.0 * k
+        bs.scene.render.resolution_x, bs.scene.render.resolution_y = round(W * k), round(H * k)
         dst = out_dir / (f"{name}_clean.png" if name.startswith("cctv_") else f"{name}.png")
         bs.scene.render.filepath = str(dst)
         bs.bpy.ops.render.render(write_still=True)
         if not name.startswith("cctv_"):
             label_synthetic(dst)
+        elif args.gt:
+            write_gt(bs, dst.stem, out_dir / "gt", ids)
         rb.log("still", dst)
         outs.append(str(dst))
     (out_dir / "stills_manifest.json").write_text(json.dumps(dict(stills=outs, t=args.t, device=bs.device, args=vars(args)), indent=2, default=str))
@@ -374,6 +443,9 @@ def main(argv=None) -> int:
     ap.add_argument("--t", type=float, default=36030.0, help="sim time of the stills (s since 00:00)")
     ap.add_argument("--light-e", type=float, default=60.0, help="power of each LED high-bay area light (W)")
     ap.add_argument("--sky-strength", type=float, default=1.0)
+    ap.add_argument("--overscan", type=float, default=0.055, help="extra field per side for cctv_* stills (fraction of the rendered width)")
+    ap.add_argument("--gt", action="store_true", help="also write instance/depth ground truth for cctv_* stills (<out>/gt)")
+    ap.add_argument("--haze", type=float, default=0.0, help="world volume scatter density (1/m), e.g. 0.002; 0 = off")
     ap.set_defaults(hdri_id="kloofendal_overcast_puresky", cache=r"D:\icdata\assets\ph_cache")
     args = ap.parse_args(argv)
     out_dir = Path(args.out)
