@@ -34,12 +34,12 @@ HZ = PD.HZ
 
 
 def cmd_extract(a):
-    _, rois = PX.load_rois(a.rois)
+    size, rois = PX.load_rois(a.rois)
     frames = PX.read_frames_csv(a.csv)
     if a.limit:
         frames = frames[:a.limit]
     tic = time.time()
-    t, feats, stats = PX.extract_clip(a.frames, frames, rois, stabilise=not a.no_ecc, progress=2000)
+    t, feats, stats = PX.extract_clip(a.frames, frames, rois, size, stabilise=not a.no_ecc, progress=2000)
     stats["seconds"] = round(time.time() - tic, 1)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(a.out, t=t, feats=feats, mids=np.array([r.mid for r in rois]),
@@ -118,6 +118,8 @@ def cmd_score(a):
     mids = [str(m) for m in px["mids"]]
     rois = [PX.Roi(m, tuple(int(v) for v in b)) for m, b in zip(mids, px["boxes"])]   # type: ignore[arg-type]
     T_px, X_roi = PX.to_ticks(px["t"], px["feats"], HZ)
+    if T_px[0] < a.t0 - 1e-6 or T_px[-1] > a.t1 + 1e-6:      # the truth window must be the clip's own (frames.csv times)
+        raise SystemExit(f"clip ticks {T_px[0]:.1f}-{T_px[-1]:.1f} are outside --t0 {a.t0} --t1 {a.t1}")
     X_px = PX.machine_block(X_roi, rois, lay.mids)
     lab_px, fr_px = truth_at(scn, a.seed, a.t0, a.t1, T_px)
     shim_npz = Path(a.out).with_name(f"shim_seed{a.seed}_{int(a.t0)}_{int(a.t1)}.npz")

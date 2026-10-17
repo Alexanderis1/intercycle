@@ -14,7 +14,7 @@ Commissioning (once per camera, a human step): one image box per machine zone, d
    (luma >= SAT_THR before normalisation: the weld-on cue). Pixel counts are divided by PX_UNIT so they sit on the
    same scale as the shim's part counts (phases.py takes log1p).
 
-Frames are averaged into the observer's ticks (2 Hz, the samples of the last 1/hz s). The machine block per tick is
+Frames are averaged into the observer's ticks (2 Hz): tick T holds the frames captured in (T - 1/hz, T]. The machine block per tick is
 [motion energy, 16 grid cells, weld-on] (N_PIX = 18): `PhaseModel.fit_features` takes any width (standardise + PCA),
 so phases.py is used unchanged. Machines without a ROI get NaN rows (no model, as a blacked-out camera).
 """
@@ -46,12 +46,15 @@ class Roi:
 
 
 def load_rois(path) -> tuple[tuple[int, int], list[Roi]]:
-    """{"size": [w, h], "rois": {mid: [x0, y0, x1, y1]}, ...} -> ((w, h), [Roi])."""
+    """{"size": [w, h], "rois": {mid: [x0, y0, x1, y1]}, ...} -> ((w, h), [Roi]); every box must lie inside the frame."""
     d = json.loads(Path(path).read_text(encoding="utf-8"))
+    w, h = int(d["size"][0]), int(d["size"][1])
     rois = []
     for m, (x0, y0, x1, y1) in d["rois"].items():
+        if not (0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h):
+            raise ValueError(f"ROI {m} {[x0, y0, x1, y1]} is not inside the {w}x{h} frame")
         rois.append(Roi(m, (int(x0), int(y0), int(x1), int(y1))))
-    return (int(d["size"][0]), int(d["size"][1])), rois
+    return (w, h), rois
 
 
 def _luma(img: np.ndarray) -> np.ndarray:
@@ -122,11 +125,12 @@ class PixelFeatures:
 
 
 def to_ticks(t_frames: np.ndarray, per_frame: np.ndarray, hz: float = 2.0) -> tuple[np.ndarray, np.ndarray]:
-    """Average frame features into observer ticks: tick k, stamped at its end t0 + (k + 1) / hz (causal, like a capture
-    time), averages the frames in [t0 + k / hz, t0 + (k + 1) / hz). NaN samples are ignored; a tick with no valid
+    """Average frame features into observer ticks: tick T = t0 + k / hz averages the frames captured in
+    (T - 1/hz, T] (causal: the tick is stamped when its last frame is captured, so a frame is never stamped later
+    than it was seen; at fps = hz each tick is exactly one frame). NaN samples are ignored; a tick with no valid
     sample stays NaN. Returns T (n,), X (n, n_roi, N_PIX)."""
     t0 = float(t_frames[0])
-    k = np.floor((t_frames - t0) * hz + 1e-6).astype(np.int64)
+    k = np.ceil((t_frames - t0) * hz - 1e-6).astype(np.int64)
     n = int(k.max()) + 1
     s = np.zeros((n, *per_frame.shape[1:]), np.float64)
     c = np.zeros((n, *per_frame.shape[1:]), np.float64)
@@ -135,7 +139,7 @@ def to_ticks(t_frames: np.ndarray, per_frame: np.ndarray, hz: float = 2.0) -> tu
     np.add.at(c, k, ok)
     with np.errstate(invalid="ignore"):
         X = (s / c).astype(np.float32)
-    return t0 + (np.arange(n) + 1) / hz, X
+    return t0 + np.arange(n) / hz, X
 
 
 def machine_block(X_roi: np.ndarray, rois: list[Roi], mids: list[str]) -> np.ndarray:
@@ -152,15 +156,18 @@ def read_frames_csv(path) -> list[tuple[str, float]]:
         return [(row["file"], float(row["t"])) for row in csv.DictReader(f)]
 
 
-def extract_clip(frames_dir, frames: Iterable[tuple[str, float]], rois: list[Roi], stabilise: bool = True,
-                 progress: int = 0) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Per-frame features of a clip: (t (n,), features (n, n_roi, N_PIX), stats)."""
+def extract_clip(frames_dir, frames: Iterable[tuple[str, float]], rois: list[Roi], size: tuple[int, int],
+                 stabilise: bool = True, progress: int = 0) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Per-frame features of a clip: (t (n,), features (n, n_roi, N_PIX), stats). Every frame must be `size` (w, h),
+    the frame size the ROIs were drawn on."""
     fe = PixelFeatures(rois, stabilise)
     ts, feats = [], []
     for i, (name, t) in enumerate(frames):
         img = cv2.imread(str(Path(frames_dir) / name), cv2.IMREAD_COLOR)
         if img is None:
             raise FileNotFoundError(Path(frames_dir) / name)
+        if (img.shape[1], img.shape[0]) != tuple(size):
+            raise ValueError(f"{name} is {img.shape[1]}x{img.shape[0]}, the ROIs are for {size[0]}x{size[1]}")
         feats.append(fe.frame(img))
         ts.append(t)
         if progress and i % progress == 0:

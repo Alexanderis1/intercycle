@@ -180,7 +180,8 @@ class RealScene(rb.BScene):
             for flip in (False, True):
                 ty = -ty0 if (k % 2) != flip else ty0
                 px, py = x + tx * hx - ty * hy, y + tx * hy + ty * hx
-                clear = min(math.hypot(px - bx, py - by) for bx, by in bases if (bx, by) != (x, y))   # other robots only
+                clear = min((math.hypot(px - bx, py - by) for bx, by in bases if (bx, by) != (x, y)),   # other robots only
+                            default=math.inf)
                 why = [r for r, bad in (("outside the cell", abs(px - cx) > w / 2 - 0.3 or abs(py - cy) > d / 2 - 0.3),
                                         ("on the skid tooling", abs(py - cy) < 1.6), (f"{clear:.2f} m from a robot", clear < 0.7)) if bad]
                 if not why:

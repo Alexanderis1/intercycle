@@ -67,10 +67,38 @@ def test_stabilisation_cancels_camera_shake():
 
 def test_ticks_average_frames_and_keep_nan():
     t = np.array([0.0, 0.1, 0.2, 0.5, 0.6, 1.0, 1.4])
-    v = np.array([np.nan, 1, 3, 5, np.nan, np.nan, np.nan], np.float32)[:, None, None]
+    v = np.array([np.nan, 1, 3, 5, 7, np.nan, np.nan], np.float32)[:, None, None]
     T, X = PX.to_ticks(t + 100.0, v, hz=2.0)
-    assert np.allclose(T, [100.5, 101.0, 101.5])
-    assert X[0, 0, 0] == 2.0 and X[1, 0, 0] == 5.0 and np.isnan(X[2, 0, 0])
+    assert np.allclose(T, [100.0, 100.5, 101.0, 101.5])          # tick T holds the frames of (T - 0.5, T]
+    assert np.isnan(X[0, 0, 0]) and X[1, 0, 0] == 3.0 and X[2, 0, 0] == 7.0 and np.isnan(X[3, 0, 0])
+
+
+def test_ticks_at_frame_rate_keep_each_frame_time():
+    t = 36000.0 + np.arange(6) / 2.0                              # 2 fps into 2 Hz ticks: no shift
+    T, X = PX.to_ticks(t, np.arange(6, dtype=np.float32)[:, None, None], hz=2.0)
+    assert np.allclose(T, t) and np.allclose(X[:, 0, 0], np.arange(6))
+
+
+def test_rois_must_fit_the_frame(tmp_path):
+    p = tmp_path / "rois.json"
+    p.write_text('{"size": [160, 90], "rois": {"S30": [40, 20, 170, 70]}}', encoding="utf-8")
+    try:
+        PX.load_rois(p)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a ROI outside the frame must be rejected")
+
+
+def test_frames_must_match_the_roi_frame_size(tmp_path):
+    import cv2
+    cv2.imwrite(str(tmp_path / "f_00000.png"), np.zeros((100, 200), np.uint8))
+    try:
+        PX.extract_clip(tmp_path, [("f_00000.png", 0.0)], [ROI], (W, H))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a frame of another size must be rejected")
 
 
 def test_machine_block_in_layout_order():
