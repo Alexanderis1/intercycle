@@ -106,9 +106,11 @@ class Grid:
         return (cx[:, None] - x) ** 2 + (cy[None, :] - y) ** 2 <= r * r
 
 
-def to_occupancy_data(g: np.ndarray) -> list[int]:
-    """[nx, ny] -> OccupancyGrid.data (row-major, row = y)."""
-    return np.ascontiguousarray(g.T).astype(np.int8).ravel().tolist()
+def to_occupancy_data(g: np.ndarray):
+    """[nx, ny] -> OccupancyGrid.data (row-major, row = y), as array('b') (rclpy takes it without a per-element copy)."""
+    import array
+
+    return array.array("b", np.ascontiguousarray(g.T).astype(np.int8).tobytes())
 
 
 # ------------------------------------------------------------------------------------------------ site (public map)
@@ -260,8 +262,8 @@ class MaskParams:
     step_s: float = 0.5
     k_sigma: float = 2.0
     pad_bins: int = 1               # extra phase bins each side (phase-convention / latency margin)
-    inflate_m: float = 0.3          # grow every envelope box (ISO 13855-style S = K*T + C margin)
-    static_margin_m: float = 0.3
+    inflate_m: float = 0.2          # grow every envelope box (ISO 13855-style S = K*T + C margin)
+    static_margin_m: float = 0.15   # static keep-out margin; the wait pose (1.05 m out) must keep >= 0.6 m to turn in place
     self_clear_r: float = 0.75      # cells cleared under the robot (so Nav2 can always plan out)
     andon_valid_s: float = 3.0
     speed_levels: tuple = ((0.30, 40), (0.10, 60), (0.03, 80))   # (p_min, percent of max speed)

@@ -259,8 +259,8 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.75
+        cost_scaling_factor: 2.0
+        inflation_radius: 1.1
       always_send_full_costmap: True
 
 map_server:
@@ -290,7 +290,7 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 2.0
-      cost_travel_multiplier: 2.0
+      cost_travel_multiplier: 3.5
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
@@ -375,22 +375,33 @@ collision_monitor:
     source_timeout: 2.0
     base_shift_correction: True
     stop_pub_timeout: 2.0
-    polygons: ["PolygonStop", "PolygonSlow"]
+    # stop: a tight protective field just beyond the body (Humble's stop is direction-agnostic: a wide one deadlocks next
+    # to a column); approach: motion-aware, stops only if the commanded motion reaches an obstacle within 1.2 s;
+    # slowdown: halves the speed when anything is within ~0.5 m of the body.
+    polygons: ["PolygonStop", "PolygonSlow", "FootprintApproach"]
     PolygonStop:
       type: "polygon"
-      points: [0.75, 0.45, 0.75, -0.45, -0.65, -0.45, -0.65, 0.45]
+      points: [0.58, 0.38, 0.58, -0.38, -0.58, -0.38, -0.58, 0.38]
       action_type: "stop"
       max_points: 3
       visualize: True
       polygon_pub_topic: "polygon_stop"
     PolygonSlow:
       type: "polygon"
-      points: [1.3, 0.7, 1.3, -0.7, -0.9, -0.7, -0.9, 0.7]
+      points: [1.0, 0.55, 1.0, -0.55, -0.8, -0.55, -0.8, 0.55]
       action_type: "slowdown"
       max_points: 3
-      slowdown_ratio: 0.4
+      slowdown_ratio: 0.5
       visualize: True
       polygon_pub_topic: "polygon_slowdown"
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      footprint_topic: "/local_costmap/published_footprint"
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      max_points: 5
+      visualize: False
     observation_sources: ["scan"]
     scan:
       type: "scan"

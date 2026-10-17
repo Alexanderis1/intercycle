@@ -49,12 +49,12 @@ class ObserverBridge(Node):
         rate = float(dp("rate_hz", 2.0).value)
         self.p = K.MaskParams(horizon_s=float(dp("horizon_s", 6.0).value), step_s=float(dp("step_s", 0.5).value),
                               k_sigma=float(dp("k_sigma", 2.0).value), pad_bins=int(dp("pad_bins", 1).value),
-                              inflate_m=float(dp("inflate_m", 0.3).value),
-                              static_margin_m=float(dp("static_margin_m", 0.3).value),
+                              inflate_m=float(dp("inflate_m", 0.2).value),
+                              static_margin_m=float(dp("static_margin_m", 0.15).value),
                               self_clear_r=float(dp("self_clear_r", 0.75).value))
         ox, oy = (float(v) for v in dp("mask_origin", [-2.0, -2.0]).value)
         w, h = (float(v) for v in dp("mask_size", [124.0, 52.0]).value)
-        res = float(dp("mask_res", 0.25).value)
+        res = float(dp("mask_res", 0.1).value)          # = global costmap resolution (box edges snap outward by < 1 cell)
         self.grid = K.Grid(ox, oy, res, int(round(w / res)), int(round(h / res)))
         scn = dp("scenario", "").value or None
         self.site = K.Site.from_scenario(scn)

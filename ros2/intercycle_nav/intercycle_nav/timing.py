@@ -41,10 +41,11 @@ class TimingCore:
     dwell_s: float = 4.0
     margin_s: float = 1.0
     horizon_s: float = 900.0
-    wait_offset_m: float = 0.95            # wait pose: robot centre this far outside the boundary (1.0 m long body)
-    enter_s: float | None = 4.5            # measured wait -> inside (Nav2, test double r2_fake1: 3.9 s for 1.7 m)
-    exit_s: float | None = 6.5             # measured inside -> wait (Nav2 BackUp at 0.3 m/s); None = distance / speed
+    wait_offset_m: float = 1.05            # wait pose: robot centre this far outside the boundary (1.0 m body, turns in place)
+    enter_s: float | None = 5.0            # measured wait -> inside, 2.05 m (test double: 3.7-5.5 s, one 7.6 s)
+    exit_s: float | None = 6.5             # inside -> wait with Nav2 BackUp at 0.35 m/s (7.0 s measured at 0.3); None = dist/speed
     inside: dict = field(default_factory=dict)
+    _tg_of: dict = field(default_factory=dict)
 
     @classmethod
     def from_scenario(cls, scn, **kw) -> TimingCore:
@@ -71,6 +72,7 @@ class TimingCore:
             g.adj[tg.node][n] = d
             g.adj[n][tg.node] = d
             self.inside[tg.machine] = n
+            self._tg_of[n] = tg
         # re-time every edge at the nominal speed (the site graph is built at the scenario's 1 m/s); the wait -> inside
         # edge takes the measured entry time
         for a, nb in g.adj.items():
@@ -122,7 +124,9 @@ class TimingCore:
             if condition == "none":
                 return None
             w = windows.get(n[3:])
-            return [] if w is None else [(float(a), float(b)) for a, b in w]
+            # the robot crosses the boundary right after leaving the wait node, so the zone must already be idle at
+            # departure: arrival inside is allowed from window start + entry time
+            return [] if w is None else [(float(a) + self.enter_time(self._tg_of[n]), float(b)) for a, b in w]
 
         p = sipp.plan(g.adj, start, t_start, goal, safe, need_s=need, horizon_s=self.horizon_s)
         if p is None:

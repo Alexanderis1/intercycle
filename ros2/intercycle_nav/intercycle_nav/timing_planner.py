@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 import os
 import time
 
@@ -47,12 +48,13 @@ class Planner:
         self.goal_timeout = float(dp("goal_timeout_s", 240.0).value)
         self.out = str(dp("out", os.path.join(os.environ.get("IC_WORK", "/tmp"), "goal.json")).value)
         self.require_camera = bool(dp("require_camera", True).value)
-        self.backup_speed = float(dp("backup_speed", 0.3).value)        # exit speed (m/s); 0 = exit with a NavigateToPose goal
+        self.backup_speed = float(dp("backup_speed", 0.35).value)
+        self.entry_slack = float(dp("entry_slack_s", 3.0).value)       # entry deadline = enter_s + slack        # exit speed (m/s); 0 = exit with a NavigateToPose goal
         sp = dp("scenario", "").value
         scn = S.load(sp) if sp else S.load()
         self.core = TimingCore.from_scenario(scn, speed=float(dp("speed_mps", 0.5).value),
-                                             enter_s=float(dp("enter_s", 4.5).value), exit_s=float(dp("exit_s", 6.5).value),
-                                             wait_offset_m=float(dp("wait_offset_m", 0.95).value),
+                                             enter_s=float(dp("enter_s", 5.0).value), exit_s=float(dp("exit_s", 6.5).value),
+                                             wait_offset_m=float(dp("wait_offset_m", 1.05).value),
                                              dwell_s=float(dp("dwell_s", scn.inspection.dwell_s).value),
                                              margin_s=float(dp("margin_s", scn.inspection.safety_margin_s).value))
         self.cam = CameraGate(confirm_n=int(dp("camera_confirm_n", 2).value),
@@ -69,6 +71,7 @@ class Planner:
         self.tf = Buffer()
         self.tfl = TransformListener(self.tf, nav)
         self.events: list[dict] = []
+        self.camera_sources: Counter[str] = Counter()
 
     # ---------------------------------------------------------------- io
     def _on_state(self, m: String) -> None:
@@ -83,6 +86,7 @@ class Planner:
         except ValueError:
             return
         st = float(d.get("stamp", self.ros_t()))
+        self.camera_sources[str(d.get("source", "unlabelled"))] += 1
         for tg in d.get("targets", []):
             self.cam.observe(st, str(tg.get("id")), bool(tg.get("visible")), bool(tg.get("motion_seen")))
 
@@ -126,12 +130,12 @@ class Planner:
         while self.ros_t() < t_end:
             rclpy.spin_once(self.nav, timeout_sec=0.05)
 
-    def go(self, x, y, psi) -> str:
+    def go(self, x, y, psi, timeout: float | None = None) -> str:
         t0 = self.ros_t()
         if not self.nav.goToPose(self.pose(x, y, psi)):
             return "REJECTED"
         while not self.nav.isTaskComplete():
-            if self.ros_t() - t0 > self.goal_timeout:
+            if self.ros_t() - t0 > (self.goal_timeout if timeout is None else timeout):
                 self.nav.cancelTask()
                 return "TIMEOUT"
         return RESULT.get(self.nav.getResult(), str(self.nav.getResult()))
@@ -234,7 +238,8 @@ class Planner:
                     continue
                 rec["entry"] = ent
                 rec["t_enter"] = round(self.plant_t(), 3)
-                r = self.go(*tp.inside_xy, tp.face_psi)
+                # entry deadline: not inside within the budgeted entry time (+ slack) -> abort and back out
+                r = self.go(*tp.inside_xy, tp.face_psi, timeout=self.core.enter_time(tg) + self.entry_slack)
                 rec["to_inside"] = r
                 rec["t_inside"] = round(self.plant_t(), 3)
                 if r != "SUCCEEDED":
@@ -263,6 +268,10 @@ class Planner:
         out["t_done"] = self.ros_t()
         out["time_to_goal_s"] = round(out["t_done"] - t_start, 2)
         out["wall_s"] = round(time.time() - w0, 1)
+        # cheat guard (DIRECTION 5.1): which camera fed the no-motion gate; R3's runner fails episodes run on the stub
+        out["camera_sources"] = dict(self.camera_sources)
+        out["camera_stub_used"] = any("stub" in s.lower() or "test double" in s.lower() for s in self.camera_sources)
+        out["require_camera"] = self.require_camera
         return out
 
 

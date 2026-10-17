@@ -189,8 +189,10 @@ def test_sipp_waits_for_the_window_and_picks_the_earliest_target():
     xy = (4.0, 32.0)
     late = {"HEM1": [(t0 + 300.0, t0 + 330.0)], "SEAL1": [(t0 + 100.0, t0 + 130.0)]}
     tp = core.choose([tgs["HEM1"], tgs["SEAL1"]], t0, xy, late, "learned")
-    assert tp.target.id == "SEAL1" and tp.t_depart_wait >= t0 + 100.0 - core.inside_travel_s(tp.target) - 1e-6
-    assert tp.t_goal >= t0 + 100.0
+    assert tp.target.id == "SEAL1"
+    assert tp.t_depart_wait >= t0 + 100.0 - 1e-6           # never cross the boundary before the window opens
+    assert tp.t_goal >= t0 + 100.0 + core.enter_time(tp.target) - 1e-6
+    assert core.need_s(tp.target) == pytest.approx(core.enter_s + core.dwell_s + core.exit_s + core.margin_s)
     short = {"HEM1": [(t0 + 50.0, t0 + 52.0)]}             # shorter than need_s: no plan
     assert core.plan_target(tgs["HEM1"], t0, xy, short, "learned") is None
     assert core.plan_target(tgs["HEM1"], t0, xy, {}, "learned") is None     # unknown windows: never enter
