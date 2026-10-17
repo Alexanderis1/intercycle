@@ -521,8 +521,13 @@ so all visuals stay in Blender. The monitor's Isaac tests on 17 Oct cost about $
 - **Not for Isaac:** 8 GB is below Isaac Sim's 16 GB minimum. Isaac stays on Modal (physics) and RunPod (rendering).
 - **One GPU, one owner at a time.** X owns the desktop GPU and the Blender MCP scene. V runs batches only when X is idle,
   and coordinates through the lead. Never run two GPU jobs at once (8 GB).
-- **Code and data sync:** the repo isn't pushed yet. The desktop needs it via a git remote (see the open question to the user).
-  Results come back by git (small files) or a shared folder. Never put secrets in what's synced; the desktop needs its own `.env` only if it calls Gemma.
+- **Code and data sync:** private GitHub repo **https://github.com/Alexanderis1/intercycle** (`main`). The user decided
+  17 Oct; make it public at submission.
+  - The desktop clones it and pulls before each task.
+  - Results come back as commits (small files: scripts, scene files, JSON, PNG ≤ a few MB). Large renders go in a shared
+    folder or the release assets.
+  - `.env` stays gitignored; the desktop needs its own `.env` only if it calls Gemma.
+  - **Run a secret scan before every push.**
 
 **RunPod (Isaac rendering only; the user's own money):**
 - RTX 4090 Secure $0.89/h; Community $0.34/h when available.
