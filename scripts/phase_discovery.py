@@ -146,8 +146,35 @@ def main():
     e.add_argument("--train", required=True)
     e.add_argument("--test", required=True)
     e.add_argument("--engine", default=None, help="motif engine: auto | stumpy | numpy")
+    tb = sub.add_parser("table", help="markdown tables from a results json")
+    tb.add_argument("results")
     a = ap.parse_args()
-    {"sim": cmd_sim, "eval": cmd_eval}[a.cmd](a)
+    {"sim": cmd_sim, "eval": cmd_eval, "table": cmd_table}[a.cmd](a)
+
+
+def cmd_table(a):
+    r = json.load(open(a.results))
+    f = lambda v: "–" if v is None or (isinstance(v, float) and v != v) else f"{v:.2f}"
+    print("| Machine | truth sub-phases | bins | period (s) | **online seg F1** | online acc | online boundary err median (s) "
+          "| online bnd F1 ±1 s | offline DTW seg F1 | offline acc | fine-label online F1 | cycle onset err median (s) |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for mid, m in r["machines"].items():
+        on, off, fi, cy = m["online_hmm/coarse"], m["offline_dtw/coarse"], m["online_hmm/fine"], m["online_hmm/cycle"]
+        labs = "/".join(sorted(on["per_label_f1"]))
+        print(f"| {mid} | {labs} | {m['n_bins']} | {m['period_s']:.2f} | **{f(on['seg_f1'])}** | {f(on['acc'])} | "
+              f"{f(on['bnd_med_s'])} | {f(on['bnd_f1_1s'])} | {f(off['seg_f1'])} | {f(off['acc'])} | {f(fi['seg_f1'])} | {f(cy['onset_med_s'])} |")
+    print()
+    print("| Machine | per-label online segment F1 |")
+    print("|---|---|")
+    for mid, m in r["machines"].items():
+        print(f"| {mid} | " + ", ".join(f"{k} {v:.2f}" for k, v in m["online_hmm/coarse"]["per_label_f1"].items()) + " |")
+    L = r["line"]
+    print(f"\nLine: ARI {L['ari']}, purity {L['purity']}, named accuracy {L['named_acc']}, k = {L['diag']['k']}")
+    print("\n| true \\ predicted | " + " | ".join(L["confusion"]) + " | recall |")
+    print("|---|" + "---|" * (len(L["confusion"]) + 1))
+    for s, row in L["confusion"].items():
+        n = sum(row.values())
+        print(f"| {s} | " + " | ".join(str(v) for v in row.values()) + f" | {row[s] / n:.2f} |" if n else f"| {s} | " + " | ".join("0" for _ in row) + " | – |")
 
 
 # ================================================================================================ scoring
@@ -250,8 +277,15 @@ def purity(cl: np.ndarray, truth: np.ndarray) -> float:
     return float(sum(np.unique(truth[cl == c], return_counts=True)[1].max() for c in np.unique(cl)) / len(cl))
 
 
-def coarse(fam: str, lab: np.ndarray) -> np.ndarray:
-    return np.vectorize(COARSE_WELD.get)(lab) if fam == "weld" else lab
+def coarse(fam: str, lab: np.ndarray, frac: np.ndarray | None = None) -> np.ndarray:
+    """Coarse truth: weld / tip_dress / return / idle for the weld family; for the lifter what a floor camera can see at
+    all: carriage on the floor (below H_CLEAR; lower / down / raise look identical in plan view) vs clear."""
+    if fam == "weld":
+        return np.vectorize(COARSE_WELD.get)(lab)
+    if fam == "lift" and frac is not None:
+        h = np.array([K.lift_height(f) if f >= 0 else K.LIFT_H_TOP for f in frac])
+        return np.where(h < K.H_CLEAR, "on_floor", "clear")
+    return lab
 
 
 def cmd_eval(a):
@@ -277,7 +311,7 @@ def cmd_eval(a):
         truth = names[te["lab"][:, i]]
         r = {"family": fam, "period_s": round(mp.period_s, 2), "n_bins": mp.n_bins, "diag": mp.diag}
         for mode, pred in (("online_hmm", bins[:, i]), ("offline_dtw", mp.label_offline(te["X"][:, i]))):
-            for lvl, tl in (("fine", truth), ("coarse", coarse(fam, truth))):
+            for lvl, tl in (("fine", truth), ("coarse", coarse(fam, truth, te["frac"][:, i]))):
                 mp_ = majority_map(pred, tl)
                 pn = np.vectorize(mp_.get)(pred)
                 sc = segment_scores(pn, tl, HZ)

@@ -373,7 +373,12 @@ class MachinePhases:
         i0 = matrix_profile_motif(Zf[:, 0], m, okw)
         tpl = Zf[i0:i0 + m].copy()
         # ---- the look of the stopped machine: the densest configuration among the still frames (mode)
-        idle_vec = _mode_look(Zf[valid & ~actv])
+        busy5 = np.convolve(actv, np.ones(5) / 5, "same") >= 0.5                  # debounced: isolated dropout flips ignored
+        long_still = [np.arange(a, b) for a, b in _runs_of(~busy5) if b - a > 1.5 * m]   # real stops (andon, break)
+        long_still = np.concatenate(long_still) if long_still else np.zeros(0, np.int64)
+        long_still = long_still[valid[long_still]]
+        diag["stop_frames"] = int(len(long_still))
+        idle_vec = _mode_look(Zf[long_still]) if len(long_still) >= 20 else _mode_look(Zf[valid & ~actv])
         stop_ref = idle_vec
         # ---- anchors (distance-profile minima) + DTW barycentre averaging; rotate once to the motion onset
         mot = np.convolve(actv, np.ones(m), "valid")                  # active frames per window start
@@ -394,7 +399,7 @@ class MachinePhases:
             idle_vec = tpl[int(np.argmin(et))]
         # ---- sub-phases: idle = trailing stopped-like positions; optimal change points on the active part
         idle_pos = _idle_tail(tpl, et, stop_ref)
-        act = tpl[:idle_pos]
+        act = _seg_space(tpl[:idle_pos], et[:idle_pos])
         costs, parts = {}, {}
         for kk in range(K_MIN - 1, K_MAX):
             if kk <= len(act):
@@ -613,53 +618,143 @@ class HMMDecoder:
         self.alpha = np.full(m + 1, 1.0 / (m + 1))
         self.bin = -1
 
-    def _predict(self, a: np.ndarray) -> np.ndarray:
-        m = self.m
-        pos, blk = a[:m], a[m]
-        out = np.zeros(m + 1)
-        out[:m] += self.P_STAY * pos
-        out[1:m] += self.P_ADV * pos[:-1]
-        out[2:m] += self.P_SKIP * pos[:-2]
-        last = pos[m - 1]
-        early = self.P_ONSET * pos[self.idle_mask]                   # an idle cut short by the next onset (jitter)
-        out[:m][self.idle_mask] -= early
-        out[0] += self.P_WRAP * last + self.P_SKIP * pos[m - 2] + self.P_LEAVE * blk + early.sum()
-        out[m] = self.P_BLOCK * last + (1.0 - self.P_LEAVE) * blk + self.P_EPS * pos[: m - 1].sum()
-        out[: m - 1] *= 1.0 - self.P_EPS
-        s = out.sum()
-        return out / s if s > 0 else np.full(m + 1, 1.0 / (m + 1))
-
-    def step(self, z: np.ndarray | None) -> int:
-        a = self._predict(self.alpha)
-        if z is not None and np.isfinite(z).all():
-            ll = self.lnorm - 0.5 * (((z[None, :] - self.mean) ** 2) * self.ivar).sum(1)
-            a = a * np.exp(ll - ll.max())
-            s = a.sum()
-            a = a / s if s > 0 else np.full(self.m + 1, 1.0 / (self.m + 1))
-        self.alpha = a
-        self.bin = int(np.argmax(np.bincount(self.seg, weights=a, minlength=self.mp.n_bins)))
-        return self.bin
-
     def run(self, Z: np.ndarray) -> np.ndarray:
         """Decode a (n, k) latent sequence (NaN rows = no observation) causally; returns the bin per tick."""
-        return np.array([self.step(z) for z in Z], np.int64)
+        pr = np.array([self.P_STAY, self.P_ADV, self.P_SKIP, self.P_WRAP, self.P_BLOCK, self.P_LEAVE, self.P_ONSET, self.P_EPS])
+        out = np.empty(len(Z), np.int64)
+        self.alpha = _hmm_run(self.alpha, np.ascontiguousarray(Z, dtype=np.float64), self.mean, self.ivar, self.lnorm,
+                              self.idle_mask, self.seg, int(self.mp.n_bins), pr, out)
+        if len(out):
+            self.bin = int(out[-1])
+        return out
+
+    def step(self, z: np.ndarray | None) -> int:
+        Z = np.full((1, self.mean.shape[1]), np.nan) if z is None else np.asarray(z, float).reshape(1, -1)
+        return int(self.run(Z)[0])
+
+
+def _hmm_run_py(alpha, Z, mean, ivar, lnorm, idle_mask, seg, n_bins, pr, out):
+    """Forward filter over a block of ticks (see HMMDecoder). Returns the final alpha; writes the bin per tick to out."""
+    P_STAY, P_ADV, P_SKIP, P_WRAP, P_BLOCK, P_LEAVE, P_ONSET, P_EPS = pr[0], pr[1], pr[2], pr[3], pr[4], pr[5], pr[6], pr[7]
+    m = len(alpha) - 1
+    k = Z.shape[1]
+    a = alpha.copy()
+    nw = np.zeros(m + 1)
+    ll = np.zeros(m + 1)
+    acc = np.zeros(n_bins)
+    for t in range(Z.shape[0]):
+        for i in range(m + 1):
+            nw[i] = 0.0
+        tot_pos = 0.0
+        for i in range(m):
+            v = a[i]
+            nw[i] += P_STAY * v
+            if i + 1 < m:
+                nw[i + 1] += P_ADV * v
+            if i + 2 < m:
+                nw[i + 2] += P_SKIP * v
+            if i < m - 1:
+                tot_pos += v
+        last = a[m - 1]
+        early_sum = 0.0
+        for i in range(m):
+            if idle_mask[i]:
+                e = P_ONSET * a[i]
+                nw[i] -= e
+                early_sum += e
+        nw[0] += P_WRAP * last + P_SKIP * a[m - 2] + P_LEAVE * a[m] + early_sum
+        nw[m] = P_BLOCK * last + (1.0 - P_LEAVE) * a[m] + P_EPS * tot_pos
+        for i in range(m - 1):
+            nw[i] *= 1.0 - P_EPS
+        s = 0.0
+        for i in range(m + 1):
+            s += nw[i]
+        if s > 0:
+            for i in range(m + 1):
+                nw[i] /= s
+        else:
+            for i in range(m + 1):
+                nw[i] = 1.0 / (m + 1)
+        ok = True
+        for d in range(k):
+            if not np.isfinite(Z[t, d]):
+                ok = False
+        if ok:
+            mx = -np.inf
+            for i in range(m + 1):
+                q = 0.0
+                for d in range(k):
+                    r = Z[t, d] - mean[i, d]
+                    q += r * r * ivar[i, d]
+                ll[i] = lnorm[i] - 0.5 * q
+                if ll[i] > mx:
+                    mx = ll[i]
+            s = 0.0
+            for i in range(m + 1):
+                nw[i] *= np.exp(ll[i] - mx)
+                s += nw[i]
+            if s > 0:
+                for i in range(m + 1):
+                    nw[i] /= s
+            else:
+                for i in range(m + 1):
+                    nw[i] = 1.0 / (m + 1)
+        for i in range(m + 1):
+            a[i] = nw[i]
+        for b in range(n_bins):
+            acc[b] = 0.0
+        for i in range(m + 1):
+            acc[seg[i]] += a[i]
+        best = 0
+        for b in range(1, n_bins):
+            if acc[b] > acc[best]:
+                best = b
+        out[t] = best
+    return a
+
+
+try:
+    _hmm_run = _nb.njit(cache=False)(_hmm_run_py)
+except Exception:                                   # pragma: no cover  (no numba: same code, interpreted)
+    _hmm_run = _hmm_run_py
 
 
 # ================================================================================================ line states
 
-LINE_FEATS = ("index_overdue", "line_working", "line_blocked", "cells_working", "people", "people_moving", "crowd", "vehicles")
+LINE_FEATS = ("index_overdue", "line_working", "line_blocked", "cells_working", "people_excess", "people_moving", "crowd_excess")
+
+
+class _Win:
+    """Trailing window with a running sum (mean in O(1))."""
+    __slots__ = ("q", "n", "s")
+
+    def __init__(self, n: int):
+        self.q, self.n, self.s = deque(), max(int(n), 1), 0.0
+
+    def add(self, v: float) -> float:
+        self.q.append(v)
+        self.s += v
+        if len(self.q) > self.n:
+            self.s -= self.q.popleft()
+        return self.s / len(self.q)
 
 
 class LineFeatureTracker:
-    """Causal per-tick line features from the machine bins and the flow vector (trailing windows)."""
+    """Causal per-tick line features from the machine bins and the flow vector (trailing windows). People and crowd are
+    taken relative to their own trailing 1 h median (sampled once a minute), so the shift's head count does not split
+    'running' into day / night clusters."""
 
     def __init__(self, on_line: np.ndarray, idle_bins: np.ndarray, blocked_bins: np.ndarray, line_period_s: float, hz: float):
         self.on_line, self.idle, self.blk = on_line, idle_bins, blocked_bins
         self.P, self.hz = line_period_s, hz
         n30, n90 = int(30 * hz), int(90 * hz)
-        self.w = {k: deque(maxlen=n) for k, n in (("lw", n30), ("cw", n90), ("pe", n30), ("pm", n30), ("cr", n30), ("ve", n30))}
+        self.lw, self.cw, self.pe, self.pm = _Win(n30), _Win(n90), _Win(n30), _Win(n30)
+        self.cr = deque(maxlen=n30)
         self.last_index: float | None = None
         self.t0: float | None = None
+        self.base = {"pe": deque(maxlen=60), "cr": deque(maxlen=60)}
+        self.bmed = (0.0, 0.0)
+        self.next_base: float | None = None
 
     def step(self, t: float, bins: np.ndarray, F: np.ndarray) -> np.ndarray:
         if self.t0 is None:
@@ -669,16 +764,20 @@ class LineFeatureTracker:
         age = (t - (self.last_index if self.last_index is not None else self.t0)) / self.P
         known = bins >= 0
         working = known & (bins != self.idle) & (bins != self.blk)
-        ln, cl = self.on_line & known, ~self.on_line & known
-        self.w["lw"].append(working[self.on_line].mean() if ln.any() else 0.0)
-        self.w["cw"].append(working[~self.on_line].mean() if cl.any() else 0.0)
-        self.w["pe"].append(F[2])
-        self.w["pm"].append(F[3] / max(F[2], 1.0))
-        self.w["cr"].append(F[4])
-        self.w["ve"].append(F[5])
-        blocked = float((bins[self.on_line] == self.blk[self.on_line]).mean())
-        m = lambda k: float(np.mean(self.w[k]))
-        return np.array([math.log1p(max(age - 1.15, 0.0)), m("lw"), blocked, m("cw"), m("pe"), m("pm"), float(np.max(self.w["cr"])), m("ve")])
+        ol = self.on_line
+        lw = self.lw.add(float(working[ol].mean()) if (ol & known).any() else 0.0)
+        cw = self.cw.add(float(working[~ol].mean()) if (~ol & known).any() else 0.0)
+        pe = self.pe.add(float(F[2]))
+        pm = self.pm.add(float(F[3]) / max(float(F[2]), 1.0))
+        self.cr.append(float(F[4]))
+        cr = max(self.cr)
+        blocked = float((bins[ol] == self.blk[ol]).mean())
+        if self.next_base is None or t >= self.next_base:
+            self.base["pe"].append(pe)
+            self.base["cr"].append(cr)
+            self.bmed = (float(np.median(self.base["pe"])), float(np.median(self.base["cr"])))
+            self.next_base = t + 60.0
+        return np.array([math.log1p(max(age - 1.15, 0.0)), lw, blocked, cw, pe - self.bmed[0], pm, cr - self.bmed[1]])
 
 
 def _kmeans(Y: np.ndarray, k: int, rng: np.random.Generator, iters: int = 60) -> tuple[np.ndarray, np.ndarray, float]:
@@ -748,30 +847,44 @@ class LineStates:
         return ((Y[:, None, :] - self.centres[None]) ** 2).sum(-1).argmin(1)
 
     def state(self, f: np.ndarray) -> np.ndarray:
-        return np.array(self.names)[self.cluster(f)]
+        """State name per tick. Inside a planned-stop cluster (line and cells stopped) the tick's own flow features
+        decide break (a gathering of people) vs shift_change (no gathering)."""
+        f = np.atleast_2d(f)
+        out = np.array(self.names, dtype=object)[self.cluster(f)]
+        stop = (out == "break") | (out == "shift_change")
+        if stop.any():
+            out[stop] = np.where(_gathering(f[stop]), "break", "shift_change")
+        return out.astype(str)
+
+
+PEOPLE_EXCESS, CROWD_EXCESS = 3.0, 1.0           # extra people / extra crowding over the trailing 1 h median = a gathering
+
+
+def _gathering(f: np.ndarray) -> np.ndarray:
+    i = {n: j for j, n in enumerate(LINE_FEATS)}
+    f = np.atleast_2d(f)
+    return (f[:, i["people_excess"]] >= PEOPLE_EXCESS) | (f[:, i["crowd_excess"]] >= CROWD_EXCESS)
 
 
 def _name_clusters(raw: np.ndarray, share: np.ndarray) -> list[str]:
-    """Name clusters from their centroids (no calendar): the line indexing on time -> running; overdue with the off-line
-    cells still working -> andon; overdue, cells stopped, more people / a crowd -> break; otherwise -> shift_change."""
+    """Name clusters from their centroids (no calendar): most line stations working (not blocked) -> running; line
+    blocked with the off-line cells still working -> andon; line and cells stopped -> a planned-stop cluster, named
+    break if its centroid shows a gathering, else shift_change (refined per tick in `LineStates.state`)."""
     i = {n: j for j, n in enumerate(LINE_FEATS)}
-    run = raw[:, i["index_overdue"]] < 0.2
+    run = raw[:, i["line_blocked"]] < 0.5
     if not run.any():
-        run = raw[:, i["index_overdue"]] == raw[:, i["index_overdue"]].min()
+        run = raw[:, i["line_blocked"]] == raw[:, i["line_blocked"]].min()
     w = share[run] / share[run].sum()
     cells_run = float((raw[run, i["cells_working"]] * w).sum())
-    crowd_run = float((raw[run, i["crowd"]] * w).sum())
-    people_run = float((raw[run, i["people"]] * w).sum())
+    gath = _gathering(raw)
     out = []
     for j in range(len(raw)):
         if run[j]:
             out.append("running")
         elif raw[j, i["cells_working"]] >= 0.5 * cells_run:
             out.append("andon")
-        elif raw[j, i["crowd"]] >= crowd_run + 1.0 or raw[j, i["people"]] >= people_run + 3.0:
-            out.append("break")
         else:
-            out.append("shift_change")
+            out.append("break" if gath[j] else "shift_change")
     return out
 
 
@@ -884,7 +997,7 @@ class PhaseModel:
         """Batch causal decode: (bins (n, M), line state names (n,), line features (n, f), cluster ids (n,))."""
         bins, Fl = self._decode_machines(T, X, F)
         cl = self.line.cluster(Fl) if self.line is not None else np.zeros(len(T), np.int64)
-        names = np.array(self.line.names)[cl] if self.line is not None else np.full(len(T), "unknown")
+        names = self.line.state(Fl) if self.line is not None else np.full(len(T), "unknown")
         self.reset()
         return bins, names, Fl, cl
 
@@ -899,3 +1012,20 @@ class PhaseModel:
             d = pickle.load(f)
         lay = Layout.from_scenario(scn) if scn is not None else d["layout"]
         return cls(lay, d["machines"], d["line"], d["hz"])
+
+
+SEG_MODE = "whiten+e3"            # change-point space: "pca" | "whiten" (per-dim unit variance) | "whiten+e<w>" (+ motion energy, weight w)
+# Motion energy is the channel that separates still sub-phases (weld dwell, tip dress) from moving ones (swing, return);
+# the 4 x 4 occupancy grid is coarse (dresser and robot base share a cell). w = 3 chosen on the dev window (seed 0).
+
+
+def _seg_space(tpl: np.ndarray, et: np.ndarray) -> np.ndarray:
+    """Template frames in the space the change-point cost is computed in."""
+    if SEG_MODE == "pca":
+        return tpl
+    Y = (tpl - tpl.mean(0)) / np.maximum(tpl.std(0), 1e-6)
+    if SEG_MODE.startswith("whiten+e"):
+        e = np.log1p(np.maximum(et, 0))
+        w = float(SEG_MODE[8:] or 1.0)
+        Y = np.c_[Y, w * (e - e.mean()) / max(e.std(), 1e-6)]
+    return Y
