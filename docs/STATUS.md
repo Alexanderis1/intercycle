@@ -48,3 +48,9 @@ All 5 failures come from geometry tweaks made in the last hour (not logic regres
   `::test_agv_dock_every_sixth_cycle_for_20_s` — S50/S60 narrowed to 7 m (3 m walkway gap) and AGV dock moved +2.6 m in x.
 - `test_geometry.py::test_mover_routes_are_clear`, `::test_forklift_corner_at_west_wall` — tugger route changed to a one-way loop
   and FL0 corner moved to x=3; the tests still encode the old routes.
+
+## Gemma evaluation at stop
+- 0 Token Factory requests made by the eval (only the 4 probe calls in `out/llm_calls.jsonl`). No accuracy numbers yet.
+- `scripts/gemma_frames.py` complete and tested (36 of 160 frames rendered before the stop; `labels.json` is written only at the end, so re-run it).
+- `scripts/gemma_run_eval.py` written, never run. Not started: `scripts/gemma_ops_demo.py`, `docs/GEMMA_RESULTS.md`.
+- Resume: `python scripts/gemma_frames.py --n 160 --composites 8`, then `set -a; . ./.env; set +a; INTERCYCLE_LLM_MODE=record python scripts/gemma_run_eval.py` (≤15 req/min).
