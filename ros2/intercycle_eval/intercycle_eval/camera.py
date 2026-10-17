@@ -5,7 +5,8 @@ Camera: the robot's pan-tilt inspection head (ANYmal-class payload), 1920 x 1080
 site-map location of what it looks at (zone centre / inspection target); aiming uses the robot's true pose inside the
 simulator plus a Gaussian aim error (stand-in for pose-estimate + head error, 2.5 deg).
 
-No-motion gate (published on /intercycle/camera/observations, R2's contract):
+No-motion gate (published on /intercycle/camera/observations, R2's contract). Wide-angle view 110 x 80 deg, aimed at a
+FIXED site-map point per machine (zone centre at part height; the lifter at its carriage-travel midpoint), +- 2.5 deg:
   per machine whose hazard zone is within GATE_RANGE_M of the robot, every 0.2 s:
     the machine's MOVING parts (arm links and tools; lifter carriage; static arm bases excluded) are the targets.
     visible     = >= VIS_FRAC of the parts are inside the frustum and unoccluded (ray-cast against the static L0 mesh and
@@ -42,6 +43,12 @@ P_DETECT = 0.95
 LATENCY_S = 0.15
 MOTION_MPS = 0.05
 GATE_DT = 0.2
+# the no-motion gate uses the robot's wide-angle view (same 1920 x 1080 sensor, 110 x 80 deg lens), aimed at a FIXED
+# per-machine site-map point (never at the moving parts: that would be truth)
+GATE_HFOV, GATE_VFOV = math.radians(110.0), math.radians(80.0)
+GATE_FX = (W_PX / 2) / math.tan(GATE_HFOV / 2)
+GATE_FY = (H_PX / 2) / math.tan(GATE_VFOV / 2)
+LIFTER_AIM_Z = 3.2               # midpoint of the lifter carriage travel (0.35 .. 6 m), site-map value
 GATE_RANGE_M = 6.0
 VIS_FRAC = 0.5
 AIM_SIGMA = math.radians(2.5)       # head aim error: the head is aimed from the TRUE pose, so this stands in for
@@ -65,16 +72,18 @@ def aim(cam: np.ndarray, p: np.ndarray) -> tuple[float, float]:
     return math.atan2(v[1], v[0]), math.atan2(v[2], math.hypot(v[0], v[1]))
 
 
-def project(cam: np.ndarray, yaw: float, pitch: float, pts: np.ndarray):
+def project(cam: np.ndarray, yaw: float, pitch: float, pts: np.ndarray, fx: float | None = None, fy: float | None = None):
     """(u, v) pixel coordinates (centre = 0) and forward depth of world points in a camera aimed (yaw, pitch)."""
+    fx = FX if fx is None else fx
+    fy = FY if fy is None else fy
     d = pts - cam[None, :]
     cy, sy, cp, sp = math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch)
     fwd = np.array((cp * cy, cp * sy, sp))
     left = np.array((-sy, cy, 0.0))
     up = np.cross(fwd, left)
     zf = d @ fwd
-    u = -(d @ left) / np.maximum(zf, 1e-9) * FX
-    v = (d @ up) / np.maximum(zf, 1e-9) * FY
+    u = -(d @ left) / np.maximum(zf, 1e-9) * fx
+    v = (d @ up) / np.maximum(zf, 1e-9) * fy
     return u, v, zf
 
 
@@ -139,7 +148,7 @@ class Gate:
             if len(parts) == 0:
                 targets.append({"id": mid, "visible": False, "motion_seen": False})
                 continue
-            u, v, zf = project(cam, yaw, pitch, parts)
+            u, v, zf = project(cam, yaw, pitch, parts, GATE_FX, GATE_FY)
             inimg = in_image(u, v, zf)
             occ = np.ones(len(parts), bool)
             if inimg.any():
@@ -182,4 +191,5 @@ def capture(t: float, cam: np.ndarray, target_xyz: np.ndarray, normal: np.ndarra
             "cam_pitch": round(pitch_e, 5), "hfov_deg": 70.0, "res": [W_PX, H_PX],
             "target_xyz": [round(float(c), 4) for c in target_xyz], "range_m": round(rng_m, 3),
             "incidence_deg": round(inc, 2), "px_per_m": round(px_per_m, 1), "blur_px": round(blur, 3),
-            "dori_inspect": px_per_m >= DORI_INSPECT, "checks": checks, "pass": all(checks.values())}
+            "dori_inspect": px_per_m >= DORI_INSPECT, "checks": checks, "pass": all(checks.values()),
+            "pass_inspect": all(checks.values()) and px_per_m >= DORI_INSPECT}

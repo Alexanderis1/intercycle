@@ -217,7 +217,9 @@ def episode_metrics(res: dict, d: Path, sp: Shortest | None) -> dict:
     for c in caps:
         cap_by.setdefault(c.get("target"), c)
     insp = [r for r in recs if str(r.get("outcome", "")).startswith("inspected")]
-    m["inspections_ok"] = sum(1 for r in insp if (cap_by.get(r.get("target")) or {}).get("pass"))
+    # primary pass (user decision 17 Oct ~19:20): all checks AND DORI Inspect (1000 px/m); Identify kept as secondary
+    m["inspections_ok"] = sum(1 for r in insp if (cap_by.get(r.get("target")) or {}).get("pass_inspect"))
+    m["inspections_ok_identify"] = sum(1 for r in insp if (cap_by.get(r.get("target")) or {}).get("pass"))
     m["inspection_success_rate"] = m["inspections_ok"] / len(recs) if recs else 0.0
     tpt = target_times(goal, t0)
     m["time_per_target_s"] = float(np.mean(tpt)) if tpt else None

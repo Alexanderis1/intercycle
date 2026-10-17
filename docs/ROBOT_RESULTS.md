@@ -35,6 +35,23 @@ This analysis plan is fixed before any held-out episode runs. It is not changed 
   - Everything else (Francis et al. metric list, section 4) is descriptive.
 - **Scope.** 10-minute episodes in production only. No per-shift or per-day extrapolation.
 
+### 0.1 Amendment 1 (17 Oct, decided by the user on DEV data only, before any held-out episode)
+
+- **Change.** The primary inspection pass becomes DORI **Inspect, 1000 px/m** (IEC 62676-4), with all other checks
+  unchanged: in image, unoccluded, incidence < 60 deg, blur < 1 px.
+  - It applies to targets inside the guarding that need line of sight from inside the zone: weld-gun tips, the tip
+    dresser, clamp units, and the lifter carriage underside (S80).
+  - Target points are fixed per machine from the site plan, never tracked from truth. They are justified by what a
+    maintenance inspection must see.
+  - `inspections_ok` = captures passing at the Inspect level. The former criterion, Identify (250 px/m), stays as a
+    secondary row (`inspections_ok_identify`) for every condition, so the change is transparent.
+- **Reason.** Dev seed 20 showed boundary captures passing Identify, so the static baseline passed 10/10 from the
+  boundary. That does not test the inspection need: these targets need a close in-zone view.
+- **Consequence, stated up front.** `static` never enters a zone, so it gets **0 Inspect passes by construction**. This
+  is not a static "failure". `static` and `none` stay in every table for line time lost and safety.
+- **Unchanged.** The primary endpoint (`line_time_lost_s`, learned vs none), the safety endpoint, the secondary family
+  and the tests.
+
 <!-- RESULTS -->
 _Results pending: the held-out batch has not run yet._
 <!-- /RESULTS -->
@@ -122,6 +139,11 @@ The plant is `ros2/intercycle_eval/intercycle_eval/plant.py`. It runs inside the
   uses the simulator's true pose plus that error, as a stand-in for the robot's pose estimate.
 - **No-motion gate** (`camera.py`; published by the sim bridge on `/intercycle/camera/observations` with source
   `camera_model (R1 geometric, R3 gate)`).
+  - The view is the robot's wide-angle camera (110 x 80 deg), aimed at a FIXED site-map point per machine: the zone
+    centre at part height, or for the lifter the midpoint of its carriage travel (3.2 m).
+  - The aim is never at the moving parts. A dev build that aimed at the parts' true centroid was a truth leak; it was
+    removed before any held-out episode. Parts that fall outside this fixed view count as not visible, so the gate
+    stays closed; this is reported as a limitation.
   - Every 0.2 s it covers each machine whose zone is within 6 m.
   - The targets are the machine's moving parts. Static arm bases are excluded.
   - **visible** = at least 50 % of the parts are inside the frustum and unoccluded, AND the detector fires (p 0.95).
@@ -188,11 +210,11 @@ The plant is `ros2/intercycle_eval/intercycle_eval/plant.py`. It runs inside the
 - Movers are kinematic. Simulated humans follow routes with a social-force model and are more constrained than real
   people. Machine parts are plan-view circles with assumed heights.
 - The locomotion policy observes the true base velocity, as a stand-in for an onboard estimator. Nav2 never sees it.
-- **Stand mode.** Under a zero `/cmd_vel` the pretrained rsl_rl policy creeps, about 5 cm/s and 1.5 rad/min. In the
+- **Stand mode (an estimator stand-in, like the policy's velocity input).** Under a zero `/cmd_vel` the pretrained rsl_rl policy creeps, about 5 cm/s and 1.5 rad/min. In the
   first dev dry run this drifted the robot from its wait pose into the S80 hazard zone (holds and a trip with no entry
   decision). The locomotion layer therefore has a stand state: after 0.2 s of zero command it holds the stance pose with
-  a P-loop on the base pose. That loop uses the true base pose, the same estimator stand-in as the policy's velocity
-  input; Nav2 never sees it. Any non-zero command releases it.
+  a P-loop on the TRUE base pose; Nav2 never sees it. Any non-zero command releases it. A real ANYmal stance controller
+  does not creep, but it is not perfectly station-keeping either, so this is optimistic about drift while standing.
 - **People model.** A reacting person treats the robot's footprint as an obstacle (PySocialForce obstacle term) plus a
   keep-right tangential share, because the Moussaid term alone let walkers creep into a standing robot. The 20 %
   impassive walkers ignore the robot completely and can walk into it while it stands; such contacts are counted as

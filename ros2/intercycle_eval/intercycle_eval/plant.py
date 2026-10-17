@@ -158,6 +158,10 @@ class Plant:
             n /= max(np.linalg.norm(n), 1e-9)
             self.targets[tg.id] = {"machine": m.id, "xyz": np.array((bx, bz, CAM.TARGET_Z)) + n * r0, "normal": n}
 
+        # ---- fixed gate aim points from the site map (zone centre at part height; lifter: carriage-travel midpoint)
+        self.gate_aim = {m.id: np.array((m.x, m.z, CAM.LIFTER_AIM_Z if m.kind == "unload_lifter" else CAM.PART_Z))
+                         for m in scn.machines}
+
         # ---- movers from the truth routes (only those present at some point of the episode)
         ts = self.t0 + np.arange(0.0, self.T + 30.0, 10.0)
         self.people, self.vehicles = [], []
@@ -681,8 +685,7 @@ class Plant:
                 parts = np.column_stack((c[keep, 0], c[keep, 1], np.full(len(keep), CAM.PART_Z)))
             else:
                 parts = np.zeros((0, 3))
-            aim_pt = parts.mean(axis=0) if len(parts) else np.array((m.x, m.z, CAM.PART_Z))   # the head looks at the parts
-            ms.append((m.id, parts, aim_pt))
+            ms.append((m.id, parts, self.gate_aim[m.id]))          # FIXED site-map aim point (no truth)
         if not ms:
             self.gate.t_next = t + CAM.GATE_DT
             return

@@ -124,6 +124,10 @@ def main() -> None:
     ap.add_argument("--timing-json", default="")
     ap.add_argument("--print-cfg", action="store_true")
     ap.add_argument("--no-pull", action="store_true")
+    ap.add_argument("--detach", action="store_true",
+                    help="app.run(detach=True): the episodes keep running if this client exits; collect later with --collect")
+    ap.add_argument("--collect", action="store_true",
+                    help="no run: pull episodes/<tag> of this batch from the Volume and rebuild <tag>.json from episode.json")
     a = ap.parse_args()
     seeds = [int(s) for part in a.seeds.split(",") for s in
              (range(int(part.split("-")[0]), int(part.split("-")[1]) + 1) if "-" in part else [part])]
@@ -135,18 +139,43 @@ def main() -> None:
     if a.print_cfg:
         print(json.dumps(cfgs, indent=1))
         return
-    world = world_bytes(Path(a.map))
     out = REPO / "out" / "robot" / a.name
     out.mkdir(parents=True, exist_ok=True)
+    if a.collect:
+        pull([c["tag"] for c in cfgs], out)
+        n = 0
+        for c in cfgs:
+            ep = out / c["tag"] / "episode.json"
+            if ep.exists():
+                (out / f"{c['tag']}.json").write_text(ep.read_text())
+                n += 1
+            else:
+                print("MISSING", c["tag"])
+        print(f"collected {n}/{len(cfgs)} -> {out}")
+        return
+    world = world_bytes(Path(a.map))
+    import hashlib
+
+    map_sha = hashlib.sha256(Path(a.map).read_bytes()).hexdigest()[:16]
     (out / "batch.json").write_text(json.dumps({"name": a.name, "seeds": seeds, "conds": conds, "backend": a.backend,
-                                                "seconds": a.seconds, "map": a.map, "started": time.strftime("%F %T"),
+                                                "seconds": a.seconds, "map": a.map, "map_sha256_16": map_sha,
+                                                "detach": a.detach, "started": time.strftime("%F %T"),
                                                 "cfgs": cfgs}, indent=1))
     import modal_isaac_robot as R
 
     fn = {"fake": R.fake_episode, "l4": R.isaac_episode_l4, "l40s": R.isaac_episode_l40s}[a.backend]
     t0 = time.time()
-    with R.app.run():
-        res = list(fn.starmap([(c, world) for c in cfgs], return_exceptions=True, order_outputs=True))
+    with R.app.run(detach=a.detach):
+        # spawn every episode up front (all inputs are on Modal before we wait), so a detached batch survives this client
+        calls = [fn.spawn(c, world) for c in cfgs]
+        (out / "calls.json").write_text(json.dumps({c["tag"]: k.object_id for c, k in zip(cfgs, calls)}, indent=1))
+        print(f"spawned {len(calls)} episodes; function-call ids in {out / 'calls.json'}", flush=True)
+        res = []
+        for k in calls:
+            try:
+                res.append(k.get())
+            except Exception as e:  # noqa: BLE001 - report every failure, never drop it
+                res.append(e)
     wall = time.time() - t0
     for c, r in zip(cfgs, res):
         if isinstance(r, BaseException):

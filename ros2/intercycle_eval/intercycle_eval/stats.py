@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-CONT = ["n_inspected", "inspections_ok", "inspection_success_rate", "capture_pass_rate", "time_per_target_s",
+CONT = ["n_inspected", "inspections_ok", "inspections_ok_identify", "inspection_success_rate", "capture_pass_rate", "time_per_target_s",
         "line_time_lost_s", "cell_time_lost_s", "machine_time_lost_s", "trips", "hold_events", "windows_hit",
         "windows_missed", "collisions", "collisions_robot_moving", "min_dist_person_m", "min_ttc_person_s", "min_ttc_vehicle_s",
         "personal_space_events", "personal_space_s", "stops_navigating", "stalled_s", "path_length_m", "spl",
@@ -33,7 +33,7 @@ PAIRS = [("learned", "none"), ("learned", "static"), ("oracle", "learned")]
 #   secondary         every other endpoint x pair below: the same exact test, Holm-corrected as one family
 PRIMARY = ("learned", "none", "line_time_lost_s")
 SECONDARY_PAIRS = [("learned", "none"), ("learned", "static"), ("oracle", "learned")]
-SECONDARY = ["inspections_ok", "line_time_lost_s", "machine_time_lost_s", "trips", "windows_hit", "any_collision",
+SECONDARY = ["inspections_ok", "inspections_ok_identify", "line_time_lost_s", "machine_time_lost_s", "trips", "windows_hit", "any_collision",
              "collisions_robot_moving", "min_dist_person_m", "stalled_s", "spl", "time_per_target_s"]
 EPISODE_H = 600.0 / 3600.0
 
