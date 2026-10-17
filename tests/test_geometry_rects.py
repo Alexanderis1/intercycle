@@ -196,6 +196,119 @@ def test_twin_bad_inputs():
         W.build_world_files(rects=[ok], extent=EXT)                         # twin files need their own scenario
 
 
+def test_twin_rects_without_extent_refused():
+    """Audit S1b (major): rects with no extent must not fall back to the body-shop extent (that turned every metre
+    outside the twin zone into free floor, in the map and in the USD)."""
+    ok = {"id": "P1", "cls": "press", "cx": 2.0, "cz": 3.5, "w": 2.0, "d": 2.0}
+    with pytest.raises(ValueError, match="extent"):
+        G.StaticMap(None, rects=[ok])
+    with pytest.raises(ValueError, match="extent"):
+        G.StaticMap(None, rects=[ok], extent=None)
+    with pytest.raises(ValueError, match="extent"):
+        W.build_world_files(scenario_path=SCENARIO, rects=[ok])
+    with pytest.raises(ValueError, match="extent"):
+        W.build_world_files(scenario_path=SCENARIO, rects=[ok], extent=None)
+    with pytest.raises(ValueError, match="extent"):
+        G.StaticMap(None, rects=[])                                         # even an empty twin zone needs its extent
+
+
+def test_twin_extent_without_rects_is_bodyshop_only():
+    """extent alone keeps the body-shop layout (build_rects(scn)); it is only accepted with a scenario."""
+    with pytest.raises(ValueError):
+        G.StaticMap(None, extent=EXT)
+
+
+# ---- thin and off-grid rects: the map must cover every USD box (audit S1b, minor)
+THIN_EXT = (0.0, 0.0, 10.0, 5.0)
+THIN_RECTS = [
+    {"id": "T", "cls": "wall", "cx": 5.0, "cz": 2.5, "w": 0.04, "d": 4.0},               # x 4.98..5.02, z 0.5..4.5
+    {"id": "S", "cls": "wall", "cx": 2.03, "cz": 2.5, "w": 0.02, "d": 1.0},              # x 2.02..2.04: one column
+    {"id": "Y", "cls": "wall", "cx": 7.5, "cz": 2.5, "w": 3.0, "d": 0.03, "yaw": 0.7},   # thin and rotated
+    {"id": "O", "cls": "press", "cx": 3.513, "cz": 1.247, "w": 0.731, "d": 0.4},          # thick, off-grid edges
+]
+
+
+@pytest.fixture(scope="module")
+def thin():
+    return G.StaticMap(None, rects=THIN_RECTS, extent=THIN_EXT)
+
+
+def _box_points(b: dict, step: float = 0.004) -> np.ndarray:
+    """Points of a USD box footprint (boxes.json convention: yaw about +z, plane x/y): a lattice over the interior
+    plus points 1e-7 m inside every edge and corner."""
+    hw, hd = b["w"] / 2 - 1e-7, b["d"] / 2 - 1e-7
+    us = np.unique(np.r_[np.arange(-hw, hw, step), hw])
+    vs = np.unique(np.r_[np.arange(-hd, hd, step), hd])
+    U, V = (a.ravel() for a in np.meshgrid(us, vs))
+    c, s = math.cos(b["yaw"]), math.sin(b["yaw"])
+    return np.c_[b["cx"] + U * c - V * s, b["cy"] + U * s + V * c]
+
+
+def test_thin_rect_paints_the_cells_it_overlaps(thin):
+    # the audit's probe: a 4 cm wall between two cell centres painted no cell and free() said True
+    assert not thin.free(5.0, 2.5, 0.0) and not thin.free(4.99, 2.5, 0.0) and not thin.free(5.01, 2.5, 0.0)
+    assert float(thin.clearance(np.array([[5.0, 2.5]]))[0]) == 0.0
+    # exactly the cells whose square overlaps the rect: columns 49 (4.9..5.0) and 50 (5.0..5.1), rows 5..44
+    # (0.5..4.5); cells that only touch an edge (column 48/51, row 4/45) stay free
+    occ = np.argwhere(thin.grid[2:-2, 2:-2]) + 2
+    t = {(int(i), int(j)) for i, j in occ if 40 <= i <= 60}
+    assert t == {(i, j) for i in (49, 50) for j in range(5, 45)}
+    s = {(int(i), int(j)) for i, j in occ if 15 <= i <= 25}
+    assert s == {(20, j) for j in range(20, 30)}                    # one column for a rect inside one column
+
+
+def test_thin_rect_map_covers_usd_and_no_more():
+    """Every point of every USD box lies in an occupied map cell (the robot can never plan into a USD wall), and
+    every occupied cell overlaps a USD box (no painting beyond the cells the boxes overlap), for thin, rotated and
+    off-grid rects, through build_world_files (boxes.json + map.pgm)."""
+    files = W.build_world_files(scenario_path=SCENARIO, rects=THIN_RECTS, extent=THIN_EXT)
+    img = _pgm(files)
+    nz, nx = img.shape
+    assert (nx, nz) == (100, 50)
+    occ = img[::-1, :].T == 0                                        # [i, j] like StaticMap.grid
+    boxes = json.loads(files["boxes.json"])
+    assert {"T", "S", "Y", "O"} <= {b["id"] for b in boxes}
+    for b in boxes:
+        P = _box_points(b)
+        i = np.floor((P[:, 0] - THIN_EXT[0]) / G.RES).astype(int)
+        j = np.floor((P[:, 1] - THIN_EXT[1]) / G.RES).astype(int)
+        assert occ[i, j].all(), (b["id"], P[~occ[i, j]][:3])
+    # no over-painting: a cell is occupied exactly when its square overlaps some box with positive area
+    # (reference: Sutherland-Hodgman clip of the box polygon by the cell square, independent of geometry._paint)
+    covered = np.zeros_like(occ)
+    for b in boxes:
+        poly = [tuple(p) for p in W.box_corners_xy(b)]
+        xs, ys = [p[0] for p in poly], [p[1] for p in poly]
+        for i in range(max(int(min(xs) / G.RES) - 1, 0), min(int(max(xs) / G.RES) + 2, nx)):
+            for j in range(max(int(min(ys) / G.RES) - 1, 0), min(int(max(ys) / G.RES) + 2, nz)):
+                sq = (THIN_EXT[0] + i * G.RES, THIN_EXT[1] + j * G.RES,
+                      THIN_EXT[0] + (i + 1) * G.RES, THIN_EXT[1] + (j + 1) * G.RES)
+                if _clip_area(poly, sq) > 1e-9:
+                    covered[i, j] = True
+    assert np.array_equal(occ, covered), np.argwhere(occ != covered)[:5]
+
+
+def _clip_area(poly: list[tuple[float, float]], sq: tuple[float, float, float, float]) -> float:
+    """Area of a convex polygon (counter-clockwise) clipped to the axis-aligned square sq = (x0, y0, x1, y1)."""
+    x0, y0, x1, y1 = sq
+    planes = (lambda p: p[0] - x0, lambda p: x1 - p[0], lambda p: p[1] - y0, lambda p: y1 - p[1])
+    pts = poly
+    for inside in planes:
+        out: list[tuple[float, float]] = []
+        for k in range(len(pts)):
+            a, b = pts[k - 1], pts[k]
+            da, db = inside(a), inside(b)
+            if (da >= 0) != (db >= 0):
+                t = da / (da - db)
+                out.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
+            if db >= 0:
+                out.append(b)
+        pts = out
+        if not pts:
+            return 0.0
+    return 0.5 * abs(sum(pts[k - 1][0] * pts[k][1] - pts[k][0] * pts[k - 1][1] for k in range(len(pts))))
+
+
 @pytest.fixture(scope="module")
 def twin_files():
     return W.build_world_files(scenario_path=SCENARIO, rects=TWIN_RECTS, extent=EXT)

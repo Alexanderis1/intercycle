@@ -115,14 +115,16 @@ def build_world_files(empty: bool = False, scenario_path: str | None = None, rec
     rects/extent (twin/compile.py): the static bodies and the plan-view extent (x0, z0, x1, z1) of a twin zone, used
     instead of the body-shop layout (see geometry.StaticMap).  The USD boxes and the map come from the same
     StaticMap.rects(), which in that mode includes the extent's border ring, so unseen floor (passed as wall rects) and
-    everything outside the extent are walls in both.  rects needs the twin's own scenario_path (for the dock), so the
-    body-shop scenario is never used for a twin by default.
+    everything outside the extent are walls in both.  rects needs the twin's own scenario_path (for the dock) and its
+    extent (ValueError otherwise), so neither the body-shop scenario nor the body-shop extent is used for a twin.
     """
     from intercycle import scenario as scn_mod
     from intercycle.sim import geometry as G
 
     if rects is not None and not scenario_path:
         raise ValueError("build_world_files(rects=...) needs the twin's scenario_path")
+    if rects is not None and extent is None:
+        raise ValueError("build_world_files(rects=...) needs the twin's extent (x0, z0, x1, z1); there is no default")
     scn = scn_mod.load(scenario_path) if scenario_path else scn_mod.load()
     sm = G.StaticMap(scn, rects=rects, extent=extent)
     boxes = [] if empty else boxes_from_rects(sm.rects())

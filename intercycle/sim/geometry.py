@@ -15,7 +15,10 @@ Static map
   Twin mode (twin/compile.py): StaticMap(None, rects=[...], extent=(x0, z0, x1, z1)) rasterises the caller's
   axis-aligned rects (press footprints, unseen floor as walls) over that extent instead of the body-shop layout; the
   module constants X0..Z1/NX/NZ stay the body-shop values, so code that needs the extent of a map reads sm.extent.
-  A cell is occupied when its centre lies within 2.5 cm of a body (so even a 12 cm light-curtain post has >= 1 cell).
+  rects mode needs its extent: there is no default (the body-shop extent would make the whole hall free floor).
+  Body shop: a cell is occupied when its centre lies within 2.5 cm of a body (so even a 12 cm light-curtain post has
+  >= 1 cell).  Twin (rects mode): a cell is occupied when its square overlaps a body with positive area, so every point
+  of every USD box lies in an occupied cell, however thin or off-grid the rect (a 4 cm wall still blocks the map).
   `dist` is the Euclidean distance (scipy EDT) from a free cell centre to the nearest occupied cell *face*
   (EDT to cell centres minus RES/2), 0 inside.  `clearance()` bilinearly interpolates a signed version of it, so it
   is accurate to a couple of cm along flat faces and never reads less than 0.
@@ -233,6 +236,32 @@ def _paint(grid: np.ndarray, r: dict, cx0: float = _CX0, cz0: float = _CZ0) -> N
     grid[i0:i1 + 1, j0:j1 + 1] |= (np.abs(u) <= hw) & (np.abs(v) <= hd)
 
 
+_COVER_EPS = 1e-9                                   # m: an overlap must be deeper than this (float noise is ~1e-14)
+
+
+def _paint_cover(grid: np.ndarray, r: dict, cx0: float, cz0: float) -> None:
+    """Mark the cells of `grid` whose square overlaps rect r with positive area (rects mode); (cx0, cz0) = centre of
+    cell (0, 0).  Separating-axis test of the cell square against the (rotated) rect, on the 4 axes x, z, u, v."""
+    nx, nz = grid.shape
+    h = RES / 2
+    cx, cz, hw, hd, yaw = r["cx"], r["cz"], r["w"] / 2, r["d"] / 2, r["yaw"]
+    c, s = math.cos(yaw), math.sin(yaw)
+    ex, ez = hw * abs(c) + hd * abs(s), hw * abs(s) + hd * abs(c)      # half extents of the rect's bounding box
+    i0 = max(int(math.floor((cx - ex - h - cx0) * _INV)), 0)
+    i1 = min(int(math.ceil((cx + ex + h - cx0) * _INV)), nx - 1)
+    j0 = max(int(math.floor((cz - ez - h - cz0) * _INV)), 0)
+    j1 = min(int(math.ceil((cz + ez + h - cz0) * _INV)), nz - 1)
+    if i1 < i0 or j1 < j0:
+        return
+    dx = (cx0 + np.arange(i0, i1 + 1) * RES - cx)[:, None]
+    dz = (cz0 + np.arange(j0, j1 + 1) * RES - cz)[None, :]
+    m = (np.abs(dx) < h + ex - _COVER_EPS) & (np.abs(dz) < h + ez - _COVER_EPS)
+    if yaw != 0.0:
+        hs = h * (abs(c) + abs(s))                                      # half width of the square along u and v
+        m &= (np.abs(dx * c - dz * s) < hw + hs - _COVER_EPS) & (np.abs(dx * s + dz * c) < hd + hs - _COVER_EPS)
+    grid[i0:i1 + 1, j0:j1 + 1] |= m
+
+
 def _check_extent(extent) -> tuple[float, float, float, float]:
     try:
         x0, z0, x1, z1 = (float(v) for v in extent)
@@ -277,10 +306,15 @@ class StaticMap:
     and the unseen floor as wall rects) instead of build_rects; scn is not read and may be None, arm_bases is [].
     The 2-cell ring just inside the extent is always solid; in rects mode it is also returned by rects() as the four
     BORDER_* wall rects, so the USD built from rects() is closed exactly like the map (unseen floor is a wall in both).
-    extent (default: the module extent) must span a whole number of RES cells; the raster and every query follow it.
+    In rects mode a cell is occupied when its square overlaps a rect with positive area, so every point of every USD
+    box lies in an occupied cell (a thin or off-grid rect still blocks the map; the body-shop rule is unchanged).
+    extent must span a whole number of RES cells; the raster and every query follow it.  It defaults to the module
+    extent for the body-shop layout only: rects without an extent are refused (ValueError).
     """
 
     def __init__(self, scn, rects: list[dict] | None = None, extent=None):
+        if rects is not None and extent is None:          # fail closed: no body-shop extent around a twin's rects
+            raise ValueError("StaticMap(rects=...) needs the twin's extent (x0, z0, x1, z1); there is no default")
         x0, z0, x1, z1 = (X0, Z0, X1, Z1) if extent is None else _check_extent(extent)
         nx, nz = int(round((x1 - x0) / RES)), int(round((z1 - z0) / RES))
         self.extent = (x0, z0, x1, z1)
@@ -303,8 +337,9 @@ class StaticMap:
                     raise ValueError(f"rect id {b['id']!r} is reserved for the extent's border ring")
             self._rects, self.arm_bases = own, []
         grid = np.zeros((nx, nz), dtype=bool)
+        paint = _paint if rects is None else _paint_cover   # twin: every cell a body overlaps, so the map covers the USD
         for r in self._rects:
-            _paint(grid, r, self._cx0, self._cz0)
+            paint(grid, r, self._cx0, self._cz0)
         grid[:2, :] = grid[-2:, :] = grid[:, :2] = grid[:, -2:] = True   # the world is closed (2-cell border ring)
         self.grid = grid
         d_free = ndimage.distance_transform_edt(~grid) * RES
