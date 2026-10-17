@@ -19,16 +19,16 @@ sys.path.insert(0, str(PKG))
 
 from intercycle import scenario as S  # noqa: E402
 from intercycle.codec import ble  # noqa: E402
-from intercycle.codec import maplayer as ML  # noqa: E402
 from intercycle.codec.layout import FAST, encode_fast  # noqa: E402
 from intercycle.codec.sign import demo_key, sign  # noqa: E402
+from intercycle.codec.trust import key_id_of  # noqa: E402
 from intercycle.observer import mapping as M  # noqa: E402
 from intercycle.types import DAY0_UNIX, State  # noqa: E402
 
 from intercycle_nav import feed as F  # noqa: E402
 from intercycle_nav import masks as K  # noqa: E402
 from intercycle_nav import timing as T  # noqa: E402
-from intercycle_nav.broadcast import Broadcaster, SyntheticSchedule  # noqa: E402
+from intercycle_nav.broadcast import Broadcaster, SyntheticSchedule, pack_map_for_key  # noqa: E402
 
 NPZ = REPO / "out" / "layered_map.npz"
 SITE = K.Site.from_scenario()
@@ -47,7 +47,8 @@ class _MemWriter:
 
 def _sched():
     scn = S.load()
-    return SyntheticSchedule(scn.site_id, scn.key_id, [60.0] * 8 + [45.0, 60.0], [m.busy for m in scn.machines])
+    return SyntheticSchedule(scn.site_id, key_id_of(demo_key(scn.key_id).verify_key), [60.0] * 8 + [45.0, 60.0],
+                             [m.busy for m in scn.machines])
 
 
 def _cell(x, y):
@@ -60,7 +61,7 @@ def learned():
         pytest.skip("out/layered_map.npz not built (scripts/build_map.py)")
     lm = M.LayeredMap.load(NPZ)
     key = demo_key(SITE.key_id)
-    return ML.pack_map(lm, key, version=2, issue_time=DAY0_UNIX + T0 - 60.0)
+    return pack_map_for_key(lm, key, version=2, issue_time=DAY0_UNIX + T0 - 60.0)
 
 
 def _run(state, bc, tr, t0, t1, dt=0.05):
@@ -74,7 +75,7 @@ def _run(state, bc, tr, t0, t1, dt=0.05):
 
 
 def test_forged_fast_layer_is_rejected():
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     f = sch.fast(T0)
     good = ble.frame(sign(encode_fast(f), demo_key(SITE.key_id)), layer=FAST)
@@ -94,7 +95,7 @@ def test_forged_fast_layer_is_rejected():
 
 
 def test_ttl_expiry_makes_machines_unknown_and_closes_zones():
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), None, sch.slow, sch.fast)
@@ -118,7 +119,7 @@ def test_static_and_none_conditions():
 
 
 def test_learned_mask_follows_the_predicted_idle_window(learned):
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), learned, sch.slow, sch.fast)
@@ -146,7 +147,7 @@ def test_learned_mask_follows_the_predicted_idle_window(learned):
 
 
 def test_held_zone_and_self_clear(learned):
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), learned, sch.slow, sch.fast)
@@ -161,7 +162,7 @@ def test_held_zone_and_self_clear(learned):
 
 
 def test_speed_mask_has_limits(learned):
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), learned, sch.slow, sch.fast)

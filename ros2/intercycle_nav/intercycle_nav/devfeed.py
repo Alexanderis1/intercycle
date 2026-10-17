@@ -17,13 +17,13 @@ from rclpy.node import Node
 
 from intercycle import scenario as S
 from intercycle.codec import ble
-from intercycle.codec import maplayer as ML
 from intercycle.codec.layout import FAST, encode_fast
 from intercycle.codec.sign import demo_key, sign
+from intercycle.codec.trust import key_id_of
 from intercycle.observer import mapping as M
 from intercycle.types import DAY0_UNIX
 
-from intercycle_nav.broadcast import Broadcaster, SyntheticSchedule
+from intercycle_nav.broadcast import Broadcaster, SyntheticSchedule, pack_map_for_key
 from intercycle_nav.feed import FeedWriter
 
 
@@ -38,17 +38,19 @@ class DevFeed(Node):
         self.stop_fast_after = float(dp("stop_fast_after_s", 0.0).value)
         offs = [float(v) for v in dp("offsets", [0.0]).value]
         scn = S.load()
+        # the PUBLIC demo key (the bridge trusts it only with dev:=true), under its DERIVED key_id like every key (C-W5)
         self.key = demo_key(scn.key_id)
+        kid = key_id_of(self.key.verify_key)
         bundle = None
         periods = [float(m.period_s or scn.line.takt_s) if not m.on_line else float(scn.line.takt_s) for m in scn.machines]
         if npz:
             lm = M.LayeredMap.load(npz)
-            bundle = ML.pack_map(lm, self.key, version=int(dp("map_version", 1).value),
-                                 issue_time=DAY0_UNIX + self.plant_t0 - 60.0)
+            bundle = pack_map_for_key(lm, self.key, version=int(dp("map_version", 1).value),
+                                      issue_time=DAY0_UNIX + self.plant_t0 - 60.0)
             periods = [float(p) if np.isfinite(p) else q for p, q in zip(lm.period, periods)]
         busy = [float(m.busy) for m in scn.machines]
         offsets = (offs * len(busy))[:len(busy)] if len(offs) < len(busy) else offs
-        self.sched = SyntheticSchedule(scn.site_id, scn.key_id, periods, busy, offsets)
+        self.sched = SyntheticSchedule(scn.site_id, kid, periods, busy, offsets)
         self.w = FeedWriter(url)
         self.bc = Broadcaster(self.w, self.key, bundle, self.sched.slow, self._fast)
         self.forger = demo_key(9999)
