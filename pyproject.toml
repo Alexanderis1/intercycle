@@ -8,6 +8,7 @@ dependencies = ["numpy", "scipy", "astropy", "pyyaml", "pydantic>=2", "pynacl", 
 
 [project.optional-dependencies]
 dev = ["pytest"]
+phases = ["stumpy"]                         # optional matrix-profile engine (observer/phases.py has a numpy fallback); hmmlearn/ruptures have no py3.14 wheels
 dashboard = ["websockets", "imageio-ffmpeg"]   # live map view relay (observer/stream.py), screen recording
 cloud = ["modal", "openai"]
 
