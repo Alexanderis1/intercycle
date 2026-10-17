@@ -408,7 +408,12 @@ def _cam_of(mp, x, z):
 
 def test_adapter_hit_rule_matches_the_map_l1_update():
     """Audit S7a #4: detections located in an offline (bumped) or unhealthy camera's cells are dropped by
-    LayeredMap.update (_drop_offline) and must be dropped by the adapter too, and the rest rasterised the same way."""
+    LayeredMap.update (_drop_offline) and must be dropped by the adapter too, and the rest rasterised the same way.
+    The oracle is the map's own L1 raster of what `_drop_offline` keeps (fed to a fresh map with every camera healthy):
+    whether the map then also skips the whole L1 tick of a machine whose grid a lost camera touches (lane S4's
+    per-grid rule, lane/S4-fix1) is its visit accounting, not the hit rule. The adapter instead marks only the lost
+    camera's cells unobserved (test_adapter_observed_comes_from_observation_v2), so it keeps learning and monitoring
+    the healthy part of the grid."""
     mp = M.LayeredMap(SCN)
     det = L1ChangeDetector(mp)
     pts = [(16.5, 38.0), (19.0, 44.0), (24.0, 38.5), (25.6, 43.2)]          # HEM1 grid, both sides of a camera seam
@@ -423,9 +428,11 @@ def test_adapter_hit_rule_matches_the_map_l1_update():
         if case == "unhealthy":
             cf[other] = False
         obs = _part_obs(1.0, pts, HI, ok, cf)
-        before = mp.l1_view(HI)[3].copy()
-        mp.update(obs, 1.0, _cond_bins(3))
-        want = (mp.l1_view(HI)[3] - before).reshape(-1) > 0
+        mp.update(obs, 1.0, _cond_bins(3))               # sets the map's live cam_unhealthy for _drop_offline
+        kept = mp._drop_offline(obs)                     # pyright: ignore[reportPrivateUsage]  (the rule under test)
+        ref = M.LayeredMap(SCN)
+        ref.update(_part_obs(1.0, list(zip(kept.x, kept.z)), HI, ok), 1.0, _cond_bins(3))
+        want = ref.l1_view(HI)[3].reshape(-1) > 0
         got = det.evidence_hits(obs, HI)
         assert want.any()
         assert np.array_equal(got, want), f"{case}: adapter hits differ from the map's L1 increments"
