@@ -49,6 +49,13 @@ hose, blue/red cooling water) on every robot; fixtures with locator blocks, pins
 compiles the OptiX kernel once, ~2 min); closures carts with door panels at each station's line side; `cctv_post`
 `sensor_scale` (per camera 0.65-0.85 of 1080p, `--sensor-scale`) for CCTV sensor softness.
 
+Trace for the CCTV sequences: `python render/synth_trace.py --movers sim --minutes 15 --out D:\icdata\renders\trace_sim15.parquet`
+(repo Python). People and vehicles are the sim's own movers (`intercycle/truth/agents.py`): at 10:00-10:15 that is 12
+people (10 aisle walkers + 2 data-hall techs; break crowds only around breaks), 4 AGVs, 2 tuggers, 3 forklifts, sampled
+every 0.25 s on their unobstructed paths. Machines and the hero AMR stay synthetic. Note: `bodyshop.yaml`
+`people_per_shift` (early 34) is only used by the statistical occupancy model `truth/traffic.py`; `agents.py` does not
+spawn that many, so the render shows the sim's 12, not 34.
+
 # Photoreal render tier: decision, research, shot list
 
 *Written 2026-10-17 12:40 CEST for the 18 Oct 16:00 submission. Owner: render pipeline. Everything here is

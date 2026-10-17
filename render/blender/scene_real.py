@@ -309,7 +309,7 @@ class RealScene(rb.BScene):
     def rounded(self, m, radius: float = 0.006):
         """Copy of material `m` with a Cycles Bevel node on the normal: rounded edges in shading, at a radius in
         metres whatever the box's scale (a Bevel modifier on these scaled unit cubes would stretch)."""
-        name = m.name + "_rnd"
+        name = f"{m.name}_rnd{radius:g}"                       # radius in the key: one copy per radius
         if name in self.mats:
             return self.mats[name]
         r = m.copy()
