@@ -438,3 +438,16 @@ def test_open_truth_refuses_callers_outside_the_allowlist():
         open_truth(FIX / "twin_realised_state.jsonl")
     with pytest.raises(ValueError, match="not a truth path"):
         open_truth(FIX / "twin_site.yaml")
+
+
+# ------------------------------------------------------------------------------------------------ packaging / mounts
+
+
+def test_twin_is_packaged_and_mounted_on_modal():
+    """twin/ ships with the package and is mounted in both Modal images (PLAN_TWIN §4 S1a)."""
+    import tomllib
+    inc = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["setuptools"]["packages"]["find"]
+    assert "twin*" in inc["include"]
+    for f in ("cloud/modal_sim.py", "cloud/modal_isaac_robot.py"):
+        src = (REPO / f).read_text(encoding="utf-8")
+        assert 'add_local_dir(str(REPO / "twin")' in src, f"{f} does not mount twin/"

@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[1]
 image = (modal.Image.debian_slim(python_version="3.11")
          .pip_install("numpy", "scipy", "astropy", "pyyaml", "pydantic>=2", "pynacl", "pandas", "pyarrow")
          .add_local_dir(str(REPO / "intercycle"), "/root/intercycle")
+         .add_local_dir(str(REPO / "twin"), "/root/twin", ignore=["**/__pycache__", "**/*.pyc"])
          .add_local_dir(str(REPO / "scenario"), "/root/scenario"))
 app = modal.App("intercycle-sim", image=image)
 

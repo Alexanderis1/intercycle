@@ -104,6 +104,7 @@ image = (
     )
     .add_local_dir(str(REPO / "ros2"), REMOTE_ROS2, ignore=["**/__pycache__", "**/*.pyc", "**/test/**"])
     .add_local_dir(str(REPO / "intercycle"), f"{REMOTE_REPO}/intercycle", ignore=["**/__pycache__", "**/*.pyc"])
+    .add_local_dir(str(REPO / "twin"), f"{REMOTE_REPO}/twin", ignore=["**/__pycache__", "**/*.pyc"])
     .add_local_dir(str(REPO / "scenario"), f"{REMOTE_REPO}/scenario")
 )
 
