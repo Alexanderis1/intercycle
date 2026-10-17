@@ -3,7 +3,8 @@ import ast
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parents[1] / "intercycle"
-FORBIDDEN_IN = ["observer/learn_cycles.py", "observer/learn_traffic.py", "codec", "robot"]
+FORBIDDEN_IN = ["observer/learn_cycles.py", "observer/learn_traffic.py", "observer/mapping.py", "observer/change.py",
+                "observer/phases.py", "codec", "robot"]
 
 
 def _imports(path: Path):
