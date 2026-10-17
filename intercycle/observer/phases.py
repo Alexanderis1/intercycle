@@ -27,7 +27,12 @@ Interface (what workstream M calls)::
                                                       # -1 = unknown (no tick yet at t, or no model)
     pm.n_bins(machine_id: str) -> int                 # sub-phases + 1 blocked bin
     pm.bin_names(machine_id: str) -> list[str]        # "p0".."pK-1" ("idle" for the idle one), "blocked"
-    pm.line_state(t: float) -> str                    # "running" | "andon" | "break" | "shift_change" ("unknown" before data)
+    pm.line_state(t: float) -> str                    # suggested name: "running" | "andon" | "break" | "shift_change"
+                                                      # ("unknown" before data); an operator label overrides it
+    pm.line_cluster(t: float) -> int                  # discovered cluster id (key a map on this), -1 unknown
+    pm.line_catalogue() -> list[dict]                 # per cluster: "State A".., auto description, suggestions, label
+    pm.set_line_label(cluster_id, name)               # operator names a cluster once (persists; carried over on
+    pm.refit_line(T, X, F)                            #   refit by Hungarian matching of centroids)
     pm.save(path) / PhaseModel.load(path, scn)
 
 `phase_bin` and `line_state` answer for the latest tick fed with t_cap <= t (they keep a short history, ~2 h, for
@@ -814,13 +819,82 @@ def _silhouette(Y: np.ndarray, lab: np.ndarray) -> float:
 
 @dataclass
 class LineStates:
-    """Production states discovered by clustering line features; clusters named by rules on their centroids."""
+    """Production states discovered by clustering line features.
+
+    The cluster id is the identity (what a map should be keyed on); a name never changes the clustering. Each cluster
+    is shown as "State A", "State B", ... with an automatic description of its centroid until an operator names it
+    once (`set_label`); labels persist with the model and carry over to a refit by Hungarian matching of centroids
+    (`carry_labels`). `names` holds the *suggested* names from `_name_clusters`; those rules encode this simulator's
+    design (andon = line overdue while the off-line cells work; break = a gathering of people, because the simulator
+    spawns a break crowd) and are a suggestion only, as is a Gemma suggestion (`suggest`, marked unverified)."""
     mu: np.ndarray
     sd: np.ndarray
     centres: np.ndarray          # (k, f) standardised
-    names: list[str]             # state name per cluster
+    names: list[str]             # suggested (rule) name per cluster
     raw_centres: np.ndarray      # (k, f) in feature units (for the report)
     diag: dict = field(default_factory=dict)
+    typical_s: list = field(default_factory=list)      # median episode length per cluster on the training window (s)
+    share: list = field(default_factory=list)          # share of training ticks per cluster
+    labels: dict = field(default_factory=dict)         # cluster id -> operator label (persists, carried over on refit)
+    suggestions: dict = field(default_factory=dict)    # cluster id -> {"name", "confidence", "source", "verified": False}
+
+    # ---------------------------------------------------------------- identity / naming
+    def set_stats(self, cl: np.ndarray, hz: float) -> None:
+        """Episode statistics of the training cluster sequence (for the descriptions)."""
+        k = len(self.centres)
+        cut = np.flatnonzero(cl[1:] != cl[:-1]) + 1
+        st, en = np.r_[0, cut], np.r_[cut, len(cl)]
+        self.typical_s = [float(np.median([(b - a) / hz for a, b in zip(st, en) if cl[a] == c] or [0.0])) for c in range(k)]
+        self.share = (np.bincount(cl, minlength=k) / max(len(cl), 1)).tolist()
+
+    def display(self, c: int) -> str:
+        lab = getattr(self, "labels", {}).get(int(c))
+        return lab if lab else f"State {chr(ord('A') + int(c))}"
+
+    def describe(self, c: int) -> str:
+        """Automatic description of a cluster's centroid (what an operator sees before naming it)."""
+        r = dict(zip(LINE_FEATS, self.raw_centres[int(c)]))
+        ty = (getattr(self, "typical_s", None) or [math.nan] * len(self.centres))[int(c)]
+        sh = (getattr(self, "share", None) or [math.nan] * len(self.centres))[int(c)]
+        dur = f"{ty / 60:.0f} min" if ty >= 120 else f"{ty:.0f} s"
+        return (f"{100 * (1 - r['line_working']):.0f} % line stations idle ({100 * r['line_blocked']:.0f} % blocked), "
+                f"{100 * (1 - r['cells_working']):.0f} % cells idle, line index {max(math.expm1(r['index_overdue']), 0.0):.1f} periods overdue, "
+                f"people {r['people_excess']:+.1f} / crowding {r['crowd_excess']:+.1f} vs the 1 h baseline, "
+                f"{100 * r['people_moving']:.0f} % of people walking; typical episode {dur}, {100 * sh:.0f} % of time")
+
+    def set_label(self, c: int, name: str) -> None:
+        if not hasattr(self, "labels") or self.labels is None:
+            self.labels = {}
+        self.labels[int(c)] = str(name)
+
+    def suggest(self, c: int, name: str, confidence: float, source: str = "gemma") -> None:
+        """Record a model suggestion for a cluster's name. It is never applied automatically (unverified)."""
+        if not hasattr(self, "suggestions") or self.suggestions is None:
+            self.suggestions = {}
+        self.suggestions[int(c)] = {"name": str(name), "confidence": float(confidence), "source": source, "verified": False}
+
+    def carry_labels(self, old: "LineStates", max_dist: float = 2.0) -> dict:
+        """Copy operator labels (and suggestions) from a previous model: clusters are matched one-to-one by the Hungarian
+        method on centroid distance (in this model's standardised units); pairs farther than `max_dist` are not matched.
+        Returns {new id: old id}."""
+        from scipy.optimize import linear_sum_assignment
+        A = (old.raw_centres - self.mu) / self.sd
+        D = np.sqrt(((self.centres[:, None, :] - A[None]) ** 2).sum(-1))
+        r, c = linear_sum_assignment(D)
+        match = {int(i): int(j) for i, j in zip(r, c) if D[i, j] <= max_dist}
+        for i, j in match.items():
+            if getattr(old, "labels", {}).get(j):
+                self.set_label(i, old.labels[j])
+            if getattr(old, "suggestions", {}).get(j):
+                self.suggestions = getattr(self, "suggestions", None) or {}
+                self.suggestions[i] = dict(old.suggestions[j])
+        return match
+
+    def catalogue(self) -> list[dict]:
+        """One row per cluster: id, display name, description, suggested names (rule / model), operator label."""
+        return [{"id": c, "display": self.display(c), "description": self.describe(c),
+                 "suggested_rule": self.names[c], "suggested_model": getattr(self, "suggestions", {}).get(c),
+                 "label": getattr(self, "labels", {}).get(c)} for c in range(len(self.centres))]
 
     @classmethod
     def fit(cls, Fl: np.ndarray, seed: int = 0, ks=(4, 5, 6), n_sub: int = 2000) -> "LineStates":
@@ -847,10 +921,13 @@ class LineStates:
         return ((Y[:, None, :] - self.centres[None]) ** 2).sum(-1).argmin(1)
 
     def state(self, f: np.ndarray) -> np.ndarray:
-        """State name per tick. Inside a planned-stop cluster (line and cells stopped) the tick's own flow features
-        decide break (a gathering of people) vs shift_change (no gathering)."""
+        """State name per tick: the operator label of the tick's cluster when it is one of LINE_STATES, else the
+        suggested (rule) name. Inside a planned-stop cluster (line and cells stopped) the tick's own flow features then
+        suggest break (a gathering of people) vs shift_change (no gathering) - a rule that encodes the simulator."""
         f = np.atleast_2d(f)
-        out = np.array(self.names, dtype=object)[self.cluster(f)]
+        labs = getattr(self, "labels", {}) or {}
+        nm = [labs[c] if labs.get(c) in LINE_STATES else self.names[c] for c in range(len(self.centres))]
+        out = np.array(nm, dtype=object)[self.cluster(f)]
         stop = (out == "break") | (out == "shift_change")
         if stop.any():
             out[stop] = np.where(_gathering(f[stop]), "break", "shift_change")
@@ -918,8 +995,19 @@ class PhaseModel:
         if fit_line:
             bins, Fl = pm._decode_machines(T, X, F)
             pm.line = LineStates.fit(Fl)
+            pm.line.set_stats(pm.line.cluster(Fl), hz)
             pm.reset()
         return pm
+
+    def refit_line(self, T, X, F) -> dict:
+        """Refit the line-state clusters on new data, carrying operator labels over (Hungarian on centroids)."""
+        old = self.line
+        _, Fl = self._decode_machines(T, X, F)
+        self.line = LineStates.fit(Fl)
+        self.line.set_stats(self.line.cluster(Fl), self.hz)
+        match = self.line.carry_labels(old) if old is not None else {}
+        self.reset()
+        return match
 
     # ---------------------------------------------------------------- online
     def reset(self) -> None:
@@ -932,6 +1020,7 @@ class PhaseModel:
         self._t: deque = deque()
         self._bins: deque = deque()
         self._state: deque = deque()
+        self._cl: deque = deque()
 
     def update(self, obs) -> None:
         """Feed one Observation (in time order)."""
@@ -949,10 +1038,12 @@ class PhaseModel:
         self._t.append(t)
         self._bins.append(bins)
         self._state.append(st)
+        self._cl.append(int(self.line.cluster(fl)[0]) if self.line is not None else -1)
         while self._t and self._t[0] < t - HIST_S:
             self._t.popleft()
             self._bins.popleft()
             self._state.popleft()
+            self._cl.popleft()
         self._last_fl = fl
         return bins
 
@@ -976,8 +1067,25 @@ class PhaseModel:
         return [("idle" if s == mp.idle_seg else f"p{s}") for s in range(mp.n_seg)] + ["blocked"]
 
     def line_state(self, t: float) -> str:
+        """Suggested state name (operator label if set). For a map, key on `line_cluster` instead."""
         k = self._idx(t)
         return "unknown" if k < 0 else self._state[k]
+
+    def line_cluster(self, t: float) -> int:
+        """Discovered line-state cluster id at t (the identity a map should be keyed on); -1 unknown."""
+        k = self._idx(t)
+        return -1 if k < 0 else int(self._cl[k])
+
+    def n_line_clusters(self) -> int:
+        return len(self.line.centres) if self.line is not None else 0
+
+    def line_catalogue(self) -> list[dict]:
+        """Per cluster: id, display ("State A" or the operator label), auto description, suggestions, label."""
+        return self.line.catalogue() if self.line is not None else []
+
+    def set_line_label(self, cluster_id: int, name: str) -> None:
+        """Operator names a cluster once; persists with save() and carries over on refit_line()."""
+        self.line.set_label(cluster_id, name)
 
     # ---------------------------------------------------------------- batch
     def _decode_machines(self, T, X, F):

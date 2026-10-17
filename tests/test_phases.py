@@ -100,3 +100,24 @@ def test_save_load_roundtrip(fitted, tmp_path):
     b1, s1, _, _ = pm.decode_features(d["T"][sl], d["X"][sl], d["F"][sl])
     b2, s2, _, _ = pm2.decode_features(d["T"][sl], d["X"][sl], d["F"][sl])
     assert (b1 == b2).all() and (s1 == s2).all()
+
+
+def test_line_clusters_are_identity_and_labels_persist(fitted, tmp_path):
+    d, pm = fitted
+    cat = pm.line_catalogue()
+    assert len(cat) == pm.n_line_clusters() >= 2
+    assert cat[0]["display"] == "State A" and "cells idle" in cat[0]["description"]
+    sl = slice(0, 400)
+    _, s0, _, cl0 = pm.decode_features(d["T"][sl], d["X"][sl], d["F"][sl])
+    pm.set_line_label(int(cl0[0]), "my label")                     # a free-text label never changes the clustering
+    pm.line.suggest(int(cl0[0]), "running", 0.8)
+    _, s1, _, cl1 = pm.decode_features(d["T"][sl], d["X"][sl], d["F"][sl])
+    assert (cl0 == cl1).all() and (s0 == s1).all()
+    assert pm.line_catalogue()[int(cl0[0])]["display"] == "my label"
+    assert pm.line_catalogue()[int(cl0[0])]["suggested_model"]["verified"] is False
+    pm.save(tmp_path / "pm.pkl")
+    pm2 = P.PhaseModel.load(tmp_path / "pm.pkl", load())
+    assert pm2.line_catalogue()[int(cl0[0])]["label"] == "my label"
+    match = pm2.refit_line(d["T"], d["X"], d["F"])                  # same data: every cluster matches itself
+    assert any(pm2.line.labels.get(i) == "my label" for i in match)
+    pm.line.labels = {}

@@ -156,13 +156,15 @@ def cmd_table(a):
     r = json.load(open(a.results))
     f = lambda v: "–" if v is None or (isinstance(v, float) and v != v) else f"{v:.2f}"
     print("| Machine | truth sub-phases | bins | period (s) | **online seg F1** | online acc | online boundary err median (s) "
-          "| online bnd F1 ±1 s | offline DTW seg F1 | offline acc | fine-label online F1 | cycle onset err median (s) |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+          "| online bnd F1 ±1 s | offline DTW seg F1 | offline acc | fine-label online F1 | onset err median (s), resting->working "
+          "| onset err median (s), v1: active start -> bin 0 |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for mid, m in r["machines"].items():
         on, off, fi, cy = m["online_hmm/coarse"], m["offline_dtw/coarse"], m["online_hmm/fine"], m["online_hmm/cycle"]
+        c1 = m.get("online_hmm/cycle_v1", {"onset_med_s": float("nan")})
         labs = "/".join(sorted(on["per_label_f1"]))
         print(f"| {mid} | {labs} | {m['n_bins']} | {m['period_s']:.2f} | **{f(on['seg_f1'])}** | {f(on['acc'])} | "
-              f"{f(on['bnd_med_s'])} | {f(on['bnd_f1_1s'])} | {f(off['seg_f1'])} | {f(off['acc'])} | {f(fi['seg_f1'])} | {f(cy['onset_med_s'])} |")
+              f"{f(on['bnd_med_s'])} | {f(on['bnd_f1_1s'])} | {f(off['seg_f1'])} | {f(off['acc'])} | {f(fi['seg_f1'])} | {f(cy['onset_med_s'])} | {f(c1['onset_med_s'])} |")
     print()
     print("| Machine | per-label online segment F1 |")
     print("|---|---|")
@@ -262,6 +264,18 @@ def cycle_onset_error(pred: np.ndarray, truth: np.ndarray, rest_bins: tuple, hz:
     return dict(onset_med_s=float(np.median(d)), onset_p90_s=float(np.quantile(d, 0.9)), onset_found=float((d <= 2.0).mean()))
 
 
+def cycle_onset_error_v1(pred: np.ndarray, frac: np.ndarray, hz: float) -> dict:
+    """Onset metric as first defined (before the 7185ca6 held-out run): true onset = the arm's / carriage's active start
+    (frac >= 0, including the lifter's invisible overhead part), predicted onset = entry into bin 0."""
+    act = frac >= 0
+    to = (np.flatnonzero(act[1:] & ~act[:-1]) + 1).astype(float)
+    po = (np.flatnonzero((pred[1:] == 0) & (pred[:-1] != 0)) + 1).astype(float)
+    if not len(to) or not len(po):
+        return dict(onset_med_s=float("nan"), onset_p90_s=float("nan"), onset_found=0.0)
+    d = _nearest(po, to) / hz
+    return dict(onset_med_s=float(np.median(d)), onset_p90_s=float(np.quantile(d, 0.9)), onset_found=float((d <= 2.0).mean()))
+
+
 def ari(a: np.ndarray, b: np.ndarray) -> float:
     from math import comb
     _, ai = np.unique(a, return_inverse=True)
@@ -322,6 +336,7 @@ def cmd_eval(a):
                 r[f"{mode}/{lvl}"] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in sc.items()}
             r[f"{mode}/cycle"] = {k: round(v, 3) for k, v in cycle_onset_error(
                 pred, coarse(fam, truth, te["frac"][:, i]), (mp.idle_seg, mp.blocked_bin), HZ).items()}
+            r[f"{mode}/cycle_v1"] = {k: round(v, 3) for k, v in cycle_onset_error_v1(pred, te["frac"][:, i], HZ).items()}
         res["machines"][str(mid)] = r
         c, f, o = r["online_hmm/coarse"], r["online_hmm/fine"], r["offline_dtw/coarse"]
         print(f"{mid:6s} P={mp.period_s:6.2f} bins={mp.n_bins}  online coarse F1 {c['seg_f1']:.3f} acc {c['acc']:.3f} "
@@ -334,7 +349,7 @@ def cmd_eval(a):
                        recall={s: round(float((states[lt == s] == s).mean()), 3) for s in P.LINE_STATES if (lt == s).any()},
                        precision={s: round(float((lt[states == s] == s).mean()), 3) for s in P.LINE_STATES if (states == s).any()},
                        clusters=pm.line.names, centres=np.round(pm.line.raw_centres, 2).tolist(), feats=list(P.LINE_FEATS),
-                       diag=pm.line.diag,
+                       diag=pm.line.diag, catalogue=pm.line_catalogue(),
                        confusion={s: {u: int(((lt == s) & (states == u)).sum()) for u in P.LINE_STATES} for s in P.LINE_STATES})
     print("line:", json.dumps({k: v for k, v in res["line"].items() if k != "centres"}))
     print("centres:", res["line"]["centres"])
