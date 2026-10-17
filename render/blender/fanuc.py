@@ -178,6 +178,9 @@ def materials(bpy):
         "grey": _principled(bpy, "fanuc_grey", (0.35, 0.36, 0.38), 0.45, 0.6),
         "steel": _principled(bpy, "gun_steel", (0.42, 0.43, 0.45), 0.42, 1.0),
         "copper": _principled(bpy, "gun_copper", (0.8, 0.42, 0.25), 0.3, 1.0),
+        "alu": _principled(bpy, "gun_alu", (0.63, 0.64, 0.65), 0.35, 1.0),           # cast transformer housing
+        "hose_blue": _principled(bpy, "hose_blue", (0.02, 0.12, 0.45), 0.5, 0.0),     # cooling water in
+        "hose_red": _principled(bpy, "hose_red", (0.5, 0.03, 0.02), 0.5, 0.0),        # cooling water out
     }
 
 
@@ -317,14 +320,14 @@ def _cyl(bm, r, h, loc, axis, mat, seg=24):
         f.smooth = True
 
 
-def _c_frame(bm, center, r_out, r_in, a0, a1, thick, mat, seg=28):
-    """Thick arc plate in the X-Z plane (the C of the gun), extruded along Y."""
+def _c_frame(bm, center, r_out, r_in, a0, a1, thick, mat, seg=28, y0=0.0):
+    """Thick arc plate in the X-Z plane (the C of the gun), extruded along Y around y0."""
     cx, cz = center
     rings = []
     for i in range(seg + 1):
         a = math.radians(a0 + (a1 - a0) * i / seg)
         ring = []
-        for r, y in ((r_out, -thick / 2), (r_out, thick / 2), (r_in, thick / 2), (r_in, -thick / 2)):
+        for r, y in ((r_out, y0 - thick / 2), (r_out, y0 + thick / 2), (r_in, y0 + thick / 2), (r_in, y0 - thick / 2)):
             ring.append(bm.verts.new((cx + r * math.cos(a), y, cz + r * math.sin(a))))
         rings.append(ring)
     for i in range(seg):
@@ -341,39 +344,63 @@ def bmesh_ops():
 
 
 def _gun_mesh(bpy):
-    """Servo C-gun in the a6 frame: flange face at x=FLANGE_X, C opening to +X, electrodes closing along Z."""
-    me = bpy.data.meshes.get("fanuc_gun")
+    """Servo C-gun in the a6 frame: flange face at x=FLANGE_X, C opening to +X, electrodes closing along Z at TIP_LOCAL.
+    Silhouette of a real MFDC servo C-gun: two C side plates, a ribbed cast transformer behind the C, the servo
+    actuator + motor above the moving electrode, electrode holders on both arms."""
+    me = bpy.data.meshes.get("fanuc_gun_v2")
     if me is not None:
         return me
     import bmesh
     bm = bmesh.new()
-    STEEL, BLACK, COPPER, GREY = 0, 1, 2, 3
-    fx = FLANGE_X
+    STEEL, BLACK, COPPER, GREY, ALU = 0, 1, 2, 3, 4
+    fx, tip_x = FLANGE_X, TIP_LOCAL[0]
     _cyl(bm, 0.125, 0.03, (fx + 0.015, 0, 0), "x", GREY)                 # tool changer / adapter plate
-    _box(bm, (0.05, 0.30, 0.30), (fx + 0.055, 0, 0), STEEL)              # mounting bracket
-    _box(bm, (0.26, 0.24, 0.30), (fx + 0.21, 0, -0.03), BLACK)           # weld transformer (MFDC)
-    _box(bm, (0.20, 0.16, 0.06), (fx + 0.21, 0, 0.15), GREY)             # cooling manifold
-    for dy in (-0.05, 0.0, 0.05):
-        _cyl(bm, 0.012, 0.20, (fx + 0.21, dy, 0.18), "x", BLACK, seg=10)  # water hoses on the manifold
-    tip_x = TIP_LOCAL[0]
-    cxc = fx + 0.42                                                       # C-frame centre
-    _c_frame(bm, (cxc, 0.0), 0.25, 0.17, 35.0, 325.0, 0.05, STEEL)
-    jaw = 0.21 * math.sin(math.radians(35.0))                             # jaw height at the opening
-    jx = cxc + 0.21 * math.cos(math.radians(35.0))
-    _box(bm, (tip_x - jx + 0.03, 0.062, 0.07), ((tip_x + jx) / 2, 0, jaw), STEEL)    # upper arm
-    _box(bm, (tip_x - jx + 0.03, 0.062, 0.07), ((tip_x + jx) / 2, 0, -jaw), STEEL)   # lower arm
-    _cyl(bm, 0.055, 0.20, (tip_x, 0, jaw + 0.13), "z", GREY)              # servo actuator
-    _cyl(bm, 0.065, 0.12, (tip_x, 0, jaw + 0.29), "z", BLACK)             # servo motor
-    _cyl(bm, 0.022, jaw - 0.02, (tip_x, 0, (jaw + 0.02) / 2), "z", COPPER)    # moving electrode
-    _cyl(bm, 0.022, jaw - 0.02, (tip_x, 0, -(jaw + 0.02) / 2), "z", COPPER)   # fixed electrode
-    _cyl(bm, 0.009, 0.02, (tip_x, 0, 0.012), "z", COPPER, seg=12)         # caps
-    _cyl(bm, 0.009, 0.02, (tip_x, 0, -0.012), "z", COPPER, seg=12)
+    _box(bm, (0.04, 0.26, 0.34), (fx + 0.05, 0, 0), STEEL)               # mounting bracket
+    cxc, r_out, r_in, a_open = fx + 0.40, 0.30, 0.20, 40.0               # C yoke: centre, radii, half opening (deg)
+    for y0 in (-0.045, 0.045):
+        _c_frame(bm, (cxc, 0.0), r_out, r_in, a_open, 360.0 - a_open, 0.022, STEEL, y0=y0)
+    _box(bm, (0.20, 0.21, 0.24), (fx + 0.19, 0, -0.04), ALU)             # MFDC transformer behind the C
+    for k in range(5):                                                    # cooling ribs
+        _box(bm, (0.21, 0.225, 0.012), (fx + 0.19, 0, -0.14 + k * 0.05), ALU)
+    _box(bm, (0.03, 0.18, 0.20), (fx + 0.305, 0, -0.04), BLACK)          # secondary bus bars / terminal cover
+    r_mid = (r_out + r_in) / 2
+    jx = cxc + r_mid * math.cos(math.radians(a_open))                    # jaw root at the C opening
+    jaw = r_mid * math.sin(math.radians(a_open))
+    for sz in (1, -1):                                                    # arms from the C tips to the electrodes
+        _box(bm, (tip_x - jx + 0.05, 0.11, 0.06), ((tip_x + jx) / 2 + 0.01, 0, sz * jaw), STEEL)
+        _cyl(bm, 0.032, 0.06, (tip_x, 0, sz * (jaw - 0.04)), "z", GREY)  # electrode holders
+        _cyl(bm, 0.02, jaw - 0.07, (tip_x, 0, sz * (jaw - 0.07) / 2 + sz * 0.005), "z", COPPER)   # electrode shanks
+        _cyl(bm, 0.009, 0.02, (tip_x, 0, sz * 0.012), "z", COPPER, seg=12)                        # caps
+    _cyl(bm, 0.05, 0.22, (tip_x, 0, jaw + 0.14), "z", GREY)               # servo actuator (ball screw)
+    _cyl(bm, 0.062, 0.14, (tip_x, 0, jaw + 0.32), "z", BLACK)             # servo motor
+    _box(bm, (0.06, 0.08, 0.06), (tip_x - 0.08, 0, jaw + 0.34), BLACK)    # motor connector
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    me = bpy.data.meshes.new("fanuc_gun")
+    me = bpy.data.meshes.new("fanuc_gun_v2")
     bm.to_mesh(me)
     bm.free()
     mats = materials(bpy)
-    for s in ("steel", "black", "copper", "grey"):
+    for s in ("steel", "black", "copper", "grey", "alu"):
+        me.materials.append(mats[s])
+    return me
+
+
+def _retract_mesh(bpy):
+    """Dress-pack retract unit (spring cylinder + two clamp collars) along the forearm, in the a4 frame."""
+    me = bpy.data.meshes.get("fanuc_retract")
+    if me is not None:
+        return me
+    import bmesh
+    bm = bmesh.new()
+    _cyl(bm, 0.05, 0.36, (0.32, 0.0, 0.29), "x", 1)
+    for x in (0.16, 0.48):
+        _cyl(bm, 0.062, 0.03, (x, 0.0, 0.29), "x", 0)
+    _box(bm, (0.05, 0.06, 0.08), (0.2, 0.0, 0.23), 0)                    # bracket onto the arm casting
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new("fanuc_retract")
+    bm.to_mesh(me)
+    bm.free()
+    mats = materials(bpy)
+    for s in ("grey", "black"):
         me.materials.append(mats[s])
     return me
 
@@ -430,10 +457,18 @@ def build_fanuc(name, loc, yaw_deg, collection=None, gun=True):
         parent = e
     a6 = joints["a6"]
     if gun:
-        mesh_obj(name + "_gun", _gun_mesh(bpy), a6)
-        # dress-pack: hose bundle along the forearm (moves with J4) and a loop from wrist to transformer (J6)
-        _hose(bpy, name + "_dress", [(0.15, 0.0, 0.17), (0.6, 0.0, 0.2), (1.05, 0.0, 0.16)], 0.035, joints["a4"], col, mats["black"])
-        _hose(bpy, name + "_gunhose", [(0.05, 0.0, 0.16), (0.12, 0.0, 0.26), (FLANGE_X + 0.12, 0.0, 0.2)], 0.025, a6, col, mats["black"])
+        g = mesh_obj(name + "_gun", _gun_mesh(bpy), a6)
+        bev = g.modifiers.new("bevel", "BEVEL")                          # soften the primitive edges
+        bev.width, bev.segments, bev.limit_method = 0.004, 2, "ANGLE"
+        # dress pack (moves with J4): retract unit on the forearm, main hose + cooling water in/out along it, and
+        # a loop from the wrist to the transformer (J6)
+        a4 = joints["a4"]
+        mesh_obj(name + "_retract", _retract_mesh(bpy), a4)
+        _hose(bpy, name + "_dress", [(0.12, 0.0, 0.2), (0.5, 0.0, 0.25), (0.85, 0.0, 0.22), (1.05, 0.0, 0.16)], 0.042, a4, col, mats["black"])
+        for dy, m in ((0.05, "hose_blue"), (-0.05, "hose_red")):
+            _hose(bpy, f"{name}_water{m[-1]}", [(0.15, dy, 0.17), (0.6, dy, 0.21), (1.05, dy * 0.6, 0.15)], 0.013, a4, col, mats[m])
+            _hose(bpy, f"{name}_gunwater{m[-1]}", [(0.05, dy, 0.14), (0.14, dy, 0.24), (FLANGE_X + 0.1, dy * 0.8, 0.13)], 0.012, a6, col, mats[m])
+        _hose(bpy, name + "_gunhose", [(0.05, 0.0, 0.16), (0.12, 0.0, 0.28), (FLANGE_X + 0.15, 0.0, 0.2)], 0.03, a6, col, mats["black"])
     tip = empty(name + "_tip", TIP_LOCAL, a6)
     tip.empty_display_size = 0.05
     set_q(joints, HOME)
