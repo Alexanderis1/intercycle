@@ -13,6 +13,7 @@ Observation v2 is NOT defined here: it is owned by lane S4 in `intercycle/observ
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from typing import Literal
@@ -136,6 +137,8 @@ class Summary(Strict):
 # ------------------------------------------------------------------------------------------- primary metric JSON
 
 Outcome = Literal["passed", "declined", "held", "tripped", "failed", "unattempted"]
+# per_world floats are checked with this relative tolerance (y*3600/t and y/t*3600 differ in the last bits).
+PER_WORLD_REL_TOL = 1e-9
 
 
 class CheckpointOutcome(Strict):
@@ -194,8 +197,15 @@ class PrimaryMetric(Strict):
     @model_validator(mode="after")
     def _pooled(self):
         unique([m.run_id for m in self.missions], "run")
-        if self.per_world != world_values(self.missions):
-            raise ValueError("per_world does not equal the pooled sum(Y)/sum(T) of the missions")
+        want = world_values(self.missions)
+        same = len(self.per_world) == len(want) and all(
+            (g.world, g.condition, g.sum_Y) == (w.world, w.condition, w.sum_Y)
+            and math.isclose(g.sum_T_s, w.sum_T_s, rel_tol=PER_WORLD_REL_TOL)
+            and math.isclose(g.per_h, w.per_h, rel_tol=PER_WORLD_REL_TOL, abs_tol=0.0)
+            for g, w in zip(self.per_world, want))
+        if not same:
+            raise ValueError("per_world does not equal the pooled sum(Y)/sum(T) of the missions "
+                             f"(sorted by world, condition; per_h within rel {PER_WORLD_REL_TOL})")
         return self
 
 

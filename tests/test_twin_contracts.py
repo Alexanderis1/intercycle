@@ -159,10 +159,33 @@ def test_primary_metric_rules():
     bad = copy.deepcopy(d)
     bad["missions"][0]["checkpoints"][0]["outcome"] = "tripped"              # tripped without a press stop
     _expect_invalid(S.PrimaryMetric, bad, "robot_caused_press_stop")
+    bad = copy.deepcopy(d)
+    bad["per_world"][0]["per_h"] *= 1 + 1e-6                                # outside the 1e-9 tolerance
+    _expect_invalid(S.PrimaryMetric, bad, "per_world")
+    bad = copy.deepcopy(d)
+    bad["per_world"] = bad["per_world"][:-1]                                 # a (world, condition) missing
+    _expect_invalid(S.PrimaryMetric, bad, "per_world")
     pm = S.PrimaryMetric.model_validate(d)
     w0 = {(w.world, w.condition): w for w in pm.per_world}
     assert w0[(0, "learned")].per_h == pytest.approx(2 / 1440 * 3600)
     assert w0[(0, "reactive")].sum_Y == 0
+
+
+def test_primary_metric_accepts_an_equivalent_float_formula():
+    """y * 3600 / t and y / t * 3600 differ in the last bits for some (Y, T); both must validate (audit major 3)."""
+    differ = [(y, n) for y in range(1, 41) for n in range(1, 9) if y * 3600.0 / (n * 720.0) != y / (n * 720.0) * 3600.0]
+    assert differ, "the case the tolerance exists for must occur"
+    y, n = differ[0]
+    missions = [{"run_id": f"r{k}", "world": 0, "day": 9 + k % 2, "zone": "z9", "condition": "learned", "T_s": 720.0,
+                 "Y": (y // n) + (1 if k < y % n else 0), "robot_caused_press_stop": False, "hold": False,
+                 "incident": False, "error": False, "press_time_lost_s": 0.0,
+                 "checkpoints": [{"checkpoint": f"cp{j}", "outcome": "passed"} for j in range((y // n) + (1 if k < y % n else 0))]
+                 or [{"checkpoint": "cp0", "outcome": "declined"}]}
+                for k in range(n)]
+    assert sum(m["Y"] for m in missions) == y
+    pw = [{"world": 0, "condition": "learned", "sum_Y": y, "sum_T_s": n * 720.0, "per_h": y * 3600.0 / (n * 720.0)}]
+    S.PrimaryMetric.model_validate({"contract": "twin.primary_metric/1", "engine": "double", "split": "dev",
+                                    "missions": missions, "per_world": pw})
 
 
 def test_tasks_mission_order_must_cover_zone():
