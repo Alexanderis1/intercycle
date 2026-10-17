@@ -1,5 +1,24 @@
 # InterCycle — status at clean stop (17 Oct 2026, ~13:50 CEST)
 
+## Lead session 2 (started 17 Oct 16:20 CEST): live log
+**Sat 17:30 checkpoint: met at 16:40.**
+- The 5 failing tests had stale expectations: S50/S60 at x 47.5/57.5 with 7 m zones, AGV dock `DOCK_DX` east, and the tugger loop's 2.8 m corner shorter than the 6.5 m train offset the test probes. Test-only fix. **Full suite: 195 passed, 1 skipped** (6d59ccf, pushed).
+- Desktop = Remote Control session `alexanderis-buzzing-planet`: clone at `D:\intercycle` (C: has 8.8 GB free), push works, RTX 4060 Ti driver 610.88, Blender 5.1.0. **The Blender MCP is not installed there**, so X runs Blender headless (`blender -b --python`).
+- Active agents (5): M, P, R1, D on the laptop, X on the desktop. M and D share the stream contract the lead fixed in their prompts (`observer/stream.py` `StreamWriter.snapshot/event/close`; D commits it first).
+- Laptop coordination: at most one heavy local job at a time, via the atomic lock dir `out/.heavy_lock/` (owner file inside). Agents commit only their own paths and never push; the lead pushes after a secret scan.
+- Lead item in progress: the learned observer replaces ShimObserver in the event sim (timebox Sun 00:00).
+
+### Spend log
+| When | Where | What | GPU / min | $ | Running total |
+|---|---|---|---|---|---|
+| 17 Oct (before 16:20) | Modal | perception + sim + earlier tests | L4 etc. | ≈ 1.5 | Modal general ≈ 1.5 |
+| 17 Oct 16:30 | Modal | Isaac physics smoke (monitor) | L40S | ≈ 1.5 | Isaac ≈ 1.5 / cap 25 (ask at 20) |
+| 17 Oct 16:00 | RunPod | Isaac RTX render smoke (monitor), pod terminated | RTX 4090 | ≈ 0.18 | RunPod ≈ 0.18 / cap 10 |
+
+### Proposed (needs the user's OK)
+- (none yet)
+
+
 > **17 Oct 14:40:** the plan is now `docs/DIRECTION.md`. The restart plan that stood here was removed because it conflicted with the user's direction. The facts below (what's solid, failed, test status, resume commands) are still valid.
 
 Deadline: 18 Oct 16:00 CEST (code freeze 12:30). Repo: `C:\AMD\intercycle` (git, MIT, not yet pushed).
