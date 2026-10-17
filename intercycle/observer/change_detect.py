@@ -28,7 +28,11 @@ The fix, as one small object per grid (`ChangeLayer`):
    1 - a1 = (1 - a0) / m. A short burst that the cell already shows at its learned rate (a rare tool change, a gross
    detection error) adds one entry term and is drained by the miss->miss terms; a new arm (frequent entries, long stays)
    or a newly always-occupied cell (long stays) climbs at a bounded rate.
-   S >= h  ->  the cell is UNKNOWN at once (that very tick).
+   The run state is gap-filled: x = 1 while the cell had a hit in its last `hold` + 1 observed ticks, so the camera's
+   iid misses inside one run (32 % per frame) do not read as many short runs.
+   Two CUSUMs share these increments: S[c] pooled over all slices (a change not locked to the slices, e.g. a new arm
+   with its own cycle) and Ss[s, c] per slice (a change in some slices only, e.g. a program change that puts the arm in
+   cells at phases where they used to be free). max(S, Ss) >= h  ->  the cell is UNKNOWN at once (that very tick).
 
 3. Lifting UNKNOWN. An UNKNOWN cell is lifted after `clear_ticks` OBSERVED ticks without an unexplained hit (a hit on the
    cell while it is monitored). This covers both ends: the change went away (no hits), or the decayed counts absorbed it
@@ -49,7 +53,10 @@ API (all arrays flat over the grid, length n_cells):
     res = layer.step(slice_idx, hits, observed)       # StepResult(alarmed=idx, lifted=idx)
     layer.unknown_mask()                              # bool[n_cells], dilated by cfg.dilate cells when shape is given
     layer.p(slice_idx)                                # decayed occupancy of a slice (NaN where never observed)
-    layer.visits(slice_idx), layer.S, layer.unknown, layer.monitored(slice_idx)
+    layer.visits(slice_idx), layer.S, layer.Ss, layer.unknown, layer.monitored(slice_idx)
+    CD.half_life_for(wall_hours, n_slices)            # half_life_ticks for a wall-clock half-life
+    CD.drift_per_tick(cfg, a0, b0, q, r)              # expected llr per tick (analytic detection delay ~ h / drift)
+State is in-process only (numpy arrays on the object); nothing is persisted.
 """
 from __future__ import annotations
 
@@ -107,7 +114,8 @@ class ChangeLayer:
         self.e = np.zeros(z)            # decayed run entries (x: 0 -> 1)
         self.prev = np.zeros(self.n_cells, bool)       # run state x at the cell's last observed tick
         self.since = np.full(self.n_cells, 1 << 30, np.int64)      # observed ticks since the cell's last hit
-        self.S = np.zeros(self.n_cells)
+        self.S = np.zeros(self.n_cells)                 # pooled CUSUM per cell (changes not locked to the slices)
+        self.Ss = np.zeros(z)                           # CUSUM per (slice, cell) (a change in some slices only)
         self.unknown = np.zeros(self.n_cells, bool)
         self.obs_ticks = np.zeros(self.n_cells, np.int64)          # observed ticks per cell (any slice)
         self.last_unexpl = np.full(self.n_cells, -(1 << 40), np.int64)
@@ -181,9 +189,10 @@ class ChangeLayer:
             im = idx[mon]
             r = self.llr(s, im, pv[mon], x[mon])
             self.S[im] = np.clip(self.S[im] + r, 0.0, self.cap)
+            self.Ss[s, im] = np.clip(self.Ss[s, im] + r, 0.0, self.cap)
             unexpl = im[h[mon]]
             self.last_unexpl[unexpl] = self.obs_ticks[unexpl]
-            new = im[(self.S[im] >= self.cfg.h) & ~self.unknown[im]]
+            new = im[((self.S[im] >= self.cfg.h) | (self.Ss[s, im] >= self.cfg.h)) & ~self.unknown[im]]
             if len(new):
                 self.unknown[new] = True
                 self.n_alarms += len(new)
@@ -195,6 +204,7 @@ class ChangeLayer:
             if len(done):
                 self.unknown[done] = False
                 self.S[done] = 0.0
+                self.Ss[:, done] = 0.0
                 lifted = done
         # ---- counts with forgetting on observed cells of this slice only
         lam = self.lam

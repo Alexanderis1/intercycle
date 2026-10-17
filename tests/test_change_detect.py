@@ -132,7 +132,7 @@ def test_forgetting_absorbs_a_newly_occupied_cell_and_lifts_unknown():
     print(f"\nforgetting: UNKNOWN after {t_unknown} ticks, absorbed (p >= p_min) after {t_absorb} (analytic "
           f"{expect:.0f}), UNKNOWN lifted after {t_lift} ticks (half-life {hl:.0f}, clear {cfg.clear_ticks})")
     assert t_unknown is not None and t_unknown <= 120
-    assert abs(t_absorb - expect) <= 0.25 * expect + 20
+    assert t_absorb is not None and abs(t_absorb - expect) <= 0.25 * expect + 20
     assert t_lift is not None and t_absorb <= t_lift <= t_absorb + cfg.clear_ticks + 5
     assert L.p(0)[0] >= cfg.p_min, "after the lift the map itself broadcasts the cell occupied"
     # the defect without forgetting: a week of empty visits at 2 Hz, always occupied from now on
@@ -226,6 +226,17 @@ def test_hits_on_unobserved_cells_are_ignored_and_shapes_checked():
         L.step(1, np.zeros(6, bool), np.ones(6, bool))
     L.unknown[0] = True
     assert L.unknown_mask().reshape(2, 3).tolist() == [[True, True, False], [True, True, False]]
+
+
+def test_change_detect_modules_do_not_import_truth():
+    import ast
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "intercycle" / "observer"
+    for f in ("change_detect.py", "change_detect_l1.py"):
+        tree = ast.parse((root / f).read_text(encoding="utf-8"))
+        mods = [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
+        mods += [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module]
+        assert not [m for m in mods if m.startswith(("intercycle.truth", "twin"))], (f, mods)
 
 
 def test_drift_helper_matches_the_sign_of_the_cusum():
