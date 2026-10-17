@@ -28,6 +28,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import fanuc  # noqa: E402
+import humans  # noqa: E402
 import plant  # noqa: E402
 import replay_bpy as rb  # noqa: E402
 
@@ -289,14 +290,34 @@ class RealScene(rb.BScene):
         flash = self.light(f"flash_{mid}", "POINT", (0, 0, -50), 0.0, (1.0, 0.85, 0.65), 0.05)
         self.sparks[mid] = (pool, flash, glow)
 
-    # ----- traffic: no capsules -----
+    # ----- traffic: rigged MakeHuman workers instead of capsules -----
     def _traffic(self):
-        persons = {eid for eid, tr in self.ctx.tracks.items() if tr.cls == "person"}
+        persons = sorted(eid for eid, tr in self.ctx.tracks.items() if tr.cls == "person")
         saved = {eid: self.ctx.tracks.pop(eid) for eid in persons}
         try:
             super()._traffic()
         finally:
             self.ctx.tracks.update(saved)
+        self.workers: dict[str, object] = {}
+        if not persons or not Path(humans.LIB_PATH).exists():
+            if persons:
+                rb.log(f"WARNING no worker library at {humans.LIB_PATH}: {len(persons)} persons stay hidden")
+            return
+        names = humans.load_workers()
+        for k, eid in enumerate(persons):                       # stable worker choice + phase per entity
+            root = humans.spawn(names[k % len(names)], (0.0, 0.0, -50.0), 0.0, "walk", phase_s=0.37 * k, collection=self.col_real)
+            self.prims[eid] = root
+            self.workers[eid] = root
+
+    def _pose_workers(self, t: float) -> None:
+        """Walk when the track moves (cycle time scaled by speed so the feet don't slide), idle otherwise."""
+        for eid, root in self.workers.items():
+            tr = self.ctx.tracks[eid]
+            v = tr.speed(t)
+            if v > 0.2:
+                humans.set_time(root, t * v / humans.WALK_SPEED, "walk")
+            else:
+                humans.set_time(root, t, "idle")
 
     # ----- per frame -----
     def apply(self, t: float, shot=None):
@@ -307,6 +328,7 @@ class RealScene(rb.BScene):
                 continue
             x, y, yaw = tr.pose(t)
             self._place(o, x, y, yaw, 0.0 if tr.active(t) else -50.0)
+        self._pose_workers(t)
         for m in scn["machines"]:
             mid = m["id"]
             tr = c.tracks.get(mid)
