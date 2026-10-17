@@ -20,7 +20,11 @@
 **Sat 20:00 checkpoint (R1): met early, ~17:30.** Modal image `intercycle-isaac-robot`: Isaac Sim 5.1, IsaacLab 2.3, torch 2.7.0 pinned, Humble + Nav2. Pretrained FLAT ANYmal-D policy. `/cmd_vel` 0.6 m/s goes through a Unix-socket lockstep bridge (Isaac py3.11 ↔ rclpy py3.10, `/clock` from Isaac). Result: 11.34 m in 20 s sim, heading drift 0.007 rad, RTF 0.78 on an L4. The CPU test double reached a 16 m Nav2 goal (SmacPlanner2D + MPPI Omni + AMCL Omni). Next: the 22:30 gate in the factory scene.
 
 ### Proposed (needs the user's OK)
-- (none yet)
+- **From the monitor session `amd-ce` (17 Oct ~17:35), relayed as user-approved; awaiting the user's direct confirmation:**
+  1. Workstream V: a cross-camera **fused** tracker on SmartSpaces (floor point per box → per-frame cross-camera clustering → one world-frame tracker → offline tracklet stitching). L2/L3 = occupied / observed frames, unseen = UNKNOWN. HOTA + IDF1 before/after. No BEV training. ~6–8 h, Modal L4 (inside the $4 perception cap).
+  2. Workstream C: a camera **placement planner** on the plant layout (≥2 views everywhere, ≥3 near machines, 40–90° ray angle, occlusion). Coverage heatmap, camera-count curve, recommended layout. CPU only, ~2–3 h.
+  - Positioning notes for README/MAP_RESULTS: closest prior art Robinson et al. arXiv 2606.06762; keep "advisory"; licence traps (DUSt3R family non-commercial, etc.).
+- D: at freeze, copy the final stream runs into `dashboard/data/` so GitHub Pages works (accepted by the lead: inside D's static-hosting scope).
 
 
 > **17 Oct 14:40:** the plan is now `docs/DIRECTION.md`. The restart plan that stood here was removed because it conflicted with the user's direction. The facts below (what's solid, failed, test status, resume commands) are still valid.
