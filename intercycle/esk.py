@@ -53,7 +53,9 @@ def load(split: str | Iterable[str], root: str | Path | None = None) -> pd.DataF
     missing = [c for c in COLUMNS if c not in inv.columns]
     if missing:
         raise ValueError(f"inventory.parquet lacks columns {missing}")
-    return inv[inv["split"].isin(want)].reset_index(drop=True)
+    out = inv.loc[inv["split"].isin(want)].reset_index(drop=True)
+    assert isinstance(out, pd.DataFrame)
+    return out
 
 
 def clip_path(clip_id: str, root: str | Path | None = None) -> Path:
@@ -65,7 +67,8 @@ def check_against_split(inv: pd.DataFrame, split_csv: str | Path) -> None:
     """Raise unless inventory rows match prereg/split.csv exactly on clip_id, group_id, split and sha256."""
     with open(split_csv, newline="", encoding="utf-8") as fh:
         ref = {r["clip_id"]: (r["group_id"], r["split"], r["sha256"]) for r in csv.DictReader(fh)}
-    got = {r.clip_id: (r.group_id, r.split, r.sha256) for r in inv.itertuples(index=False)}
+    got = {str(c): (str(g), str(s), str(h)) for c, g, s, h in
+           zip(inv["clip_id"], inv["group_id"], inv["split"], inv["sha256"])}
     if got != ref:
         only_inv = sorted(set(got) - set(ref))[:5]
         only_ref = sorted(set(ref) - set(got))[:5]

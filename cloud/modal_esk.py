@@ -583,6 +583,71 @@ def pass2_clip(cid: str, expected_sha: str, expected_split: str) -> dict:
     return {"clip_id": cid, "keyframes": k}
 
 
+# --------------------------------------------------------------------------- P7: cross-camera overlap
+
+p7_image = gpu_image.pip_install("kornia==0.8.1", "opencv-python-headless==4.12.0.88")
+
+
+@app.function(image=p7_image, gpu="L4", volumes={VOL: vol}, cpu=4, memory=16384, timeout=1800)
+def p7_overlap(pairs: list[list[str]], n_features: int = 2048) -> list[dict]:
+    """DISK + LightGlue (kornia) and SIFT + ratio 0.75 between /esk/frame05 images; RANSAC fundamental-matrix inliers.
+
+    Returns numbers only (matches and inliers per pair), never images.
+    """
+    import cv2
+    import kornia.feature as KF
+    import numpy as np
+    import torch
+
+    vol.reload()
+    dev = torch.device("cuda")
+    disk = KF.DISK.from_pretrained("depth").to(dev).eval()
+    lg = KF.LightGlueMatcher("disk").eval().to(dev)
+    sift = cv2.SIFT_create(nfeatures=4000)
+
+    def load(cid: str):
+        bgr = cv2.imread(f"{ESK}/frame05/{cid}.jpg")
+        bgr = cv2.resize(bgr, (960, 540), interpolation=cv2.INTER_AREA)
+        return bgr
+
+    def inliers(p1, p2) -> int:
+        if len(p1) < 8:
+            return 0
+        _, mask = cv2.findFundamentalMat(np.float32(p1), np.float32(p2), cv2.USAC_MAGSAC, 1.0, 0.999, 10000)
+        return 0 if mask is None else int(mask.sum())
+
+    out = []
+    for a, b in pairs:
+        ia, ib = load(a), load(b)
+        # LightGlue
+        ta = torch.from_numpy(cv2.cvtColor(ia, cv2.COLOR_BGR2RGB)).permute(2, 0, 1).float().div(255)[None].to(dev)
+        tb = torch.from_numpy(cv2.cvtColor(ib, cv2.COLOR_BGR2RGB)).permute(2, 0, 1).float().div(255)[None].to(dev)
+        with torch.inference_mode():
+            fa, fb = disk(torch.cat([ta, tb]), n_features, pad_if_not_divisible=True)
+            ka, kb = fa.keypoints, fb.keypoints
+            la = KF.laf_from_center_scale_ori(ka[None], torch.ones(1, len(ka), 1, 1, device=dev))
+            lb = KF.laf_from_center_scale_ori(kb[None], torch.ones(1, len(kb), 1, 1, device=dev))
+            hw = torch.tensor(ta.shape[2:], device=dev)
+            _, idx = lg(fa.descriptors, fb.descriptors, la, lb, hw1=hw, hw2=hw)
+        idx = idx.cpu().numpy()
+        p1, p2 = ka.cpu().numpy()[idx[:, 0]], kb.cpu().numpy()[idx[:, 1]]
+        lg_matches, lg_inl = int(len(idx)), inliers(p1, p2)
+        # SIFT + ratio test
+        ga, gb = cv2.cvtColor(ia, cv2.COLOR_BGR2GRAY), cv2.cvtColor(ib, cv2.COLOR_BGR2GRAY)
+        k1, d1 = sift.detectAndCompute(ga, None)
+        k2, d2 = sift.detectAndCompute(gb, None)
+        good = []
+        if d1 is not None and d2 is not None and len(k2) >= 2:
+            for m in cv2.BFMatcher().knnMatch(d1, d2, k=2):
+                if len(m) == 2 and m[0].distance < 0.75 * m[1].distance:
+                    good.append(m[0])
+        s1 = [k1[m.queryIdx].pt for m in good]
+        s2 = [k2[m.trainIdx].pt for m in good]
+        out.append({"a_cam": _cid_meta(a)[1], "b_cam": _cid_meta(b)[1], "lg_matches": lg_matches,
+                    "lg_inliers": lg_inl, "sift_ratio_matches": len(good), "sift_inliers": inliers(s1, s2)})
+    return out
+
+
 # --------------------------------------------------------------------------- local entrypoint
 
 
@@ -620,6 +685,22 @@ def main(action: str = "pass1", ids_file: str = "", out: str = ""):
         res = report.remote()
         Path(out).write_text(json.dumps(res, indent=1), encoding="utf-8")
         print(json.dumps(res["group_counts"]))
+    elif action == "p7":
+        import random
+
+        with open(ROOT / "prereg" / "split.csv", newline="", encoding="utf-8") as fh:
+            train = [r["clip_id"] for r in csv.DictReader(fh) if r["split"] == "train"]
+        rnd = random.Random(7)
+        c9 = rnd.sample(sorted(c for c in train if _cid_meta(c)[1] == 9), 8)
+        c14 = rnd.sample(sorted(c for c in train if _cid_meta(c)[1] == 14), 8)
+        pairs = [[a, b] for a in c9 for b in c14]
+        pairs += [[c9[i], c9[i + 1]] for i in range(7)] + [[c14[i], c14[i + 1]] for i in range(7)]
+        res = p7_overlap.remote(pairs)
+        Path(out).write_text(json.dumps(res, indent=1), encoding="utf-8")
+        for kind in ((9, 14), (9, 9), (14, 14)):
+            sel = [r for r in res if (r["a_cam"], r["b_cam"]) == kind]
+            print(kind, len(sel), {k: [min(r[k] for r in sel), sorted(r[k] for r in sel)[len(sel) // 2],
+                                       max(r[k] for r in sel)] for k in ("lg_inliers", "sift_inliers")})
     elif action == "purge_test":
         print(json.dumps(purge_test.remote()))
     elif action == "check":
