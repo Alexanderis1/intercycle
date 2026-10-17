@@ -71,8 +71,21 @@ def main() -> None:
         from intercycle_sim.fake_sim import FakeBackend
 
         be = FakeBackend(cfg, boxes)
-        caster = make_static_caster(boxes, prefer_warp=False)
+        caster = make_static_caster(boxes, V, F, prefer_warp=bool(cfg.get("warp_cpu", True)), device="cpu")
     boot_s = time.time() - wall_boot
+    caster_check = None
+    if caster.name.startswith("warp") and boxes:
+        # cross-check the Warp mesh cast against the analytic box cast from the start pose (same rays)
+        from intercycle_sim.sensors import BoxCaster, LidarModel
+
+        s0 = be.state()
+        args = (float(s0["pos_w"][0]), float(s0["pos_w"][1]), float(s0["pos_w"][2]), yaw_of(s0["quat_wxyz"]), None)
+        rw = LidarModel(caster).true_ranges(*args)
+        rb = LidarModel(BoxCaster(boxes)).true_ranges(*args)
+        both = (rw < 24.99) | (rb < 24.99)
+        caster_check = {"rays": int(both.sum()), "max_abs_diff_m": float(np.abs(rw - rb)[both].max()) if both.any()
+                        else 0.0, "median_range_m": float(np.median(rw[both])) if both.any() else None}
+        print(f"[runner] warp vs box lidar check {caster_check}", flush=True)
     print(f"[runner] backend {be.name} ready in {boot_s:.1f}s, lidar static caster {caster.name}", flush=True)
 
     suite = SensorSuite(caster, be.dt, seed=int(cfg.get("seed", 0)), start=tuple(cfg.get("start", (0, 0, 0))))
@@ -140,7 +153,7 @@ def main() -> None:
     client.close()
     p1 = np.array(st["pos_w"][:2])
     summary = {
-        "backend": be.name, "policy": getattr(be, "policy_info", {}), "lidar_caster": caster.name,
+        "backend": be.name, "policy": getattr(be, "policy_info", {}), "lidar_caster": caster.name, "lidar_caster_check": caster_check,
         "boot_s": round(boot_s, 1), "sim_s": round(t, 2), "wall_s": round(wall, 2),
         "rtf": round(t / wall, 3) if wall > 0 else None,
         "rtf_physics_only": round(t / step_wall, 3) if step_wall > 0 else None,

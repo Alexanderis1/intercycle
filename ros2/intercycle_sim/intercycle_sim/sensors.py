@@ -87,30 +87,54 @@ class BoxCaster:
         return ray_boxes(float(origin[0]), float(origin[1]), dirs[:, 0], dirs[:, 1], self.b, float(origin[2]), rmax)
 
 
+try:  # Warp ships with Isaac Lab (python 3.11); the ROS-side python does not need it
+    import warp as _wp
+
+    @_wp.kernel
+    def _warp_cast(mesh: _wp.uint64, origin: _wp.vec3, dirs: _wp.array(dtype=_wp.vec3), rmax: float,
+                   out: _wp.array(dtype=float)):
+        i = _wp.tid()
+        q = _wp.mesh_query_ray(mesh, origin, dirs[i], rmax)
+        if q.result:
+            out[i] = q.t
+        else:
+            out[i] = rmax
+except Exception:  # noqa: BLE001
+    _wp = None
+    _warp_cast = None
+
+
+def _warp_kernel():
+    if _warp_cast is None:
+        raise ImportError("warp not available")
+    return _warp_cast
+
+
 class WarpMeshCaster:
-    """Warp ray-cast against the one static triangle mesh (uses Isaac Lab's Warp utilities; GPU if available)."""
+    """Warp ray-cast (wp.mesh_query_ray, BVH) against the ONE static L0 triangle mesh; GPU or CPU."""
 
     name = "warp-mesh"
 
     def __init__(self, vertices: np.ndarray, faces: np.ndarray, device: str = "cuda:0"):
-        import torch
-        from isaaclab.utils.warp import convert_to_warp_mesh
+        import warp as wp
 
-        self.torch = torch
+        wp.init()
+        self.wp = wp
         self.device = device
-        self.mesh = convert_to_warp_mesh(np.asarray(vertices, np.float32), np.asarray(faces, np.int32), device=device)
+        self._pts = wp.array(np.asarray(vertices, np.float32), dtype=wp.vec3, device=device)
+        self._idx = wp.array(np.asarray(faces, np.int32).ravel(), dtype=wp.int32, device=device)
+        self.mesh = wp.Mesh(points=self._pts, indices=self._idx)
+        self.kernel = _warp_kernel()
+        self.name = f"warp-mesh ({device}, {len(faces)} tris)"
 
     def cast(self, origin: np.ndarray, dirs: np.ndarray, rmax: float) -> np.ndarray:
-        from isaaclab.utils.warp import raycast_mesh
-
-        th = self.torch
+        wp = self.wp
         n = dirs.shape[0]
-        st = th.tensor(np.repeat(np.asarray(origin, np.float32)[None, :], n, 0), device=self.device)[None]
-        dr = th.tensor(np.asarray(dirs, np.float32), device=self.device)[None]
-        _, dist, _, _ = raycast_mesh(st, dr, self.mesh, max_dist=float(rmax), return_distance=True)
-        d = dist[0].detach().cpu().numpy().astype(float)
-        d[~np.isfinite(d)] = rmax
-        return np.minimum(d, rmax)
+        d = wp.array(np.asarray(dirs, np.float32), dtype=wp.vec3, device=self.device)
+        out = wp.zeros(n, dtype=float, device=self.device)
+        o = wp.vec3(float(origin[0]), float(origin[1]), float(origin[2]))
+        wp.launch(self.kernel, dim=n, inputs=[self.mesh.id, o, d, float(rmax), out], device=self.device)
+        return np.minimum(out.numpy().astype(float), rmax)
 
 
 def make_static_caster(boxes: list[dict], vertices=None, faces=None, prefer_warp: bool = True, device: str = "cuda:0"):
