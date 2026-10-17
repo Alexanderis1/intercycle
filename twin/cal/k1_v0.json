@@ -1,0 +1,186 @@
+{
+ "_doc": "CAL v0 lens distortion, one division-model k1 per framing (probe P6, PLAN_TWIN \u00a73). x_u = c + (x_d - c) / (1 + k1 r_d^2), r_d in px of the 1920x1080 frame, c = image centre; k1_norm = k1 * 1330^2. opencv: K and the rational dist vector for cv2.undistortPoints(P=K). Sources are TRAIN clip ids only.",
+ "center": [
+  959.5,
+  539.5
+ ],
+ "f_norm": 1330.0,
+ "c9_f0": {
+  "lines": {
+   "A_center_yellow_stripe": {
+    "n_pts": 94,
+    "len_px": 780.1,
+    "rms_raw_px": 1.347
+   },
+   "B_green_walkway_left_yellow_line": {
+    "n_pts": 187,
+    "len_px": 1116.1,
+    "rms_raw_px": 8.987
+   },
+   "C_green_walkway_inner_yellow_line": {
+    "n_pts": 81,
+    "len_px": 480.5,
+    "rms_raw_px": 1.887
+   }
+  },
+  "k1": -1.6615472844870373e-07,
+  "k1_norm": -0.293911099152912,
+  "at_bound": false,
+  "rms_after_px": {
+   "A_center_yellow_stripe": 1.018,
+   "B_green_walkway_left_yellow_line": 0.485,
+   "C_green_walkway_inner_yellow_line": 0.335
+  },
+  "single_line_k1_norm": {
+   "A_center_yellow_stripe": -0.231,
+   "B_green_walkway_left_yellow_line": -0.2941,
+   "C_green_walkway_inner_yellow_line": -0.3099
+  },
+  "leave_one_out_k1_norm": {
+   "A_center_yellow_stripe": -0.2947,
+   "B_green_walkway_left_yellow_line": -0.2895,
+   "C_green_walkway_inner_yellow_line": -0.2933
+  },
+  "opencv": {
+   "K": [
+    [
+     1330.0,
+     0.0,
+     959.5
+    ],
+    [
+     0.0,
+     1330.0,
+     539.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "dist": [
+    1.2660744870747938,
+    0.3551786373653285,
+    0.0,
+    0.0,
+    0.011996596899739337,
+    1.5599853861565596,
+    0.6409130133094909,
+    0.05775679469881198
+   ],
+   "max_err_px": 7.492235134293272e-06
+  },
+  "source_clip_ids": [
+   "0_te23",
+   "0_tr125",
+   "1_tr43",
+   "1_tr52",
+   "2_te6",
+   "2_te7",
+   "2_tr109",
+   "2_tr115",
+   "2_tr28",
+   "2_tr56",
+   "2_tr59",
+   "2_tr65",
+   "2_tr66",
+   "2_tr68",
+   "2_tr75",
+   "2_tr8",
+   "2_tr83",
+   "2_tr86",
+   "2_tr92",
+   "2_tr93",
+   "4_te21",
+   "4_tr11",
+   "5_te3",
+   "5_tr1",
+   "6_te13"
+  ],
+  "ref_clip_id": "0_te21"
+ },
+ "c14_f0": {
+  "lines": {
+   "A_yellow_floor_line": {
+    "n_pts": 101,
+    "len_px": 768.0,
+    "rms_raw_px": 1.322
+   },
+   "C_white_column_left_edge_top": {
+    "n_pts": 18,
+    "len_px": 103.1,
+    "rms_raw_px": 0.359
+   }
+  },
+  "k1": -6.680282637891393e-08,
+  "k1_norm": -0.11816751958166084,
+  "at_bound": false,
+  "rms_after_px": {
+   "A_yellow_floor_line": 1.239,
+   "C_white_column_left_edge_top": 0.378
+  },
+  "single_line_k1_norm": {
+   "A_yellow_floor_line": -0.1225,
+   "C_white_column_left_edge_top": 0.4
+  },
+  "opencv": {
+   "K": [
+    [
+     1330.0,
+     0.0,
+     959.5
+    ],
+    [
+     0.0,
+     1330.0,
+     539.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "dist": [
+    0.5589432732900401,
+    0.07287332306015809,
+    0.0,
+    0.0,
+    0.0012493831863027438,
+    0.6771107926163571,
+    0.12495870735301519,
+    0.0053558195404968395
+   ],
+   "max_err_px": 1.5921750168542442e-08
+  },
+  "source_clip_ids": [
+   "3_te4",
+   "3_tr12",
+   "3_tr16",
+   "3_tr20",
+   "3_tr22",
+   "3_tr23",
+   "3_tr31",
+   "3_tr34",
+   "3_tr35",
+   "3_tr39",
+   "3_tr40",
+   "3_tr46",
+   "3_tr48",
+   "7_te1",
+   "7_te2",
+   "7_te6",
+   "7_te7",
+   "7_tr10",
+   "7_tr11",
+   "7_tr12",
+   "7_tr15",
+   "7_tr16",
+   "7_tr18",
+   "7_tr3",
+   "7_tr6"
+  ],
+  "ref_clip_id": "3_te1"
+ }
+}
