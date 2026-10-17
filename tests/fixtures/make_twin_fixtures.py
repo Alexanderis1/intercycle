@@ -76,7 +76,8 @@ def tasks() -> None:
 
 def safety() -> None:
     rules = [{"press_state": "running", "action": "trip"}, {"press_state": "idle", "action": "hold"},
-             {"press_state": "stopped", "action": "allow"}]
+             {"press_state": "stopped", "action": "allow"}, {"press_state": "tripped", "action": "hold"},
+             {"press_state": "held", "action": "hold"}, {"press_state": "resetting", "action": "hold"}]
     data = {"contract": "twin.safety/1", "site_id": "fixture_site", "presses": [
         {"press": "P9a", "guard": {"type": "ASSUMED", "device": "light_curtain", "reset": "manual"},
          "reset": {"family": "lognormal", "median_s": 240.0, "p90_s": 900.0, "sweep_s": {"lo": 60.0, "hi": 900.0}},

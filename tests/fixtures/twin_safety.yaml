@@ -13,6 +13,9 @@ presses:
   - {press_state: running, action: trip}
   - {press_state: idle, action: hold}
   - {press_state: stopped, action: allow}
+  - {press_state: tripped, action: hold}
+  - {press_state: held, action: hold}
+  - {press_state: resetting, action: hold}
 - press: P14a
   guard:
     type: OBSERVED

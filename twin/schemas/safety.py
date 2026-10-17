@@ -14,6 +14,9 @@ from twin.schemas.common import Interval, Strict, unique
 
 Z90 = 1.2815515655446004                     # standard normal 0.9 quantile
 U4_MEDIAN_S, U4_P90_S = 240.0, 900.0
+U4_SWEEP_S = (60.0, 900.0)                   # U4: the reset-time sweep is 1-15 min (descriptive)
+# Every press state of the realised stream (twin/schemas/runs.py RealisedPress.state) needs exactly one entry rule.
+PRESS_STATES = ("running", "idle", "stopped", "tripped", "held", "resetting")
 
 
 class Guard(Strict):
@@ -46,8 +49,10 @@ class ResetDist(Strict):
 
 class EntryRule(Strict):
     """What the safety system does when the robot enters the (dilated) danger polygon in a press state.
-    trip = robot-caused press stop (reset needed); hold = the press restart is delayed while the robot is inside."""
-    press_state: Literal["running", "idle", "stopped"]
+    trip = robot-caused press stop (reset needed); hold = the press restart is delayed while the robot is inside;
+    allow = no effect. tripped / held / resetting are the states after a trip or during a hold or a manual reset;
+    they need their own rule (the plant never infers one from running / idle / stopped)."""
+    press_state: Literal["running", "idle", "stopped", "tripped", "held", "resetting"]
     action: Literal["trip", "hold", "allow"]
 
 
@@ -55,11 +60,13 @@ class PressSafety(Strict):
     press: str
     guard: Guard
     reset: ResetDist
-    entry_rules: list[EntryRule] = Field(min_length=3, max_length=3)
+    entry_rules: list[EntryRule] = Field(min_length=len(PRESS_STATES), max_length=len(PRESS_STATES))
 
     @model_validator(mode="after")
     def _rules(self):
         unique([r.press_state for r in self.entry_rules], f"entry rule state of press {self.press}")
+        if {r.press_state for r in self.entry_rules} != set(PRESS_STATES):
+            raise ValueError(f"press {self.press}: entry rules must cover every press state {PRESS_STATES}")
         g = self.guard
         if g.type == "ASSUMED":
             if g.device != "light_curtain" or g.reset != "manual":
@@ -68,6 +75,8 @@ class PressSafety(Strict):
                 raise ValueError(f"press {self.press}: an ASSUMED guard has no evidence clips")
             if (self.reset.median_s, self.reset.p90_s) != (U4_MEDIAN_S, U4_P90_S):
                 raise ValueError(f"press {self.press}: ASSUMED reset must be lognormal median 240 s, p90 900 s (U4)")
+            if (self.reset.sweep_s.lo, self.reset.sweep_s.hi) != U4_SWEEP_S:
+                raise ValueError(f"press {self.press}: ASSUMED reset sweep must be 60-900 s (U4: 1-15 min)")
         elif not g.evidence_clips:
             raise ValueError(f"press {self.press}: an OBSERVED guard needs evidence clips")
         return self

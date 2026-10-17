@@ -2,13 +2,16 @@
   "$defs": {
     "EntryRule": {
       "additionalProperties": false,
-      "description": "What the safety system does when the robot enters the (dilated) danger polygon in a press state.\ntrip = robot-caused press stop (reset needed); hold = the press restart is delayed while the robot is inside.",
+      "description": "What the safety system does when the robot enters the (dilated) danger polygon in a press state.\ntrip = robot-caused press stop (reset needed); hold = the press restart is delayed while the robot is inside;\nallow = no effect. tripped / held / resetting are the states after a trip or during a hold or a manual reset;\nthey need their own rule (the plant never infers one from running / idle / stopped).",
       "properties": {
         "press_state": {
           "enum": [
             "running",
             "idle",
-            "stopped"
+            "stopped",
+            "tripped",
+            "held",
+            "resetting"
           ],
           "title": "Press State",
           "type": "string"
@@ -112,8 +115,8 @@
           "items": {
             "$ref": "#/$defs/EntryRule"
           },
-          "maxItems": 3,
-          "minItems": 3,
+          "maxItems": 6,
+          "minItems": 6,
           "title": "Entry Rules",
           "type": "array"
         }

@@ -123,8 +123,24 @@ def test_safety_enforces_u4_for_assumed_guards():
     bad = copy.deepcopy(d)
     bad["presses"][1]["guard"]["evidence_clips"] = []
     _expect_invalid(S.Safety, bad, "evidence")
+    bad = copy.deepcopy(d)
+    bad["presses"][0]["reset"]["sweep_s"] = {"lo": 60.0, "hi": 1800.0}       # U4 sweep is 1-15 min
+    _expect_invalid(S.Safety, bad, "sweep")
+    for state in ("tripped", "held", "resetting"):
+        bad = copy.deepcopy(d)
+        bad["presses"][0]["entry_rules"] = [r for r in bad["presses"][0]["entry_rules"] if r["press_state"] != state]
+        _expect_invalid(S.Safety, bad, "entry_rules")
+        bad["presses"][0]["entry_rules"].append({"press_state": "running", "action": "allow"})   # duplicate state
+        _expect_invalid(S.Safety, bad, "duplicate")
     ps = S.Safety.model_validate(d).presses[0].reset
     assert ps.sigma == pytest.approx(math.log(900 / 240) / 1.2815515655446004)
+
+
+def test_entry_rules_cover_every_realised_press_state():
+    from typing import get_args
+
+    from twin.schemas import safety as SF
+    assert set(SF.PRESS_STATES) == set(get_args(RU.RealisedPress.model_fields["state"].annotation))
 
 
 def test_dynamics_rules():
