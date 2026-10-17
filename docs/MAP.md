@@ -49,7 +49,11 @@ import `intercycle.truth` or `intercycle.sim` (tested).
   1 + max(6 %, 3 s / period) the machine is **overdue = bin 16 ("stopped")**. Period, jitter, busy fraction come from the
   rise-to-rise intervals (stops excluded). `observer.learn_cycles.learn` is run on the buffered signals every 15 min and seeds
   rows the online estimate cannot resolve; its agreement is kept in `tracker.learner_agreement`.
-* **Production state**: the public calendar (`scn.line_stops()`) gives `break` and `shift_change`; otherwise the line index
+* **Production state** (v4, audit 17 Oct): the DISCOVERED line state of workstream P (`PhaseModel.line_state`, passed as
+  `ConditionTracker(line_state=...)` / `MapBuilder(phase_model=...)`); without a model only the motion rule below (line
+  stopped too long = andon / stopped, else running). The public calendar is never an input of a published number
+  (`calendar=True` exists for the layer-mechanics unit tests only). v3 text, superseded:
+  the public calendar (`scn.line_stops()`) gave `break` and `shift_change`; otherwise the line index
   being overdue (stopped longer than its learned cycle allows) gives `andon`; else `running`.
 
 ## 3. The learned map
@@ -140,7 +144,7 @@ ground truth = `truth/kinematics.py` sampled every 0.1 s over 5 min, used only f
 | broadcast box covers (<= 24 boxes) | coverage 99.4 - 100 %, false area 5.7 % |
 | phase specificity (S30, S80, HEM1, SEAL1) | the bin's envelope covers 96.6 % of what moves in that phase, the opposite phase 59 %; one bin = 44 % of the all-phase union |
 | phase bin vs kinematics' own cycle phase (+-1 bin) | 96.5 - 99.9 % of ticks, phase known 100 % after warm-up |
-| production state | break labelled 100 %, andon recall 100 % (ticks after the missed index), 0 false andon while running |
+| production state | (v3 number removed by the 17 Oct audit: it used the public calendar as an input; see MAP_RESULTS for the discovered state) |
 | break people crowd, north aisle x < 60 m, z 30-34 m | expected people 27.7 in break vs 8.6 running (3.2x), peak cell occupancy 0.92 vs 0.38 |
 | codec round trip | box covers identical; 14,380 L2/L3 cells with p >= 3 %: 0 off by more than 2 codes; heading mismatches 9.8 % (hysteresis); same fallback behaviour |
 | tamper | flipped manifest bit, forged map (other key), unknown key id, altered chunk with valid CRC, flipped chunk bit, expired and stale-version replay, wrong site: all rejected, no map accepted |
