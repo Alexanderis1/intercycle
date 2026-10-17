@@ -27,6 +27,7 @@ class PathAgent:
     loop: bool = True                  # False = back and forth
     pause_s: float = 0.0               # dwell at every vertex
     windows: list[tuple[float, float]] = field(default_factory=list)   # time-of-day presence; empty = always
+    lane: float | None = None          # keep-right offset override (None = class default)
     _seg: list[float] = field(init=False, default_factory=list)
 
     def __post_init__(self):
@@ -73,13 +74,16 @@ def agents(scn: Scenario, seed: int) -> list[PathAgent]:
         out.append(PathAgent(f"AGV{k}", MoverClass.AGV, loop, 1.2, phase_s=k * L / 4 / 1.2 + rng.uniform(0, 10), pause_s=4.0))
     # tugger trains on the transport aisle
     for k in range(2):
-        out.append(PathAgent(f"TUG{k}", MoverClass.TUGGER, [(10, 8), (86, 8)], 1.8, phase_s=rng.uniform(0, 100), loop=False, pause_s=40.0))
+        out.append(PathAgent(f"TUG{k}", MoverClass.TUGGER, [(14, 7.0), (86, 7.0), (88, 9.0), (16, 9.0)], 1.8,
+                             phase_s=k * 60.0 + rng.uniform(0, 20), loop=True, pause_s=10.0, lane=0.0))
     # forklifts: market -> line ends -> closures cells along the north aisle (crosses the robot's main route)
     for k, x in enumerate((3.0, 90.0, 52.5)):
         route = [(x, 3.0), (x, 32.0), (21.0 if k != 1 else 46.0, 32.0), (21.0 if k != 1 else 46.0, 35.5)]
-        if k == 2:
-            route = [(52.5, 3.0), (52.5, 10.0), (88.0, 10.0), (88.0, 3.0)]
-        out.append(PathAgent(f"FL{k}", MoverClass.FORKLIFT, route, 1.6, phase_s=rng.uniform(0, 200), loop=False, pause_s=25.0))
+        lane = None
+        if k == 2:                                   # market-aisle forklift: its own marked lane, clear of the transport aisle
+            route, lane = [(52.5, 5.6), (88.0, 5.6)], 0.0
+        out.append(PathAgent(f"FL{k}", MoverClass.FORKLIFT, route, 1.6, phase_s=rng.uniform(0, 200), loop=False, pause_s=25.0,
+                             lane=lane))
     # people: walkers along the north and south aisles (shift-dependent presence)
     day = [(6 * 3600, 22 * 3600)]
     for k in range(10):
@@ -94,7 +98,7 @@ def agents(scn: Scenario, seed: int) -> list[PathAgent]:
         for k in range(6):
             x0 = 12 + 9 * k
             dur = (x0 - 3) / 1.2
-            out.append(PathAgent(f"BRK{int(b.t0)}_{k}", MoverClass.PERSON, [(x0, 31.0 + 0.4 * k % 2), (3.0, 31.5)], 1.2,
+            out.append(PathAgent(f"BRK{int(b.t0)}_{k}", MoverClass.PERSON, [(x0, 31.0 + 0.8 * (k % 2)), (3.5 + 1.1 * (k % 3), 30.8 + 1.4 * (k // 3))], 1.2,
                                  phase_s=-b.t0, loop=False, pause_s=b.minutes * 60 - dur,
                                  windows=[(b.t0 - 5, b.t1 + dur + 5)]))
     # data-hall technicians

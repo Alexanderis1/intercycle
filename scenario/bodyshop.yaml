@@ -45,8 +45,8 @@ machines:
   - {id: S20, kind: weld_station,  on_line: true,  x: 21, z: 24, size: [8, 11], busy: 0.80, offset_s: 1.5}
   - {id: S30, kind: weld_station,  on_line: true,  x: 30, z: 24, size: [8, 11], busy: 0.80, offset_s: 3.0}
   - {id: S40, kind: weld_station,  on_line: true,  x: 39, z: 24, size: [8, 11], busy: 0.80, offset_s: 4.5}
-  - {id: S50, kind: framing,       on_line: true,  x: 48, z: 24, size: [8, 11], busy: 0.90, offset_s: 6.0}
-  - {id: S60, kind: respot,        on_line: true,  x: 57, z: 24, size: [8, 11], busy: 0.70, offset_s: 7.5}
+  - {id: S50, kind: framing,       on_line: true,  x: 47.5, z: 24, size: [7, 11], busy: 0.90, offset_s: 6.0}   # 3 m walkway gap to S60
+  - {id: S60, kind: respot,        on_line: true,  x: 57.5, z: 24, size: [7, 11], busy: 0.70, offset_s: 7.5}
   - {id: S70, kind: respot,        on_line: true,  x: 66, z: 24, size: [8, 11], busy: 0.70, offset_s: 9.0}
   - {id: S80, kind: unload_lifter, on_line: true,  x: 78, z: 24, size: [10, 9], busy: 0.40, offset_s: 10.5}
   - {id: HEM1, kind: roller_hemming, on_line: false, x: 21, z: 41, size: [10, 8], period_s: 45.0, busy: 0.65, jitter: 0.008, stops_per_h: 2.0, stop_s: [5, 30]}

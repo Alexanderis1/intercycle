@@ -23,7 +23,7 @@ from pathlib import Path
 import modal
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
+REPO = HERE.parents[1] if len(HERE.parents) > 1 else HERE   # /root inside the container
 GPU = os.environ.get("INTERCYCLE_BLENDER_GPU", "L4")
 BPY = "bpy==4.5.14"
 
