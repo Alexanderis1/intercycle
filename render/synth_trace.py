@@ -1,6 +1,12 @@
 """Synthetic trace.parquet for exercising the render pipelines before the real sim trace exists.
 
     python render/synth_trace.py --out render/out/trace_synth.parquet [--minutes 4]
+    python render/synth_trace.py --movers sim --minutes 15 --out D:/icdata/renders/trace_sim15.parquet
+
+`--movers sim` replaces the hand-made walkers/vehicles with the sim's own movers (intercycle/truth/agents.py: AGVs,
+tuggers, forklifts, aisle walkers, data-hall techs; break crowds when a break falls in the window), sampled every
+MOVER_DT s on their unobstructed paths (the sim's MoverSystem may still hold them for obstacles). Run it with the
+repo's Python (needs pydantic). Machines and the hero AMR stay synthetic either way.
 
 Follows the TRACE CONTRACT documented at the top of render/isaac/replay.py (t, entity_id, cls, x, z,
 yaw, state). Machines cycle ACTIVE/IDLE from bodyshop.yaml (line stations on one takt, cells on their
@@ -12,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -19,9 +26,30 @@ import pandas as pd
 import yaml
 
 DAY0_T = 10 * 3600.0     # 10:00 sim time (line running)
+MOVER_DT = 0.25          # s between samples of the sim movers (--movers sim)
 
 
-def build(scn: dict, minutes: float, seed: int = 3) -> pd.DataFrame:
+def sim_movers(t0: float, t1: float, seed: int, scenario_path: str) -> list[tuple]:
+    """Rows for every intercycle.truth.agents mover present in [t0, t1], one sample every MOVER_DT s while present."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))            # repo root -> intercycle package
+    from intercycle.scenario import load
+    from intercycle.truth.agents import agents
+    from intercycle.types import MoverClass
+    cls = {MoverClass.PERSON: "person", MoverClass.AGV: "agv", MoverClass.TUGGER: "tugger", MoverClass.FORKLIFT: "forklift"}
+    rows = []
+    ts = np.arange(t0, t1 + 1e-9, MOVER_DT)
+    for a in agents(load(scenario_path), seed):
+        if a.cls not in cls:
+            continue
+        state = "walk" if a.cls == MoverClass.PERSON else "drive"
+        for t in ts:
+            st = a.state(float(t))
+            if st is not None:
+                rows.append((float(t), a.id, cls[a.cls], st[0], st[1], math.nan, state))
+    return rows
+
+
+def build(scn: dict, minutes: float, seed: int = 3, movers: str = "synth", scenario_path: str = "") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     t0, t1 = DAY0_T, DAY0_T + minutes * 60
     rows: list[tuple] = []
@@ -50,6 +78,9 @@ def build(scn: dict, minutes: float, seed: int = 3) -> pd.DataFrame:
             (idle_start + 60.0, 108.0, 21.0, "inspect")]
     for t, x, z, st in path:
         rows.append((t, "robot_B", "wheeled_inspection_amr", x, z, math.nan, st))
+    if movers == "sim":
+        rows += sim_movers(t0, t1, seed, scenario_path)
+        return pd.DataFrame(rows, columns=["t", "entity_id", "cls", "x", "z", "yaw", "state"]).sort_values(["entity_id", "t"])
     # traffic
     for i in range(6):
         x0, x1 = rng.uniform(5, 40), rng.uniform(55, 90)
@@ -67,9 +98,11 @@ def main() -> None:
     ap.add_argument("--scenario", default="scenario/bodyshop.yaml")
     ap.add_argument("--out", default="render/out/trace_synth.parquet")
     ap.add_argument("--minutes", type=float, default=4.0)
+    ap.add_argument("--movers", choices=("synth", "sim"), default="synth", help="hand-made traffic or the sim's agents.py movers")
+    ap.add_argument("--seed", type=int, default=3)
     a = ap.parse_args()
     scn = yaml.safe_load(open(a.scenario, encoding="utf-8"))
-    df = build(scn, a.minutes)
+    df = build(scn, a.minutes, a.seed, a.movers, a.scenario)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(a.out)
     print(f"wrote {a.out}: {len(df)} rows, {df.entity_id.nunique()} entities")

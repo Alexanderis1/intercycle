@@ -37,6 +37,7 @@ core = rb.core
 CCTV_Z = 9.0
 FORKLIFT_YAW_DEG = 90.0       # forklift_c forks point to -Y in the library; +90 deg turns them to +X
 BODY_CORNER = (2.1, 0.8)     # m from the station centre: where the corner robots weld (BIW is 4.65 x 1.74 m)
+COMPARE_LINE_X, COMPARE_LINE_Z, COMPARE_LINE_DX = 15.5, 7.0, 14.0   # compare_line camera: x, height, look-at run (m)
 FRAME_Z = 4.4               # m, top of the overhead cell frame (dress cables, trays); CCTV at 9 m looks over it
 END_REACH = 1.8             # m, base -> gun tip of the FANUC weld poses (fanuc.WELD_Q)
 ARM_REACH_STANDOFF = 2.65    # m, line centre -> FANUC base for on-line cells
@@ -130,9 +131,9 @@ class RealScene(rb.BScene):
                 if cabinet and m.get("on_line"):                 # robot controller + weld timer behind each corner robot
                     sg = 1 if y > cy else -1
                     yc = cy + sg * (d / 2 - 0.45)
-                    self.box(name + "_ctrl", (0.75, 0.55, 1.45), (x, yc, 0.73), plant.mat(self, "ral7035"))
+                    self.box(name + "_ctrl", (0.75, 0.55, 1.45), (x, yc, 0.73), self.rounded(plant.mat(self, "ral7035"), 0.012))
                     self.box(name + "_ctrl_hmi", (0.2, 0.01, 0.15), (x, yc - sg * 0.28, 1.1), plant.glow_cam_only(self, "hmi", (0.2, 0.5, 0.9), 2.0))
-                    self.box(name + "_valve", (0.5, 0.25, 0.35), (x + 0.65, yc, 1.2), plant.mat(self, "steel_grey"))
+                    self.box(name + "_valve", (0.5, 0.25, 0.35), (x + 0.65, yc, 1.2), self.rounded(plant.mat(self, "steel_grey")))
             if m.get("on_line") and kind in ("weld_station", "respot", "framing"):
                 bases = [(x, y) for _, x, y, _, _, _ in places]
                 for name, x, y, yaw, _, _ in places:
@@ -149,14 +150,14 @@ class RealScene(rb.BScene):
             px, py = x - sd * 0.85 * hy - 0.3 * hx, y + sd * 0.85 * hx - 0.3 * hy
             if abs(px - cx) > w / 2 - 0.3 or abs(py - cy) > d / 2 - 0.3 or abs(py - cy) < 1.6:
                 continue
-            clear = min(math.hypot(px - bx, py - by) for bx, by in bases)
+            clear = min(math.hypot(px - bx, py - by) for bx, by in bases if (bx, by) != (x, y))   # other robots only
             if best is None or clear > best[0]:
                 best = (clear, px, py)
         if best is None or best[0] < 0.7:
             return
         _, px, py = best
-        self.box(name + "_td_post", (0.14, 0.14, 1.0), (px, py, 0.5), plant.mat(self, "steel_grey"))
-        self.box(name + "_td_head", (0.3, 0.22, 0.16), (px, py, 1.08), plant.mat(self, "ral7035"))
+        self.box(name + "_td_post", (0.14, 0.14, 1.0), (px, py, 0.5), self.rounded(plant.mat(self, "steel_grey")))
+        self.box(name + "_td_head", (0.3, 0.22, 0.16), (px, py, 1.08), self.rounded(plant.mat(self, "ral7035")))
         self.cyl(name + "_td_motor", 0.06, 0.22, (px, py, 1.27), plant.mat(self, "dark_steel"))
 
     def _cell_frame(self, m, places):
@@ -305,33 +306,70 @@ class RealScene(rb.BScene):
                     break
         return self._font
 
+    def rounded(self, m, radius: float = 0.006):
+        """Copy of material `m` with a Cycles Bevel node on the normal: rounded edges in shading, at a radius in
+        metres whatever the box's scale (a Bevel modifier on these scaled unit cubes would stretch)."""
+        name = f"{m.name}_rnd{radius:g}"                       # radius in the key: one copy per radius
+        if name in self.mats:
+            return self.mats[name]
+        r = m.copy()
+        r.name = name
+        nt = r.node_tree
+        bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+        bev = nt.nodes.new("ShaderNodeBevel")
+        bev.samples = 4
+        bev.inputs["Radius"].default_value = radius
+        old = next((lk for lk in nt.links if lk.to_socket == bsdf.inputs["Normal"]), None)
+        if old is not None:                                    # keep the bump: it feeds the bevel
+            nt.links.new(old.from_socket, bev.inputs["Normal"])
+            nt.links.remove(old)
+        nt.links.new(bev.outputs["Normal"], bsdf.inputs["Normal"])
+        self.mats[name] = r
+        return r
+
+    def _clamp_unit(self, name, x, y, z, s, red, steel, cyl_m, dark):
+        """Pneumatic toggle clamp on a locator: riser block, locating pin, cylinder, clamp arm reaching over the sill
+        towards the body (side s = +1 north / -1 south of the line)."""
+        self.box(name + "_blk", (0.14, 0.12, 0.1), (x, y, z + 0.05), steel)
+        self.cyl(name + "_pin", 0.012, 0.05, (x, y - s * 0.03, z + 0.125), steel)
+        self.cyl(name + "_cyl", 0.035, 0.17, (x + 0.08, y + s * 0.02, z + 0.02), cyl_m)
+        self.box(name + "_piv", (0.05, 0.07, 0.06), (x + 0.08, y + s * 0.02, z + 0.135), dark)
+        arm = self.box(name + "_arm", (0.035, 0.24, 0.04), (x + 0.08, y - s * 0.07, z + 0.17), red)
+        arm.rotation_euler = (math.radians(-12 * s), 0.0, 0.0)
+
     def _fixture(self, m):
-        """Body fixture: a dark base table under the skid, locating pins, pneumatic clamps (blue bodies, red arms)."""
+        """Body fixture: locators with pins and pneumatic toggle clamps on welded risers, base rails, valve terminals.
+        Edges are rounded in shading (`rounded`) so the risers and clamps do not read as primitives."""
         mid, cx, cy = m["id"], m["x"], m["z"]
         on = m.get("on_line")
-        dark = plant.mat(self, "dark_steel")
+        dark = self.rounded(plant.mat(self, "dark_steel"))
+        steel = self.rounded(plant.mat(self, "steel_grey"))
+        cyl_m = self.rounded(plant.mat(self, "galv"), 0.01)
         if not on:
             self.box(f"fx_{mid}_table", (4.2, 2.2, 0.85), (cx, cy, 0.425), dark)
             self._biw_static(f"fx_{mid}_part", cx, cy, 0.85, panel=True)
-        blue = plant.proc_mat(self, "clamp_blue", (0.05, 0.2, 0.55), rough=0.35, var=0.06, bump=0.0, grime=0.2)
-        red = plant.proc_mat(self, "clamp_red", (0.6, 0.05, 0.03), rough=0.35, var=0.06, bump=0.0, grime=0.2)
-        for k in range(6):
+        blue = self.rounded(plant.proc_mat(self, "clamp_blue", (0.05, 0.2, 0.55), rough=0.35, var=0.06, bump=0.0, grime=0.2))
+        red = self.rounded(plant.proc_mat(self, "clamp_red", (0.6, 0.05, 0.03), rough=0.35, var=0.06, bump=0.0, grime=0.2))
+        for k in range(6):                                     # sill locators along both sides of the skid
             x = cx - 2.0 + k * 0.8
             for s in (-1, 1):
                 y = cy + s * (0.95 if on else 1.2)
-                self.box(f"fx_{mid}_cb{k}{s}", (0.12, 0.12, 0.55), (x, y, 0.55 + (0.0 if on else 0.4)), blue)
-                self.box(f"fx_{mid}_ca{k}{s}", (0.06, 0.25, 0.06), (x, y - s * 0.12, 0.85 + (0.0 if on else 0.4)), red)
+                z0 = 0.0 if on else 0.85
+                self.box(f"fx_{mid}_cb{k}{s}", (0.12, 0.12, 0.5), (x, y, z0 + 0.25), blue)            # riser
+                self.box(f"fx_{mid}_cbp{k}{s}", (0.22, 0.22, 0.02), (x, y, z0 + 0.01), steel)         # foot plate
+                self._clamp_unit(f"fx_{mid}_cu{k}{s}", x, y, z0 + 0.5, s, red, steel, cyl_m, dark)
         if on:                                                 # tooling frame both sides of the skid, as in real BIW cells
-            white = plant.proc_mat(self, "tool_white", (0.8, 0.8, 0.78), rough=0.4, var=0.05, bump=0.0, grime=0.3)
+            white = self.rounded(plant.proc_mat(self, "tool_white", (0.8, 0.8, 0.78), rough=0.4, var=0.05, bump=0.0, grime=0.3))
             for s in (-1, 1):
                 y = cy + s * 1.3
                 self.box(f"fx_{mid}_rail{s}", (5.2, 0.3, 0.3), (cx, y, 0.15), red)
                 for k in range(4):
                     x = cx - 2.1 + k * 1.4
-                    self.box(f"fx_{mid}_tw{k}{s}", (0.18, 0.18, 0.75), (x, y, 0.65), red)
-                    self.box(f"fx_{mid}_tp{k}{s}", (0.3, 0.3, 0.04), (x, y, 1.04), white)
-                    self.box(f"fx_{mid}_tc{k}{s}", (0.08, 0.35, 0.08), (x, y - s * 0.2, 1.1), plant.mat(self, "dark_steel"))
-                self.box(f"fx_{mid}_vt{s}", (0.6, 0.2, 0.3), (cx + 2.2, y + s * 0.3, 0.5), plant.mat(self, "galv"))
+                    self.box(f"fx_{mid}_tw{k}{s}", (0.18, 0.18, 0.72), (x, y, 0.66), red)            # welded riser
+                    self.box(f"fx_{mid}_tg{k}{s}", (0.03, 0.2, 0.3), (x - 0.1, y, 0.5), red)         # gusset
+                    self.box(f"fx_{mid}_tp{k}{s}", (0.3, 0.3, 0.03), (x, y, 1.035), white)           # top plate
+                    self._clamp_unit(f"fx_{mid}_tc{k}{s}", x, y - s * 0.05, 1.05, s, dark, steel, cyl_m, dark)
+                self.box(f"fx_{mid}_vt{s}", (0.6, 0.2, 0.3), (cx + 2.2, y + s * 0.3, 0.5), cyl_m)     # valve terminal
 
     def _biw_static(self, name, x, y, z, panel=False):
         steel = plant.proc_mat(self, "biw_steel", (0.6, 0.62, 0.64), rough=0.32, metal=0.85, var=0.1, scale=3.0, bump=0.05, grime=0.15)
@@ -475,6 +513,9 @@ class RealScene(rb.BScene):
 def still_cam(name: str, scn: dict) -> "core.Cam":
     if name == "wide":                                         # high corner view down the whole line
         return core.Cam((1.2, 46.5, 8.4), (50.0, 19.0, 0.0), 19.0)
+    if name == "compare_line":                                 # the reference photo's viewpoint: above the line axis near
+        y = next(m["z"] for m in scn["machines"] if m.get("on_line"))  # S20, looking down it (+x), ~95 deg wide lens
+        return core.Cam((COMPARE_LINE_X, y, COMPARE_LINE_Z), (COMPARE_LINE_X + COMPARE_LINE_DX, y, 0.0), 16.5)
     if name == "weld_close":                                   # in the S30 north light-curtain opening, on the middle robot's gun
         m = next(mm for mm in scn["machines"] if mm["id"] == "S30")
         y = m["z"] + m["size"][1] / 2
@@ -488,7 +529,7 @@ def still_cam(name: str, scn: dict) -> "core.Cam":
         else:
             tgt = (x + 10.0 if x < 60 else x - 10.0, y + 16.0 if y < 24 else y - 16.0, 0.0)
         return core.Cam((x, y, CCTV_Z), tgt, 17.5)            # ~91 deg horizontal, like a 2.8 mm CCTV lens
-    raise SystemExit(f"unknown still {name!r}: wide | weld_close | cctv_<i>")
+    raise SystemExit(f"unknown still {name!r}: wide | compare_line | weld_close | cctv_<i>")
 
 
 def label_synthetic(png: Path) -> None:

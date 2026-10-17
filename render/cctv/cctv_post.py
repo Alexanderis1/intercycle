@@ -73,6 +73,7 @@ class CctvParams:
     noise_corr: float = 0.6  # spatial correlation (demosaic/ISP) sigma in px
     chroma_noise: float = 0.014  # extra low-frequency colour noise, shadow weighted (sRGB units)
     soften_sigma: float = 0.55  # lens softness (px, output)
+    sensor_scale: float = 1.0  # effective sensor/ISP resolution as a fraction of the output (1080p CCTV resolves less)
     sharpen_amount: float = 0.7
     sharpen_sigma: float = 1.2
     wb: tuple = (1.0, 1.0)  # (r gain, b gain), static part
@@ -121,6 +122,7 @@ def camera_params(cam_id: str, seed: int = 0, cam_label: str = "BODY SHOP", t0: 
         exposure=float(u(0.95, 1.05)),
         crf=int(r.integers(28, 37)),
         keyint=int(r.integers(25, 51)),
+        sensor_scale=float(u(0.65, 0.85)),     # drawn last so the draws above keep their values
     )
     return dataclasses.replace(p, **overrides) if overrides else p
 
@@ -341,6 +343,10 @@ def _sensor_stage(rgb_u8: np.ndarray, p: CctvParams, geo: Geometry) -> np.ndarra
     lin *= (1.0 - p.vignette * geo.rad**2)[..., None]
     if p.soften_sigma > 0:
         lin = _blur(lin, p.soften_sigma)
+    if p.sensor_scale < 1.0:  # resolve only what a cheaper sensor/ISP would: area-down, linear-up
+        small = cv2.resize(lin, (max(2, round(w * p.sensor_scale)), max(2, round(h * p.sensor_scale))),
+                           interpolation=cv2.INTER_AREA)
+        lin = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
     wb = np.array([p.wb[0] * p.f_wb[0], 1.0, p.wb[1] * p.f_wb[1]], dtype=np.float32)
     lin *= (p.exposure * p.f_exposure) * wb
     np.maximum(lin, 0.0, out=lin)
@@ -601,6 +607,7 @@ def main(argv=None) -> int:
     ap.add_argument("--keyint", type=int, default=None)
     ap.add_argument("--min-pixels", type=int, default=None, help="drop boxes under this visible pixel count")
     ap.add_argument("--no-overlay", action="store_true")
+    ap.add_argument("--sensor-scale", type=float, default=None, help="effective sensor resolution fraction (default: per camera, 0.65-0.85)")
     a = ap.parse_args(argv)
 
     m = re.fullmatch(r"(\d+)[xX](\d+)", a.size)
@@ -615,6 +622,8 @@ def main(argv=None) -> int:
         ov["min_box_pixels"] = a.min_pixels
     if a.no_overlay:
         ov["overlay"] = False
+    if a.sensor_scale is not None:
+        ov["sensor_scale"] = a.sensor_scale
     base = camera_params(a.cam, a.seed, cam_label=a.cam_label, t0=a.t0, size=(int(m.group(1)), int(m.group(2))),
                          overscan=a.overscan, **ov)
     inp = Path(a.inp)

@@ -24,8 +24,8 @@ visible to a camera), capsule people, the wheeled AMR (robot shots are R4's).
 Commands (repo root, PowerShell; `$B` = `C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`):
 ```powershell
 & $B -b --factory-startup --python render\blender\bl_run.py -- render\blender\scene_real.py --trace <trace.parquet> --synth-bodies `
-    --out D:\icdata\renders\stills --stills wide,weld_close,cctv_1,cctv_5 --t 36562.8167 --samples 128 --res 1920x1080 --gt
-& $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\seq --cctv-seq cctv_1 --t 36620 --seconds 10 --fps 25 --gt
+    --out D:\icdata\renders\stills --stills compare_line,wide,weld_close,cctv_1,cctv_5 --t 36562.8167 --samples 128 --res 1920x1080 --gt
+& $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\seq --cctv-seq cctv_1 --t 36560 --seconds 10 --fps 25 --samples 64 --gt
 $env:PYTHONPATH="D:\icdata\pylib"; python -m render.cctv.cctv_post --in D:\icdata\renders\seq\cctv_1\frames --gt D:\icdata\renders\seq\cctv_1\gt `
     --out D:\icdata\renders\seq\cctv_1\cctv --cam CAM02 --cam-label "BODY SHOP S20" --t0 "2026-10-17 10:10:20" --fps 25 --overscan 0.055 --video
 ```
@@ -41,6 +41,20 @@ Brightness + density pass (`render/stills/dense/`, `--t 36562.8167`): light-grey
 150 W each (`--light-e`), 8 robots per 8 m weld/respot cell (4 corner, 2 middle, 4 angled onto the body ends; the 7 m
 cell gets 8 without the middle pair), a tip dresser beside every robot, and an overhead cell frame (4.4 m) with cable
 trays and a dress-cable drop to each robot. All of it stays inside the station rects of `bodyshop.yaml`.
+`compare_line` (still name) is the reference photo's viewpoint: 7 m above the line axis at x 15.5, looking down +x, 16.5 mm
+(~95 deg); `compare_wide.jpg` uses it.
+Detail pass: servo C-gun v2 (two C side plates, ribbed transformer, servo actuator) and a dress pack (retract unit, main
+hose, blue/red cooling water) on every robot; fixtures with locator blocks, pins, toggle clamps and gussets;
+`RealScene.rounded()` rounds edges in shading (Cycles Bevel node, radius in metres; the first render after a fresh install
+compiles the OptiX kernel once, ~2 min); closures carts with door panels at each station's line side; `cctv_post`
+`sensor_scale` (per camera 0.65-0.85 of 1080p, `--sensor-scale`) for CCTV sensor softness.
+
+Trace for the CCTV sequences: `python render/synth_trace.py --movers sim --minutes 15 --out D:\icdata\renders\trace_sim15.parquet`
+(repo Python). People and vehicles are the sim's own movers (`intercycle/truth/agents.py`): at 10:00-10:15 that is 12
+people (10 aisle walkers + 2 data-hall techs; break crowds only around breaks), 4 AGVs, 2 tuggers, 3 forklifts, sampled
+every 0.25 s on their unobstructed paths. Machines and the hero AMR stay synthetic. Note: `bodyshop.yaml`
+`people_per_shift` (early 34) is only used by the statistical occupancy model `truth/traffic.py`; `agents.py` does not
+spawn that many, so the render shows the sim's 12, not 34.
 
 # Photoreal render tier: decision, research, shot list
 

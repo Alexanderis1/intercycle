@@ -73,6 +73,24 @@ def test_camera_param_ranges():
         p = camera_params(f"CAM{i:02d}", i)
         assert -0.35 <= p.k1 <= -0.20 and abs(p.k2) <= 0.03
         assert 28 <= p.crf <= 36 and 25 <= p.keyint <= 50
+        assert 0.65 <= p.sensor_scale <= 0.85
+
+
+def test_sensor_scale_softens_fine_detail():
+    """A 1-px checkerboard keeps less contrast through a lower effective sensor resolution; 1.0 is a no-op step."""
+    import dataclasses
+    from render.cctv.cctv_post import _sensor_stage
+    h, w = 270, 480
+    yy, xx = np.mgrid[:h, :w]
+    img = np.where((xx + yy) % 2 == 0, 200, 50).astype(np.uint8)[..., None].repeat(3, axis=2)
+    c0 = camera_params("CAM01", 0, size=(w, h))
+    geo = build_geometry((w, h), (w, h), 0.0, c0.k1, c0.k2, c0.ca)
+    quiet = dict(gain=1e-6, read_noise=0.0, chroma_noise=0.0, sharpen_amount=0.0, soften_sigma=0.0, vignette=0.0)
+    p = dataclasses.replace(camera_params("CAM01", 0, size=(w, h)), **quiet)
+    sharp = _sensor_stage(img, dataclasses.replace(p, sensor_scale=1.0), geo)
+    soft = _sensor_stage(img, dataclasses.replace(p, sensor_scale=0.7), geo)
+    core = (slice(20, -20), slice(20, -20))
+    assert soft[core].std() < 0.5 * sharp[core].std()
 
 
 @pytest.mark.parametrize("size,overscan", [((1920, 1080), 0.0), ((1280, 720), 0.0), ((1280, 720), 0.06)])

@@ -509,6 +509,7 @@ def clutter(bs, rng: random.Random):
             continue
         for k in range(2):
             pallet_load(bs, f"ls_{m['id']}_{k}", m["x"] - 2.5 + 5.0 * k, 13.2, rng, wood, mesh_m, galv, bins)
+        part_cart(bs, f"pc_{m['id']}", m["x"], 13.2, rng)
     # extinguishers + signs on internal columns, bollards at the roller doors
     for i in range(0, int(X / COL_DX) + 1):
         x = i * COL_DX
@@ -561,6 +562,26 @@ def pallet_load(bs, name, x, y, rng: random.Random, wood, mesh_m, galv, bins, z0
     else:                                                     # cardboard, shrink-wrapped
         hh = rng.uniform(0.5, 1.2)
         bs.box(name + "_box", (1.15, 0.78, hh), (x, y, z0 + 0.144 + hh / 2), mat(bs, "cardboard"))
+
+
+def part_cart(bs, name, x, y, rng: random.Random):
+    """Wheeled closures rack at the line side: steel frame on four casters, a row of slotted door/hood panels
+    standing on edge (a random number of slots filled)."""
+    galv, rubber = mat(bs, "galv"), mat(bs, "rubber")
+    steel = proc_mat(bs, "panel_steel", (0.6, 0.62, 0.64), rough=0.3, metal=0.9, var=0.08, scale=2.0, bump=0.03, grime=0.1)
+    L, W, deck = 1.6, 0.9, 0.3
+    bs.box(name + "_deck", (L, W, 0.05), (x, y, deck), galv)
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            bs.cyl(f"{name}_w{sx}{sy}", 0.08, 0.06, (x + sx * (L / 2 - 0.12), y + sy * (W / 2 - 0.1), 0.08), rubber, axis="x")
+            bs.box(f"{name}_up{sx}{sy}", (0.04, 0.04, 1.2), (x + sx * (L / 2 - 0.02), y + sy * (W / 2 - 0.02), deck + 0.6), galv)
+        bs.box(f"{name}_top{sx}", (0.04, W, 0.04), (x + sx * (L / 2 - 0.02), y, deck + 1.2), galv)
+    bs.box(name + "_handle", (L, 0.03, 0.03), (x, y - W / 2 - 0.05, deck + 0.95), galv)
+    for k in range(9):                                        # slots every 0.16 m along x
+        sx = x - L / 2 + 0.16 + k * 0.16
+        if rng.random() < 0.75:
+            p = bs.box(f"{name}_pan{k}", (0.012, 0.8, rng.uniform(0.75, 0.95)), (sx, y, deck + 0.45), steel)
+            p.rotation_euler = (0.0, math.radians(rng.uniform(-4, 4)), 0.0)
 
 
 def extinguisher(bs, name, x, y):
