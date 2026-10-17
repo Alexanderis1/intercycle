@@ -12,7 +12,8 @@ Listens on a Unix socket; the simulator connects and sends one frame per physics
   /intercycle/contacts      std_msgs/String (JSON)   collision events reported by the sim (for R3's logger only)
   /intercycle/camera/observations  std_msgs/String (JSON)  robot-camera no-motion observations (R3 camera model:
                             {"stamp", "source", "targets": [{"id", "visible", "motion_seen"}]}, already latency-delayed)
-  /intercycle/inspection/capture   std_msgs/String (JSON)  inspection capture checks (R3; logging only)
+  /intercycle/inspection/capture   std_msgs/String (JSON)  inspection capture outcome {t, target, pass, checks,
+                            settled, source} (R3; logging only; no pose: poses stay in the evaluation logs)
 and replies with the latest /cmd_vel (geometry_msgs/Twist; zero if older than --cmd-timeout s of sim time) plus the
 /intercycle/inspection messages (timing_planner dwell_start / dwell_end) received since the last frame, so the sim
 side can take the inspection capture.

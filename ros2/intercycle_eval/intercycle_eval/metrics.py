@@ -10,7 +10,9 @@ Definitions (stated in ROBOT_RESULTS):
   collision_*       Isaac contact on a non-foot robot body, classified by the nearest body (person / vehicle / machine part
                     / static), OR a truth overlap of the robot footprint (3 discs) with a person / vehicle / machine part
                     (gap < -2 cm); counted once per contiguous event
-  safe_success      valid, no collision of any kind, no trip, no fall, planner not FAILED, >= 1 target inspected
+  collisions_robot_moving  the subset with the robot's true speed > 0.1 m/s at the event (a person walking into a
+                    standing robot is counted in collisions, not here)
+  safe_success      valid, no collision of any kind, no trip, no fall, planner not FAILED, >= 1 inspection passed (inspections_ok)
                     (episodes are a fixed 600 s: the planner is interrupted at the end, which is not a failure)
   min_dist_person   minimum edge-to-edge distance robot footprint <-> person (m); min_ttc_* constant-velocity disc TTC
   personal_space    entries of a person centre within 0.45 m of the robot footprint edge (Hall intimate distance)
@@ -178,6 +180,14 @@ def episode_metrics(res: dict, d: Path, sp: Shortest | None) -> dict:
     cb, ob = pl.get("contacts_by") or {}, pl.get("overlaps_by") or {}
     for k in ("person", "vehicle", "machine", "static"):
         m[f"collision_{k}"] = max(int(cb.get(k, 0)), int(ob.get(k, 0)))
+    om = pl.get("overlaps_robot_moving_by") or {}
+    cm = {}
+    for c in (_load(d / "plant_events.json") or {}).get("contacts", []):
+        if (c.get("robot_v") or 0) > 0.1:
+            cm[c["with"]] = cm.get(c["with"], 0) + 1
+    for k in ("person", "vehicle", "machine", "static"):
+        m[f"collision_moving_{k}"] = max(int(om.get(k, 0)), int(cm.get(k, 0)))
+    m["collisions_robot_moving"] = sum(m[f"collision_moving_{k}"] for k in ("person", "vehicle", "machine", "static"))
     m["collisions"] = sum(m[f"collision_{k}"] for k in ("person", "vehicle", "machine", "static"))
     m["any_collision"] = m["collisions"] > 0
     mg, mt = pl.get("min_gap_m") or {}, pl.get("min_ttc_s") or {}
@@ -268,7 +278,7 @@ def episode_metrics(res: dict, d: Path, sp: Shortest | None) -> dict:
                 spl.append(sh / max(act, sh, 1e-6) if act > 0.2 or sh < 0.2 else 0.0)
             m["spl"] = float(np.mean(spl)) if spl else None
     m["safe_success"] = bool(m["valid"] and not m["any_collision"] and not m["any_trip"]
-                             and m["result"] not in (None, "FAILED") and not m["fell"] and m["n_inspected"] >= 1)
+                             and m["result"] not in (None, "FAILED") and not m["fell"] and m["inspections_ok"] >= 1)
     return m
 
 

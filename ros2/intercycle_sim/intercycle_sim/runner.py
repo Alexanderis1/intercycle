@@ -123,6 +123,8 @@ def main() -> None:
     max_rtf = float(cfg.get("max_rtf", 1.0))
     log_every = max(1, int(round(1.0 / (float(cfg.get("log_hz", 10.0)) * be.dt))))
     stop_file = cfg.get("stop_file")
+    mover_every = max(1, int(cfg.get("mover_every", 5)))
+    prof = {"set_movers": 0.0, "sensors": 0.0, "exchange": 0.0}
     rows, contacts = [], []
     cmd = (0.0, 0.0, 0.0)
     t, k = 0.0, 0
@@ -137,14 +139,18 @@ def main() -> None:
         while t < T:
             poses = src.poses(t)
             pp = M.part_poses(parts, poses) if parts else np.zeros((0, 3))
-            if parts:
+            if parts and k % mover_every == 0:
+                w_ = time.time()
                 be.set_movers(pp)
+                prof["set_movers"] += time.time() - w_            # PhysX kinematic targets at 50 / mover_every Hz (sensors use every step)
             prims = src.sensor_prims(t) if hook("sensor_prims") else (M.primitives(parts, pp) if parts else None)
             w = time.time()
             st = be.step(cmd)
             step_wall += time.time() - w
             t = (k + 1) * be.dt
+            w_ = time.time()
             fr = suite.frame(t, st["pos_w"], st["quat_wxyz"], st["v_w"], st["v_b"], st["omega_b"], prims)
+            prof["sensors"] += time.time() - w_
             if k == 0:
                 fr["mounts"] = mounts
             if "scan" in fr:
@@ -173,7 +179,9 @@ def main() -> None:
                     mid = min(gaps, key=gaps.get)
                     ev["nearest_mover"], ev["nearest_mover_gap_m"] = mid, round(gaps[mid], 3)
                 contacts.append(ev)
+            w_ = time.time()
             reply = client.exchange(fr)
+            prof["exchange"] += time.time() - w_
             cmd = (reply["vx"], reply["vy"], reply["wz"])
             if reply.get("events") and hook("on_ros"):
                 src.on_ros(t, reply["events"])
@@ -208,7 +216,7 @@ def main() -> None:
         "boot_s": round(boot_s, 1), "sim_s": round(t, 2), "wall_s": round(wall, 2),
         "rtf": round(t / wall, 3) if wall > 0 else None,
         "rtf_physics_only": round(t / step_wall, 3) if step_wall > 0 else None,
-        "steps": k, "dt": be.dt, "max_rtf": max_rtf, "start": list(p0), "end": list(p1),
+        "steps": k, "dt": be.dt, "wall_profile_s": {kk: round(v, 1) for kk, v in prof.items()}, "max_rtf": max_rtf, "start": list(p0), "end": list(p1),
         "end_psi": yaw_of(st["quat_wxyz"]), "end_z": st["pos_w"][2],
         "displacement_m": round(float(np.linalg.norm(p1 - p0)), 3), "path_length_m": round(path_len, 3),
         "fell": fell, "end_reason": end_reason,

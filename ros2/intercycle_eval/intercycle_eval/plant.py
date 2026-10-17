@@ -219,6 +219,7 @@ class Plant:
         self.mins = {"person": math.inf, "vehicle": math.inf, "machine": math.inf, "static": math.inf,
                      "ttc_person": math.inf, "ttc_vehicle": math.inf}
         self.overlap = {"person": 0, "vehicle": 0, "machine": 0}
+        self.overlap_moving = {"person": 0, "vehicle": 0, "machine": 0}
         self._overlap_prev = {"person": False, "vehicle": False, "machine": False}
         self.wall_plant = 0.0
         self.n_ticks = 0
@@ -600,11 +601,15 @@ class Plant:
             self.mins[k] = min(self.mins[k], gg)
         self.mins["ttc_person"] = min(self.mins["ttc_person"], tp)
         self.mins["ttc_vehicle"] = min(self.mins["ttc_vehicle"], tv)
+        rspeed = math.hypot(rvx, rvy)
         for k, gg in (("person", gp), ("vehicle", gv), ("machine", gm)):
             ov = gg < -0.02
             if ov and not self._overlap_prev[k]:
                 self.overlap[k] += 1
-                self.events.append({"t": round(t, 2), "type": "overlap", "with": k, "gap_m": round(gg, 3)})
+                moving = rspeed > 0.1
+                self.overlap_moving[k] += int(moving)
+                self.events.append({"t": round(t, 2), "type": "overlap", "with": k, "gap_m": round(gg, 3),
+                                    "robot_v": round(rspeed, 3), "robot_moving": moving})
             self._overlap_prev[k] = ov
         zin = next((z for z, v in self.inside.items() if v), None)
         self.rows.append({"t": round(t, 2), "x": round(rx, 3), "y": round(ry, 3), "psi": round(rpsi, 4),
@@ -640,6 +645,7 @@ class Plant:
                                                   max(c.get("force_n", 0.0) for c in contacts))
             return
         self.contacts.append({"t": round(t, 3), "t_last": round(t, 3), "with": best, "gap_m": round(bg, 3),
+                              "robot_v": round(math.hypot(self.robot[3], self.robot[4]), 3),
                               "bodies": sorted({c.get("body") for c in contacts}),
                               "max_force_n": max(c.get("force_n", 0.0) for c in contacts)})
 
@@ -701,7 +707,9 @@ class Plant:
                                    self.sensor_prims(t), self.cap_rng))
         rec["source"] = CAM.SOURCE
         self.captures.append(rec)
-        self.outbox_cap.append({k: v for k, v in rec.items()})
+        # ROS gets only the outcome (no truth pose, no camera pose); the full record stays in the evaluation logs
+        self.outbox_cap.append({"t": rec.get("t"), "target": rec["target"], "pass": rec.get("pass"),
+                                "checks": rec.get("checks"), "settled": settled, "source": CAM.SOURCE})
 
     # ------------------------------------------------------------------ observer feed + outputs
     def _write_state(self, t: float) -> None:
@@ -758,6 +766,7 @@ class Plant:
             "contacts": len(self.contacts),
             "contacts_by": {k: sum(1 for c in self.contacts if c["with"] == k) for k in ("person", "vehicle", "machine", "static")},
             "overlaps_by": dict(self.overlap),
+            "overlaps_robot_moving_by": dict(self.overlap_moving),
             "min_gap_m": {k: fin(self.mins[k]) for k in ("person", "vehicle", "machine", "static")},
             "min_ttc_s": {"person": fin(self.mins["ttc_person"]), "vehicle": fin(self.mins["ttc_vehicle"])},
             "personal_space_events": self.ps_events, "personal_space_s": round(self.ps_time, 1),

@@ -172,3 +172,11 @@ def test_cfg_and_cheat_guard():
     bad = {"goal": {"camera_sources": {"camera_stub (TEST DOUBLE)": 100}, "camera_stub_used": True, "require_camera": True}}
     assert not eval_check({"eval": True, "sim": "isaac"}, bad)["valid"]
     assert not eval_check({"eval": True, "sim": "fake"}, good)["valid"]
+
+
+def test_signflip_and_holm():
+    p = stats.signflip_p(np.ones(10))
+    assert abs(p - 2 / 1024) < 1e-12                  # only all-plus and all-minus reach |mean| = 1
+    assert stats.signflip_p(np.zeros(5)) is None
+    h = stats.holm({"a": 0.01, "b": 0.04, "c": None, "d": 0.03})
+    assert abs(h["a"] - 0.03) < 1e-12 and abs(h["d"] - 0.06) < 1e-12 and abs(h["b"] - 0.06) < 1e-12 and h["c"] is None

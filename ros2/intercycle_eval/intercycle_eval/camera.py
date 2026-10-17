@@ -3,7 +3,7 @@
 Camera: the robot's pan-tilt inspection head (ANYmal-class payload), 1920 x 1080, 70 x 45 deg FOV
 (intercycle_sim.sensors.CameraModel defaults), mounted 0.45 m ahead / 0.35 m above base_link. The head aims at the
 site-map location of what it looks at (zone centre / inspection target); aiming uses the robot's true pose inside the
-simulator plus a Gaussian aim error (stand-in for pose-estimate + head error, 0.5 deg).
+simulator plus a Gaussian aim error (stand-in for pose-estimate + head error, 2.5 deg).
 
 No-motion gate (published on /intercycle/camera/observations, R2's contract):
   per machine whose hazard zone is within GATE_RANGE_M of the robot, every 0.2 s:
@@ -44,7 +44,8 @@ MOTION_MPS = 0.05
 GATE_DT = 0.2
 GATE_RANGE_M = 6.0
 VIS_FRAC = 0.5
-AIM_SIGMA = math.radians(0.5)
+AIM_SIGMA = math.radians(2.5)       # head aim error: the head is aimed from the TRUE pose, so this stands in for
+                                    # the pose-estimate + head error (AUDIT: 2-3 deg)
 EXPOSURE_S = 0.004
 DORI_IDENTIFY, DORI_INSPECT = 250.0, 1000.0
 MAX_INCIDENCE_DEG = 60.0

@@ -119,7 +119,7 @@ def main() -> None:
     ap.add_argument("--conds", default=",".join(CONDS))
     ap.add_argument("--backend", default="fake", choices=("fake", "l4", "l40s"))
     ap.add_argument("--seconds", type=float, default=600.0)
-    ap.add_argument("--map", default=str(REPO / "out" / "layered_map.npz"))
+    ap.add_argument("--map", default=str(REPO / "out" / "timeline" / "map_1w.npz"))
     ap.add_argument("--invisible", action="store_true")
     ap.add_argument("--timing-json", default="")
     ap.add_argument("--print-cfg", action="store_true")
@@ -130,9 +130,8 @@ def main() -> None:
     conds = [c for c in a.conds.split(",") if c]
     timing = json.loads(a.timing_json) if a.timing_json else None
     cfgs = [episode_cfg(a.name, s, c, a.seconds, a.invisible, timing) for s in seeds for c in conds]
-    if a.backend == "fake":
-        for c in cfgs:
-            c["allow_fake"] = True
+    # fake-backend episodes are wiring checks only: eval_check marks them invalid (no allow_fake), so they never
+    # enter a result
     if a.print_cfg:
         print(json.dumps(cfgs, indent=1))
         return

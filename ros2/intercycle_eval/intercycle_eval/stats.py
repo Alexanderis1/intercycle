@@ -5,6 +5,8 @@
   continuous metrics  Wilcoxon signed-rank on the per-seed paired differences (scipy, zero_method "wilcox", exact when
                       small), mean difference with a paired bootstrap 95 % CI (10 000 resamples over seeds)
   binary metrics      exact McNemar test (binomial on the discordant pairs)
+  PRIMARY endpoints   line_time_lost_s, inspections_ok, any_collision; learned vs none and learned vs static; exact
+                      sign-flip permutation test, Holm-corrected over the 6 tests (declared before the held-out batch)
   rates               Clopper-Pearson 95 % interval; with 0 events in N the upper bound is about 3/N ("rule of three")
 Only valid episodes enter a comparison; a seed missing in either condition drops out of that pair (reported).
 """
@@ -19,11 +21,44 @@ import numpy as np
 
 CONT = ["n_inspected", "inspections_ok", "inspection_success_rate", "capture_pass_rate", "time_per_target_s",
         "line_time_lost_s", "cell_time_lost_s", "machine_time_lost_s", "trips", "hold_events", "windows_hit",
-        "windows_missed", "collisions", "min_dist_person_m", "min_ttc_person_s", "min_ttc_vehicle_s",
+        "windows_missed", "collisions", "collisions_robot_moving", "min_dist_person_m", "min_ttc_person_s", "min_ttc_vehicle_s",
         "personal_space_events", "personal_space_s", "stops_navigating", "stalled_s", "path_length_m", "spl",
         "irregularity_rad_per_m", "rtf"]
 BIN = ["safe_success", "any_collision", "any_trip"]
 PAIRS = [("learned", "none"), ("learned", "static"), ("oracle", "learned")]
+# Pre-registered before the held-out batch (AUDIT Tier 2): primary endpoints and primary comparisons. Each is tested with
+# an exact two-sided sign-flip permutation test on the per-seed paired differences (all 2^n sign assignments), and the
+# family of PRIMARY x PRIMARY_PAIRS p-values is Holm-corrected. Everything else is secondary / descriptive.
+PRIMARY = ["line_time_lost_s", "inspections_ok", "any_collision"]
+PRIMARY_PAIRS = [("learned", "none"), ("learned", "static")]
+
+
+def signflip_p(d) -> float | None:
+    """Exact two-sided sign-flip permutation p-value for mean(d) = 0 (paired differences; n <= 20 enumerated)."""
+    d = np.asarray(d, float)
+    d = d[np.isfinite(d)]
+    n = len(d)
+    if n == 0 or np.all(d == 0):
+        return None
+    if n > 20:
+        rng = np.random.default_rng(0)
+        signs = rng.choice((-1.0, 1.0), size=(200000, n))
+    else:
+        signs = 1.0 - 2.0 * ((np.arange(2 ** n)[:, None] >> np.arange(n)[None, :]) & 1)
+    obs = abs(d.mean())
+    means = np.abs((signs * d[None, :]).mean(axis=1))
+    return float((means >= obs - 1e-12).mean())
+
+
+def holm(ps: dict) -> dict:
+    """Holm-Bonferroni adjusted p-values (None stays None)."""
+    items = sorted(((p, k) for k, p in ps.items() if p is not None))
+    m = len(items)
+    out, run = {k: None for k in ps}, 0.0
+    for i, (p, k) in enumerate(items):
+        run = max(run, min(1.0, (m - i) * p))
+        out[k] = run
+    return out
 
 
 def clopper_pearson(k: int, n: int, alpha: float = 0.05) -> tuple[float, float]:
@@ -120,6 +155,21 @@ def summarize(rows: list[dict]) -> dict:
             pr[k] = mcnemar_exact(np.array([bool(bc[a][s].get(k)) for s in seeds]),
                                   np.array([bool(bc[b][s].get(k)) for s in seeds]))
         res["pairs"][f"{a}_vs_{b}"] = pr
+    raw = {}
+    for a, b in PRIMARY_PAIRS:
+        if a not in bc or b not in bc:
+            continue
+        seeds = sorted(set(bc[a]) & set(bc[b]))
+        for k in PRIMARY:
+            da = np.array([_num(bc[a][s].get(k)) for s in seeds])
+            db = np.array([_num(bc[b][s].get(k)) for s in seeds])
+            ok = np.isfinite(da) & np.isfinite(db)
+            raw[f"{a}_vs_{b}:{k}"] = signflip_p(da[ok] - db[ok])
+            res.setdefault("primary", {})[f"{a}_vs_{b}:{k}"] = {
+                "n": int(ok.sum()), "mean_diff": float((da[ok] - db[ok]).mean()) if ok.any() else None,
+                "ci95": bootstrap_ci(da[ok] - db[ok]) if ok.any() else None, "signflip_p": raw[f"{a}_vs_{b}:{k}"]}
+    for k, p in holm(raw).items():
+        res["primary"][k]["holm_p"] = p
     return res
 
 
@@ -156,7 +206,7 @@ def table_md(st: dict) -> str:
 
 def pairs_md(st: dict, keys=None) -> str:
     keys = keys or ["inspections_ok", "line_time_lost_s", "machine_time_lost_s", "trips", "windows_hit", "collisions",
-                    "min_dist_person_m", "stalled_s", "spl", "time_per_target_s"]
+                    "collisions_robot_moving", "min_dist_person_m", "stalled_s", "spl", "time_per_target_s"]
     lines = ["| Pair | Metric | n | mean diff [boot 95 %] | Wilcoxon p |", "|---|---|---|---|---|"]
     for name, pr in st["pairs"].items():
         for k in keys:
@@ -171,12 +221,23 @@ def pairs_md(st: dict, keys=None) -> str:
     return "\n".join(lines)
 
 
+def primary_md(st: dict) -> str:
+    lines = ["| Primary comparison : endpoint | n | mean diff [boot 95 %] | sign-flip p (exact) | Holm p |",
+             "|---|---|---|---|---|"]
+    for k, v in (st.get("primary") or {}).items():
+        ci = v["ci95"]
+        lines.append(f"| {k} | {v['n']} | {_f(v['mean_diff'])} [{_f(ci[0]) if ci else '-'}, {_f(ci[1]) if ci else '-'}] "
+                     f"| {_f(v['signflip_p'], 3)} | {_f(v.get('holm_p'), 3)} |")
+    return "\n".join(lines)
+
+
 def main() -> None:
     d = Path(sys.argv[1])
     rows = json.loads((d / "metrics.json").read_text())
     st = summarize(rows)
     (d / "stats.json").write_text(json.dumps(st, indent=1, default=str))
-    md = "## Per condition\n\n" + table_md(st) + "\n\n## Paired comparisons\n\n" + pairs_md(st)
+    md = ("## Primary endpoints (pre-registered; Holm-corrected)\n\n" + primary_md(st) + "\n\n## Per condition\n\n"
+          + table_md(st) + "\n\n## Paired comparisons (secondary)\n\n" + pairs_md(st))
     (d / "tables.md").write_text(md)
     print(md)
 

@@ -15,7 +15,8 @@ What it does (DIRECTION 5.3):
     current and the next time-of-day bin in the current production state.
 
 Never imports intercycle.truth or intercycle.sim (checked by `assert_no_truth`). The site map (scenario YAML: hall,
-hazard-zone rectangles, public break calendar) is the robot's provisioned public map, not truth.
+hazard-zone rectangles) is the robot's provisioned public map, not truth. The production state that selects the L2/L3
+slice comes ONLY from the observer broadcast (the fast layer's machine states), never from a calendar (AUDIT Tier 1).
 
 Frames: plan (x along the line, z across) -> ROS map frame x = plan x, y = plan z. Grids here are [ix, iy] (x-major);
 `to_occupancy_data` flattens them row-major in y for nav_msgs/OccupancyGrid.
@@ -116,10 +117,10 @@ def to_occupancy_data(g: np.ndarray):
 # ------------------------------------------------------------------------------------------------ site (public map)
 @dataclass
 class Site:
-    """The robot's provisioned public site map: machine ids (broadcast index order), hazard-zone rectangles, calendar."""
+    """The robot's provisioned public site map: machine ids (broadcast index order), hazard-zone rectangles."""
     ids: list[str]
     rects: dict[str, tuple[float, float, float, float]]   # plan x0, z0, x1, z1 == ROS x0, y0, x1, y1
-    stops: list[tuple[float, float, str]]                 # public calendar (tod_start, tod_end, kind)
+    stops: list[tuple[float, float, str]]                 # not used by the robot (kept for the site-map record)
     site_id: int
     key_id: int
     extent: tuple[float, float, float, float]             # x0, y0, x1, y1 of hall + data hall
@@ -132,13 +133,6 @@ class Site:
         rects = {m.id: tuple(float(v) for v in m.rect) for m in scn.machines}
         ext = (float(scn.hall["x"][0]), float(scn.hall["z"][0]), float(scn.data_hall["x"][1]), float(scn.hall["z"][1]))
         return cls([m.id for m in scn.machines], rects, list(scn.line_stops()), int(scn.site_id), int(scn.key_id), ext)
-
-    def calendar(self, t: float) -> int | None:
-        tod = t % M.DAY
-        for a, b, kind in self.stops:
-            if a <= tod < b:
-                return M.BREAK if kind == "break" else M.SHIFT_CHANGE
-        return None
 
     def zone_of(self, x: float, y: float, pad: float = 0.0) -> str | None:
         for mid, (x0, y0, x1, y1) in self.rects.items():
@@ -232,8 +226,10 @@ class ObserverState:
                 ph = ph % 1.0                          # map phase convention: 0 = start of motion in the zone (see README)
             wins = idle_windows(mod, now, fast.issue_time, t, horizon_s, k_sigma) if (mod and now and fast) else None
             out.append(MachineView(mid, i, st, ph, wins, held=(mid == held_id)))
-        cal = self.site.calendar(t)
-        prod = cal if cal is not None else (M.ANDON if out and n_stopped >= 0.5 * len(out) else M.RUNNING)
+        # production state from the broadcast only: the fast layer carries per-machine states; a line where at least half
+        # the machines report STOPPED is in a line stop (ANDON slice). Break / shift change are not separable from the
+        # fast layer, so they fall into the same stopped slice. No fast layer -> RUNNING (busiest traffic slice).
+        prod = M.ANDON if out and n_stopped >= 0.5 * len(out) else M.RUNNING
         return Snapshot(t, view is not None, self.map_version(), slow is not None, fast_age, prod, out)
 
 
