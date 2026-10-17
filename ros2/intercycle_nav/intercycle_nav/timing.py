@@ -10,8 +10,9 @@ dynamics. SIPP is the standard method; nothing here is claimed as novel.
 Entry rule at a hazard boundary (DIRECTION 5.4, BRIEF): enter only if (a) a predicted idle window is open now with at
 least `need_s` left (inside travel + dwell + exit + margin) and (b) the robot's own camera confirms "no motion" for the
 target machine, `confirm_n` consecutive fresh observations spanning at least `local_check_latency_s`.
-Per condition:  learned / oracle -> (a) and (b);  none -> (b) only (reactive, no map);  static -> never enter, inspect
-from the wait pose at the boundary.
+Per condition:  learned / oracle -> (a) and (b);  none -> (b) only (no map);  static -> never enter, inspect
+from the wait pose at the boundary;  reactive (E-W4 baseline) -> (a) and (b) exactly as learned, with the windows from its
+own camera (`reactive.py`); a machine it has no fresh view of is planned as reachable so it goes there to look.
 """
 from __future__ import annotations
 
@@ -124,6 +125,8 @@ class TimingCore:
             if condition == "none":
                 return None
             w = windows.get(n[3:])
+            if condition == "reactive" and w is None:
+                return None                              # reactive: never seen / stale -> go to the boundary and look
             # the robot crosses the boundary right after leaving the wait node, so the zone must already be idle at
             # departure: arrival inside is allowed from window start + entry time
             return [] if w is None else [(float(a) + self.enter_time(self._tg_of[n]), float(b)) for a, b in w]

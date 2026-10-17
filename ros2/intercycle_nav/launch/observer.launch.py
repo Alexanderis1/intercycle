@@ -4,7 +4,8 @@
         plant_t0:=36000.0 keyring_file:=/path/keyring.json [camera:=real|stub] [devfeed:=False map_npz:=...] [probe:=True]
 
 condition: none (no observer map) | static (static keep-out of all hazard zones) | learned (InterCycle) |
-           oracle (map from truth, upper bound: the ORACLE FEED is produced by the episode runner, never by this package)
+           oracle (map from truth, upper bound: the ORACLE FEED is produced by the episode runner, never by this package) |
+           reactive (E-W4 baseline: own-camera windows, reactive_config:=<json> world_id:=<id> reactive_state:=<path>)
 camera:=real (default) starts nothing: the robot camera's no-motion check comes from the sim side (R3: R1's geometric
 camera model) on /intercycle/camera/observations. camera:=stub and devfeed:=True are TEST DOUBLES for wiring runs on the
 kinematic double, opt-in only, never part of a result (timing_planner records the camera source in goal.json).
@@ -37,6 +38,9 @@ def _nodes(context):
     bp = {"use_sim_time": True, "condition": cond, "feed": feed, "plant_t0": t0, "horizon_s": float(g("horizon_s")),
           "dev": devfeed or g("dev").lower() in ("true", "1")}
     bp.update({k: g(k) for k in ("keyring", "keyring_file") if g(k)})
+    # reactive baseline (E-W4): frozen config JSON, world id and the world's state file (reactive.py)
+    bp.update({k: g(k) for k in ("reactive_config", "world_id", "reactive_state", "reactive_state_out", "mission_tag")
+               if g(k)})
     out = [_py("intercycle_nav.observer_bridge", "observer_bridge", bp)]
     if g("camera") == "stub":
         out.append(_py("intercycle_nav.camera_stub", "camera_stub", {"use_sim_time": True, "mode": g("camera_mode")}))
@@ -63,6 +67,11 @@ def generate_launch_description():
         DeclareLaunchArgument("dev", default_value="False"),         # PUBLIC demo key; wiring tests only
         DeclareLaunchArgument("probe", default_value="True"),       # nav_probe: read-only evidence logger
         DeclareLaunchArgument("map_npz", default_value=""),
+        DeclareLaunchArgument("reactive_config", default_value=""),   # condition reactive: ReactiveConfig JSON
+        DeclareLaunchArgument("world_id", default_value=""),
+        DeclareLaunchArgument("reactive_state", default_value=""),    # the world's state from its previous mission
+        DeclareLaunchArgument("reactive_state_out", default_value=""),
+        DeclareLaunchArgument("mission_tag", default_value=""),
         DeclareLaunchArgument("forge_every_s", default_value="0.0"),
         DeclareLaunchArgument("stop_fast_after_s", default_value="0.0"),
         OpaqueFunction(function=_nodes),
