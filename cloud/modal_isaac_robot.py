@@ -22,6 +22,7 @@ Results go to the Volume `intercycle-robot` under /episodes/<tag>/.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -29,7 +30,7 @@ import modal
 
 REPO = Path(__file__).resolve().parents[1]
 PKG = REPO / "ros2" / "intercycle_sim"
-APP_NAME = "intercycle-isaac-robot"
+APP_NAME = os.environ.get("IC_MODAL_APP", "intercycle-isaac-robot")   # a lane may prefix its own app name
 VOL_NAME = "intercycle-robot"
 VOL = "/vol"
 REMOTE_ROS2 = "/root/ros2"                      # the whole repo ros2/ tree (intercycle_sim, intercycle_nav, intercycle_eval)
@@ -152,6 +153,12 @@ def fake_episode(cfg: dict, world: dict[str, bytes]) -> dict:
     return _episode(cfg, world)
 
 
+def fake_episode_cpu(cpu: float = 0):
+    """fake_episode at another CPU reservation (H1: cpu=4 vs the decorator's 8; memory stays 8192). 0 = decorator default.
+    Modal bills max(reserved, used) per core-second, so the reservation sets the price floor."""
+    return fake_episode.with_options(cpu=cpu) if cpu else fake_episode
+
+
 @app.function(image=image, gpu="L4", cpu=8, memory=24576, timeout=3600, volumes={VOL: vol})
 def isaac_episode_l4(cfg: dict, world: dict[str, bytes]) -> dict:
     """L4: Isaac Lab ANYmal-D episode (physics only) + bridge + optional Nav2."""
@@ -188,7 +195,7 @@ def pull(tag: str) -> Path:
 def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: float = 0.0, wz: float = 0.0,
          goal: str = "20,32", start: str = "4,32,0", tag: str = "", gpu: str = "L4", empty: bool = False,
          max_rtf: float = 1.0, timeout_s: float = 300.0, movers: str = "", nav2_params: str = "",
-         cfg_json: str = "", patrol_s: float = 0.0):
+         cfg_json: str = "", patrol_s: float = 0.0, cpu: float = 0):
     import time
 
     if action == "check":
@@ -222,7 +229,7 @@ def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: floa
         raise SystemExit(f"unknown action {action!r}")
     if cfg_json:           # extra/override cfg keys (nav2_cmd, goal_cmd, extra_launch, seed, ...): JSON text or @file
         cfg.update(json.loads(Path(cfg_json[1:]).read_text() if cfg_json.startswith("@") else cfg_json))
-    fn = fake_episode if action == "fake" else (isaac_episode_l40s if gpu.upper() == "L40S" else isaac_episode_l4)
+    fn = fake_episode_cpu(cpu) if action == "fake" else (isaac_episode_l40s if gpu.upper() == "L40S" else isaac_episode_l4)
     t0 = time.time()
     res = fn.remote(cfg, world)
     res["client_wall_s"] = round(time.time() - t0, 1)
