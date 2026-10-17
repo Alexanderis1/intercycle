@@ -249,11 +249,13 @@ def per_label_f1(pred_named, truth, hz):
     return out
 
 
-def cycle_onset_error(pred: np.ndarray, frac: np.ndarray, hz: float) -> dict:
-    """Cycle boundaries: true onsets (idle -> active of the arm / carriage) vs predicted entries into bin 0."""
-    act = frac >= 0
-    to = (np.flatnonzero(act[1:] & ~act[:-1]) + 1).astype(float)
-    po = (np.flatnonzero((pred[1:] == 0) & (pred[:-1] != 0)) + 1).astype(float)
+def cycle_onset_error(pred: np.ndarray, truth: np.ndarray, rest_bins: tuple, hz: float) -> dict:
+    """Cycle boundaries: true onsets (resting -> moving: idle/clear -> any active sub-phase, i.e. the first frame a floor
+    camera can see the machine work) vs predicted onsets (idle/blocked bin -> any other bin)."""
+    ta = ~np.isin(truth, ("idle", "clear"))
+    pa = ~np.isin(pred, rest_bins)
+    to = (np.flatnonzero(ta[1:] & ~ta[:-1]) + 1).astype(float)
+    po = (np.flatnonzero(pa[1:] & ~pa[:-1]) + 1).astype(float)
     if not len(to) or not len(po):
         return dict(onset_med_s=float("nan"), onset_p90_s=float("nan"), onset_found=0.0)
     d = _nearest(po, to) / hz
@@ -318,7 +320,8 @@ def cmd_eval(a):
                 sc["per_label_f1"] = per_label_f1(pn, tl, HZ)
                 sc["bin_names"] = {int(k): str(v) for k, v in mp_.items()}
                 r[f"{mode}/{lvl}"] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in sc.items()}
-            r[f"{mode}/cycle"] = {k: round(v, 3) for k, v in cycle_onset_error(pred, te["frac"][:, i], HZ).items()}
+            r[f"{mode}/cycle"] = {k: round(v, 3) for k, v in cycle_onset_error(
+                pred, coarse(fam, truth, te["frac"][:, i]), (mp.idle_seg, mp.blocked_bin), HZ).items()}
         res["machines"][str(mid)] = r
         c, f, o = r["online_hmm/coarse"], r["online_hmm/fine"], r["offline_dtw/coarse"]
         print(f"{mid:6s} P={mp.period_s:6.2f} bins={mp.n_bins}  online coarse F1 {c['seg_f1']:.3f} acc {c['acc']:.3f} "
