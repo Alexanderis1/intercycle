@@ -74,7 +74,7 @@ def _run(state, bc, tr, t0, t1, dt=0.05):
 
 
 def test_forged_fast_layer_is_rejected():
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     f = sch.fast(T0)
     good = ble.frame(sign(encode_fast(f), demo_key(SITE.key_id)), layer=FAST)
@@ -94,7 +94,7 @@ def test_forged_fast_layer_is_rejected():
 
 
 def test_ttl_expiry_makes_machines_unknown_and_closes_zones():
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), None, sch.slow, sch.fast)
@@ -118,7 +118,7 @@ def test_static_and_none_conditions():
 
 
 def test_learned_mask_follows_the_predicted_idle_window(learned):
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), learned, sch.slow, sch.fast)
@@ -146,7 +146,7 @@ def test_learned_mask_follows_the_predicted_idle_window(learned):
 
 
 def test_held_zone_and_self_clear(learned):
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), learned, sch.slow, sch.fast)
@@ -161,7 +161,7 @@ def test_held_zone_and_self_clear(learned):
 
 
 def test_speed_mask_has_limits(learned):
-    st = K.ObserverState(SITE)
+    st = K.ObserverState(SITE, K.demo_keyring(SITE.key_id))
     sch = _sched()
     tr = F.MemoryTransport()
     bc = Broadcaster(_MemWriter(tr), demo_key(SITE.key_id), learned, sch.slow, sch.fast)

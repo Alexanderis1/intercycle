@@ -12,7 +12,11 @@ Publishes (all latched: reliable + transient_local, as Nav2's costmap filters ex
                                                                  production state, rejection counters (for timing_planner)
 Parameters: condition (none | static | learned | oracle), feed (transport url, see feed.py), plant_t0 (plant seconds at
 ROS time 0), rate_hz, horizon_s, step_s, k_sigma, pad_bins, inflate_m, static_margin_m, self_clear_r, mask_origin
-[x, y], mask_size [w, h] (m), mask_res, keyring ("key_id:hex,..."; default = the public DEMO key of the site's key_id),
+[x, y], mask_size [w, h] (m), mask_res, keyring_file (site cert keyring JSON, codec/trust.py) or keyring
+("key_id:hex,..." pinned verify keys), dev (default false). C-W5, fail closed: there is NO default key. With condition
+learned / oracle and neither keyring_file nor keyring the node refuses to start, unless dev:=true (the PUBLIC demo key,
+wiring tests only, never a result). Any malformed keyring is a startup error. Signatures are checked against the keys
+valid at each message's receive time (cert nbf/exp, revocation list).
 scenario (site-map YAML path; default scenario/bodyshop.yaml), log_path (JSONL; default $IC_OUT/observer_bridge.jsonl).
 
 The robot pose for the HELD rule is the localisation estimate (TF map -> base_link from AMCL), never simulator truth.
@@ -58,8 +62,14 @@ class ObserverBridge(Node):
         self.grid = K.Grid(ox, oy, res, int(round(w / res)), int(round(h / res)))
         scn = dp("scenario", "").value or None
         self.site = K.Site.from_scenario(scn)
-        kr = dp("keyring", "").value
-        self.state = K.ObserverState(self.site, K.keyring_from_hex(kr) if kr else None)
+        self.dev = bool(dp("dev", False).value)
+        kr_hex, kr_file = dp("keyring", "").value, dp("keyring_file", "").value
+        # C-W5: no default key. resolve_keyring raises KeyringError (the node refuses to start) when a feed condition
+        # has neither keyring_file nor keyring, unless dev=true (PUBLIC demo key, wiring tests only).
+        kr = K.resolve_keyring(self.site, self.condition, keyring_hex=kr_hex, keyring_file=kr_file, dev=self.dev)
+        if self.dev and not (kr_hex or kr_file):
+            self.get_logger().warn("dev=true: trusting the PUBLIC demo key; nothing this run produces is a result")
+        self.state = K.ObserverState(self.site, kr)
         self.feed_url = dp("feed", "none").value
         self.transport = open_transport(self.feed_url if self.condition in ("learned", "oracle") else "none")
         out = os.environ.get("IC_OUT", "")

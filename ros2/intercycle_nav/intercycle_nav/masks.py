@@ -32,6 +32,7 @@ import numpy as np
 
 from intercycle.codec import ble
 from intercycle.codec import maplayer as ML
+from intercycle.codec import trust as TR
 from intercycle.codec.sign import Keyring, demo_key, keyring_from
 from intercycle.observer import mapping as M
 from intercycle.robot.predict import idle_windows
@@ -43,26 +44,69 @@ CONDITIONS = ("none", "static", "learned", "oracle")
 KEEP_OUT, FREE = 100, 0
 
 
+TRUTH_PREFIXES = ("intercycle.truth", "intercycle.sim", "twin.")   # twin.: PLAN_TWIN §2 "Truth guards"
+FEED_CONDITIONS = ("learned", "oracle")                            # conditions that consume the signed broadcast
+
+
 def assert_no_truth() -> None:
-    bad = [m for m in sys.modules if m.startswith(("intercycle.truth", "intercycle.sim"))]
+    bad = [m for m in sys.modules if m.startswith(TRUTH_PREFIXES)]
     if bad:
         raise RuntimeError(f"ground-truth / simulator modules imported in the robot process: {bad}")
 
 
-def default_keyring(key_id: int) -> Keyring:
-    """Verify key of the public DEMO signing key (codec.sign.demo_key; the seed is public, so it is a test key)."""
+class KeyringError(RuntimeError):
+    """No usable keyring: the robot refuses to start rather than trust a key it was not given (C-W5, fail closed)."""
+
+
+def demo_keyring(key_id: int) -> Keyring:
+    """DEV ONLY: verify key of the PUBLIC demo signing key (codec.sign.demo_key; anyone can compute it, so it proves
+    nothing). Used only when the bridge runs with dev=true, and by tests."""
     return keyring_from({key_id: demo_key(key_id)})
 
 
 def keyring_from_hex(spec: str) -> Keyring:
-    """'1:abcd...,2:...' (key_id:hex verify key) -> Keyring."""
+    """'1:abcd...,2:...' (key_id:hex 32-byte verify key) -> Keyring. Any malformed entry raises KeyringError."""
     from nacl.signing import VerifyKey
 
     out = {}
     for part in filter(None, (p.strip() for p in spec.split(","))):
-        k, h = part.split(":")
-        out[int(k)] = VerifyKey(bytes.fromhex(h))
+        try:
+            k, h = part.split(":")
+            raw = bytes.fromhex(h)
+            if len(raw) != 32:
+                raise ValueError(f"verify key is {len(raw)} bytes, need 32")
+            out[int(k)] = VerifyKey(raw)
+        except ValueError as e:
+            raise KeyringError(f"bad keyring entry {part!r}: {e}") from None
+    if not out:
+        raise KeyringError(f"empty keyring {spec!r}")
     return out
+
+
+def resolve_keyring(site: Site, condition: str, keyring_hex: str = "", keyring_file: str = "",
+                    dev: bool = False) -> Keyring | TR.TrustStore:
+    """What the bridge verifies against (C-W5). In order:
+      * keyring_file: the site's cert keyring (root-signed certs + CRL, codec.trust); validity is checked per message;
+      * keyring_hex: explicitly pinned verify keys (e.g. the eval harness's fresh per-episode key);
+      * dev=true: the PUBLIC demo key (wiring tests only; never a result);
+      * otherwise: a condition that consumes the feed (learned / oracle) raises KeyringError, so the bridge refuses
+        to start; none / static open no feed and get an empty keyring (nothing can verify).
+    Never falls back silently: a malformed or unreadable keyring is an error too."""
+    if keyring_hex and keyring_file:
+        raise KeyringError("both keyring and keyring_file are set; give exactly one")
+    if keyring_file:
+        try:
+            return TR.load_trust_store(keyring_file, site.site_id)
+        except TR.TrustError as e:
+            raise KeyringError(str(e)) from None
+    if keyring_hex:
+        return keyring_from_hex(keyring_hex)
+    if dev:
+        return demo_keyring(site.key_id)
+    if condition in FEED_CONDITIONS:
+        raise KeyringError(f"condition {condition!r} needs a keyring (keyring_file or keyring); refusing to start. "
+                           "Set dev:=true only for wiring tests with the PUBLIC demo key.")
+    return {}
 
 
 # ------------------------------------------------------------------------------------------------ grid
@@ -168,20 +212,43 @@ class Snapshot:
 class ObserverState:
     """Everything the robot believes about the plant, built only from verified broadcast bytes."""
 
-    def __init__(self, site: Site, keyring: Keyring | None = None, fast_max_age_s: float = 30.0):
+    def __init__(self, site: Site, keyring: Keyring | TR.TrustStore | None, fast_max_age_s: float = 30.0):
+        """keyring: pinned verify keys, or a TrustStore (certs checked at each message's receive time). None is refused
+        (C-W5: there is no default key; see `resolve_keyring`)."""
+        if keyring is None:
+            raise KeyringError("ObserverState needs an explicit keyring (no default key: C-W5 fail closed)")
         self.site = site
-        kr = keyring if keyring is not None else default_keyring(site.key_id)
+        self.trust: TR.TrustStore | None = None
+        self._pinned: Keyring | None = None
+        if isinstance(keyring, TR.TrustStore):
+            self.trust = keyring
+        else:
+            self._pinned = dict(keyring)
+        kr = self._keyring_at(0.0)
         self.rx = ble.Receiver(kr, site.site_id)
         self.map_rx = ML.MapReceiver(kr, site.site_id)
+        self._map_key: dict[int, int] = {}             # map version -> key_id of the manifest that delivered it
         self.fast_max_age_s = fast_max_age_s
         self.stats: Counter[str] = Counter()
 
+    def _keyring_at(self, t: float) -> Keyring:
+        """Keys valid at plant time t (a TrustStore: certified, inside nbf/exp, not revoked)."""
+        if self.trust is not None:
+            return self.trust.keyring_at(DAY0_UNIX + t)
+        assert self._pinned is not None
+        return self._pinned
+
     # ---- input
     def ingest(self, t_rx: float, record: bytes) -> None:
+        if self.trust is not None:                     # verify against the keys valid at the receive time
+            self.rx.keyring = self.map_rx.keyring = self._keyring_at(t_rx)
         kind, data = record[:1], record[1:]
         if kind == FRAME:
             if ML.is_map_frame(data):
                 if self.map_rx.ingest(t_rx, data) is not None:
+                    man = self.map_rx.manifest
+                    assert man is not None
+                    self._map_key[int(man.version)] = int(man.key_id)
                     self.stats["map_complete"] += 1
             else:
                 d = self.rx.ingest(t_rx, data)
@@ -198,7 +265,16 @@ class ObserverState:
 
     # ---- views
     def map_view(self, t: float) -> ML.DecodedMap | None:
-        return self.map_rx.latest(t)
+        """Newest verified, unexpired map whose signing key is still valid at t (expired / revoked cert -> None)."""
+        view = self.map_rx.latest(t)
+        if view is None:
+            return None
+        newest = self.map_rx.cache.newest(self.site.site_id)
+        kid = self._map_key.get(newest[0]) if newest is not None else None
+        if kid is None or kid not in self._keyring_at(t):
+            self.stats["map_key_not_valid"] += 1
+            return None
+        return view
 
     def map_version(self) -> int | None:
         man = self.map_rx.manifest
@@ -210,6 +286,11 @@ class ObserverState:
         curtain / area scanner would see it, not only while its centre is inside."""
         d = self.rx.latest(t)
         slow, fast = (d.slow, d.fast) if d.ok else (None, None)
+        valid = self._keyring_at(t)                    # a layer whose key expired / was revoked since is not trusted
+        if slow is not None and slow.key_id not in valid:
+            slow = None
+        if fast is not None and fast.key_id not in valid:
+            fast = None
         fast_age = None if fast is None else DAY0_UNIX + t - fast.issue_time
         if fast_age is not None and fast_age > self.fast_max_age_s:
             fast = None
