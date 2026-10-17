@@ -56,7 +56,7 @@ def plant_start(seed: int, cap_s: float) -> float:
 
 
 def episode_cfg(name: str, seed: int, cond: str, seconds: float = 600.0, invisible: bool = False,
-                timing: dict | None = None) -> dict:
+                timing: dict | None = None, max_rtf: float = 1.0) -> dict:
     cap = seconds
     t0 = plant_start(seed, cap)
     feed = cond in FEED
@@ -79,7 +79,7 @@ def episode_cfg(name: str, seed: int, cond: str, seconds: float = 600.0, invisib
             f" -p max_wait_s:=120.0{tps} -p out:=$IC_WORK/goal.json")
     return {
         "tag": f"{name}_s{seed}_{cond}", "eval": True, "condition": cond, "seed": seed, "start": INIT, "mode": "nav",
-        "goal": INIT, "nav2": True, "seconds": cap, "timeout_s": cap, "max_rtf": 1.0,
+        "goal": INIT, "nav2": True, "seconds": cap, "timeout_s": cap, "max_rtf": max_rtf,
         "mover_source": "intercycle_eval.plant:make",
         "plant": {"seed": seed, "plant_t0": t0, "invisible_robot": invisible, "feed": feed},
         "nav2_cmd": "ros2 launch /root/ros2/intercycle_nav/launch/nav.launch.py map:=$IC_WORLD/map.yaml",
@@ -119,6 +119,8 @@ def main() -> None:
     ap.add_argument("--conds", default=",".join(CONDS))
     ap.add_argument("--backend", default="fake", choices=("fake", "l4", "l40s"))
     ap.add_argument("--seconds", type=float, default=600.0)
+    ap.add_argument("--max-rtf", type=float, default=1.0, help="sim speed cap (H1 harness probe; sealed default 1.0)")
+    ap.add_argument("--cpu", type=float, default=0.0, help="fake backend only: CPU cores reserved (0 = decorator's 8)")
     ap.add_argument("--map", default=str(REPO / "out" / "timeline" / "map_1w.npz"))
     ap.add_argument("--invisible", action="store_true")
     ap.add_argument("--timing-json", default="")
@@ -133,7 +135,7 @@ def main() -> None:
              (range(int(part.split("-")[0]), int(part.split("-")[1]) + 1) if "-" in part else [part])]
     conds = [c for c in a.conds.split(",") if c]
     timing = json.loads(a.timing_json) if a.timing_json else None
-    cfgs = [episode_cfg(a.name, s, c, a.seconds, a.invisible, timing) for s in seeds for c in conds]
+    cfgs = [episode_cfg(a.name, s, c, a.seconds, a.invisible, timing, a.max_rtf) for s in seeds for c in conds]
     # fake-backend episodes are wiring checks only: eval_check marks them invalid (no allow_fake), so they never
     # enter a result
     if a.print_cfg:
@@ -158,12 +160,12 @@ def main() -> None:
 
     map_sha = hashlib.sha256(Path(a.map).read_bytes()).hexdigest()[:16]
     (out / "batch.json").write_text(json.dumps({"name": a.name, "seeds": seeds, "conds": conds, "backend": a.backend,
-                                                "seconds": a.seconds, "map": a.map, "map_sha256_16": map_sha,
+                                                "seconds": a.seconds, "max_rtf": a.max_rtf, "cpu": a.cpu, "map": a.map, "map_sha256_16": map_sha,
                                                 "detach": a.detach, "started": time.strftime("%F %T"),
                                                 "cfgs": cfgs}, indent=1))
     import modal_isaac_robot as R
 
-    fn = {"fake": R.fake_episode, "l4": R.isaac_episode_l4, "l40s": R.isaac_episode_l40s}[a.backend]
+    fn = {"fake": R.fake_episode_cpu(a.cpu), "l4": R.isaac_episode_l4, "l40s": R.isaac_episode_l40s}[a.backend]
     t0 = time.time()
     with R.app.run(detach=a.detach):
         # spawn every episode up front (all inputs are on Modal before we wait), so a detached batch survives this client
