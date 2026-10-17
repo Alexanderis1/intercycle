@@ -4,7 +4,7 @@ Hackathon: AMD Developer Hackathon ACT III, Track 1 Intelligent Industry. Submis
 **Plan, priorities, timeboxes and anti-drift rules live in `docs/DIRECTION.md`.** This brief holds only the engineering facts.
 
 ## Product (one paragraph; DIRECTION §1 is authoritative)
-The product is the **observer**. Existing ceiling cameras in an automotive body shop (BIW, plus an on-site data hall) learn, with no PLC link and no manual setup:
+The product is the **observer**. Existing ceiling cameras in an automotive body shop (BIW, plus an on-site data hall) learn, with no PLC link and only a one-time site-plan import (zone outlines, camera poses):
 - every machine's cycle and the distinct phases inside it;
 - the line's production states;
 - vehicle and people flows by time of day.
