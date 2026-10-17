@@ -302,7 +302,8 @@ def mat(bs, key):
         "green_paint": lambda: proc_mat(bs, "green_paint", (0.05, 0.3, 0.1), rough=0.5),
         "precast": lambda: proc_mat(bs, "precast", (0.55, 0.55, 0.53), rough=0.85, var=0.12, scale=0.8, bump=0.25),
         "cladding": lambda: corrugated(bs, "cladding", (0.68, 0.70, 0.72), axis="z", pitch=0.2),
-        "roof_deck": lambda: corrugated(bs, "roof_deck", (0.62, 0.63, 0.64), axis="y", pitch=0.25, metal=0.5),
+        "roof_deck": lambda: corrugated(bs, "roof_deck", (0.78, 0.79, 0.79), axis="y", pitch=0.25, metal=0.3),
+        "roof_steel": lambda: proc_mat(bs, "roof_steel", (0.72, 0.73, 0.72), rough=0.5, metal=0.2, var=0.08, grime=0.2),
         "floor": lambda: concrete_floor(bs),
         "hazard": lambda: stripe_mat(bs, "hazard", (0.85, 0.62, 0.02), (0.02, 0.02, 0.02)),
         "line_yellow": lambda: proc_mat(bs, "line_yellow", (0.8, 0.6, 0.05), rough=0.5, var=0.25, bump=0.0, grime=0.5),
@@ -363,7 +364,7 @@ def building(bs, rng: random.Random):
 
 
 def roof(bs, X, Y):
-    st = mat(bs, "steel_grey")
+    st = mat(bs, "roof_steel")                    # roof structure painted light grey, as in most body shops
     # primary trusses along y at each column line: bottom + top chord + verticals/diagonals
     for i in range(0, int(X / COL_DX) + 1):
         x = min(max(i * COL_DX, 0.2), X - 0.2)

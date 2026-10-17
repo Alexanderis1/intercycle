@@ -33,6 +33,7 @@ import replay_bpy as rb  # noqa: E402
 
 core = rb.core
 CCTV_Z = 9.0
+ARM_REACH_STANDOFF = 2.65    # m, line centre -> FANUC base for on-line cells
 STACK = {"ACTIVE": "g", "IDLE": "g", "STOPPED": "y", "HELD": "y", "TRIPPED": "r"}
 
 
@@ -105,10 +106,25 @@ class RealScene(rb.BScene):
                 for sx in (-1, 1):
                     self.box(f"lifter_{mid}_col{sx}", (0.4, 0.4, 4.5), (cx + sx * (w / 2 - 1.5), cy - 2.0, 2.25), plant.mat(self, "ral7035"))
             self.arms[mid] = []
-            for pl in core.arm_layout(m):
-                joints, tip = fanuc.build_fanuc(pl.path.replace("/", "_"), (pl.x, pl.y, 0.0), pl.yaw_deg, collection=self.col_real)
-                self.arms[mid].append((joints, pl.meta["idx"] + (2 if pl.meta["side"] == "S" else 0), tip))
-                self.box(pl.path.replace("/", "_") + "_riser", (1.0, 1.0, 0.05), (pl.x, pl.y, 0.025), dark)
+            # On-line robots stand ARM_REACH_STANDOFF from the line centre so the FANUC weld poses (gun tip ~1.7-1.85 m in
+            # front of the base) land on the body side (half-width ~0.9 m); replay.py's 3.2 m was sized for the KR210.
+            def _y(pl_y):
+                return cy + math.copysign(ARM_REACH_STANDOFF, pl_y - cy) if m.get("on_line") else pl_y
+            places = [(pl.path.replace("/", "_"), pl.x, _y(pl.y), pl.yaw_deg, pl.meta["idx"] + (2 if pl.meta["side"] == "S" else 0), True)
+                      for pl in core.arm_layout(m)]
+            if kind in ("weld_station", "respot") and w >= 8:   # real weld cells are dense: a third robot per side
+                for side, sg in (("N", 1), ("S", -1)):
+                    places.append((f"_Line_{mid}_arm_{side}mid", cx, cy + sg * ARM_REACH_STANDOFF, -90.0 * sg, 4 + (sg < 0), False))
+            for name, x, y, yaw, k, cabinet in places:
+                joints, tip = fanuc.build_fanuc(name, (x, y, 0.0), yaw, collection=self.col_real)
+                self.arms[mid].append((joints, k, tip))
+                self.box(name + "_riser", (1.0, 1.0, 0.05), (x, y, 0.025), dark)
+                if cabinet and m.get("on_line"):                 # robot controller + weld timer behind each corner robot
+                    sg = 1 if y > cy else -1
+                    yc = cy + sg * (d / 2 - 0.45)
+                    self.box(name + "_ctrl", (0.75, 0.55, 1.45), (x, yc, 0.73), plant.mat(self, "ral7035"))
+                    self.box(name + "_ctrl_hmi", (0.2, 0.01, 0.15), (x, yc - sg * 0.28, 1.1), plant.glow_cam_only(self, "hmi", (0.2, 0.5, 0.9), 2.0))
+                    self.box(name + "_valve", (0.5, 0.25, 0.35), (x + 0.65, yc, 1.2), plant.mat(self, "steel_grey"))
 
     def _conveyor(self, x0, x1, y, dark, galv):
         """Roller-bed skid conveyor: two side frames, rollers every 0.6 m, legs every 2.4 m."""
@@ -236,6 +252,17 @@ class RealScene(rb.BScene):
                 y = cy + s * (0.95 if on else 1.2)
                 self.box(f"fx_{mid}_cb{k}{s}", (0.12, 0.12, 0.55), (x, y, 0.55 + (0.0 if on else 0.4)), blue)
                 self.box(f"fx_{mid}_ca{k}{s}", (0.06, 0.25, 0.06), (x, y - s * 0.12, 0.85 + (0.0 if on else 0.4)), red)
+        if on:                                                 # tooling frame both sides of the skid, as in real BIW cells
+            white = plant.proc_mat(self, "tool_white", (0.8, 0.8, 0.78), rough=0.4, var=0.05, bump=0.0, grime=0.3)
+            for s in (-1, 1):
+                y = cy + s * 1.3
+                self.box(f"fx_{mid}_rail{s}", (5.2, 0.3, 0.3), (cx, y, 0.15), red)
+                for k in range(4):
+                    x = cx - 2.1 + k * 1.4
+                    self.box(f"fx_{mid}_tw{k}{s}", (0.18, 0.18, 0.75), (x, y, 0.65), red)
+                    self.box(f"fx_{mid}_tp{k}{s}", (0.3, 0.3, 0.04), (x, y, 1.04), white)
+                    self.box(f"fx_{mid}_tc{k}{s}", (0.08, 0.35, 0.08), (x, y - s * 0.2, 1.1), plant.mat(self, "dark_steel"))
+                self.box(f"fx_{mid}_vt{s}", (0.6, 0.2, 0.3), (cx + 2.7, y + s * 0.3, 0.5), plant.mat(self, "galv"))
 
     def _biw_static(self, name, x, y, z, panel=False):
         steel = plant.proc_mat(self, "biw_steel", (0.6, 0.62, 0.64), rough=0.32, metal=0.85, var=0.1, scale=3.0, bump=0.05, grime=0.15)
@@ -328,10 +355,10 @@ class RealScene(rb.BScene):
 def still_cam(name: str, scn: dict) -> "core.Cam":
     if name == "wide":                                         # high corner view down the whole line
         return core.Cam((1.2, 46.5, 8.4), (50.0, 19.0, 0.0), 19.0)
-    if name == "weld_close":                                   # outside the S30 north light-curtain opening
+    if name == "weld_close":                                   # in the S30 north light-curtain opening, on the middle robot's gun
         m = next(mm for mm in scn["machines"] if mm["id"] == "S30")
         y = m["z"] + m["size"][1] / 2
-        return core.Cam((m["x"] + 2.4, y + 2.2, 1.75), (m["x"] - 0.6, m["z"] + 2.0, 1.0), 26.0)
+        return core.Cam((m["x"] - 0.6, y + 1.7, 1.9), (m["x"] + 0.4, m["z"] + 1.6, 1.1), 35.0)
     if name.startswith("cctv_"):
         i = int(name.split("_")[1])
         x, y = scn["cameras"][i]
