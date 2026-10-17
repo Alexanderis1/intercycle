@@ -1,0 +1,21 @@
+{
+ "_doc": "Probe P6 scale cross-check, expressed as camera height h above the floor (the ground-plane scale is proportional to h; scale factor = h / 4.0 m prior). Zero-roll pinhole after CAL v0 k1; tilt fitted from person boxes. people = RF-DETR-M person boxes (conf >= 0.5, upright, unoccluded, not at the border) on the t=0.5 s frame of TRAIN clips, walker height 1.72 m, robust LS; stripes = painted floor lines assumed 10 cm wide, both edges traced on the TRAIN median background. Fallback rule (PLAN_TWIN §3 P6): estimates disagree by more than 20 % -> publish a scale interval and run the robot at both ends. Details: docs/probes/S3a-P6.md.",
+ "prior_h_m": 4.0,
+ "c9_f0": {
+  "people_h_m_f1330": 3.52, "people_h_m_boot90_f1330": [3.47, 3.57], "people_tilt_deg_f1330": 27.2,
+  "people_h_m_f1020_f1430": [3.12, 3.63], "people_n_boxes": 398, "people_n_clips": 239,
+  "stripes_h_m_f1330": [3.95, 3.27, 3.96],
+  "max_disagreement_f1330": 0.136,
+  "verdict": "pass (<= 20 %)",
+  "h_interval_m": [3.47, 4.0], "h_point_m": 3.75
+ },
+ "c14_f0": {
+  "people_h_m_f1330": 5.71, "people_h_m_boot90_f1330": [5.56, 5.93], "people_tilt_deg_f1330": 28.1,
+  "people_h_m_f1020_f1430": [5.0, 5.89], "people_n_boxes": 81, "people_n_clips": 65,
+  "stripes_h_m_f1330": [5.51],
+  "max_disagreement_f1330": 0.43,
+  "verdict": "FALLBACK: scale interval (prior 4.0 m vs people 5.71 m and stripe 5.51 m)",
+  "h_interval_m": [4.0, 5.93], "h_point_m": 5.6
+ },
+ "c9_f1": {"verdict": "dev-only framing: no train frames, no k1, no scale (PLAN_TWIN §5: no fitted H without a matching train framing)"}
+}
