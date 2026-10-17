@@ -104,7 +104,8 @@ def run(a) -> dict:
     flicker = (88.0, 44.0, 0.5, t0 + 0.5 * H, t0 + 1.0 * H, 0.3)
     bump_t = t_inst + 4 * H
     bumps = [] if a.no_bump else [(6, 1.5, 1.0, bump_t)]
-    shim_kw = dict(clutter_per_h=a.clutter, persistent=[flicker], bumps=bumps)
+    okw = B.observer_kw(dict(measured=not a.assumed_shim, pm=str(ROOT / "out" / "timeline" / "phases" / "pm_measured.pkl")))
+    shim_kw = dict(okw.pop("shim_kw", {}), clutter_per_h=a.clutter, persistent=[flicker], bumps=bumps)
     mp = prior_map()
     mp.unknown_rects = []
     mp.cam_offline = set()
@@ -115,7 +116,9 @@ def run(a) -> dict:
     OUT.mkdir(parents=True, exist_ok=True)
     sw = StreamWriter(a.run, out_root=ROOT / "out" / "stream", live=a.live,
                       meta=dict(kind="newmachine", label="SYNTHETIC: simulated plant", t_install=t_inst, machine=cfg["id"],
-                                note="the observer is not told about the new machine; camera noise / clutter assumed"))
+                                prod_state_source="discovered (workstream P PhaseModel.line_state; no calendar)",
+                                note="the observer is not told about the new machine; camera shim at the measured perception "
+                                     "error (workstream V) plus clutter / flicker / bump stress"))
     S = dict(events=[], ticks=[], first_unknown=math.nan)
     acc = {k: dict(tp=0, fn=0, n=0, fo=0) for k in ("pre_detection", "transition", "learned")}
     VARIANTS = (("centre", 0), ("overlap", 1), ("overlap_margin_0.25m", 1), ("overlap_margin_0.5m", 1))
@@ -192,7 +195,7 @@ def run(a) -> dict:
                   f"wall {time.time() - t_wall:.0f} s", flush=True)
 
     B.run_window(0, t0 - 1200.0, t1, scn=scn, map_=mp, tick_hook=hook, extra_parts=lambda ts: {cfg["id"]: nm.parts(ts)},
-                 shim_kw=shim_kw, shim_seed=8001)
+                 shim_kw=shim_kw, shim_seed=8001, **okw)
     sw.close()
     # ---------------------------------------------------------------- summarise
     ev = S["events"]
@@ -292,6 +295,7 @@ def main():
     ap.add_argument("--pre-h", type=float, default=2.0, help="hours simulated before the installation")
     ap.add_argument("--clutter", type=float, default=60.0, help="spurious motion blobs per hour site-wide")
     ap.add_argument("--no-bump", action="store_true")
+    ap.add_argument("--assumed-shim", action="store_true", help="the old assumed shim (0.15 m, 5 %% drop) instead of the measured one")
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--run", default="newmachine")
     ap.add_argument("--snap-every-s", type=float, default=300.0)

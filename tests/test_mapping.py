@@ -39,6 +39,7 @@ KEY = demo_key(SCN.key_id)
 KEYRING = keyring_from({SCN.key_id: KEY})
 SITE = SCN.site_id
 MIDS = [m.id for m in SCN.machines]
+CAL = {"calendar": True}   # layer-mechanics tests use the public calendar as an EXTERNAL reference (no published number does)
 
 
 # ------------------------------------------------------------------------------------------------ fixtures
@@ -47,8 +48,8 @@ MIDS = [m.id for m in SCN.machines]
 def sim(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("maps")
     with ProcessPoolExecutor(3) as ex:
-        futs = [ex.submit(B._worker, (s, a, b, str(tmp / f"w{i}.npz"))) for i, (s, a, b) in enumerate(WINDOWS)]
-        m, _, info = B.run_window(*TRACE, record=True)
+        futs = [ex.submit(B._worker, (s, a, b, str(tmp / f"w{i}.npz"), None, CAL)) for i, (s, a, b) in enumerate(WINDOWS)]
+        m, _, info = B.run_window(*TRACE, record=True, calendar=True)
         for f in futs:
             f.result()
     for i in range(len(WINDOWS)):

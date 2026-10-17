@@ -162,28 +162,58 @@ def run_window(seed: int, t0: float, t1: float, scn: Scenario | None = None, shi
             if tick_hook is not None:
                 tick_hook(int(k), tc, states, obs, cond)
             while cps and float(t_now[j]) >= cps[0]:
-                on_checkpoint(cps.pop(0), builder.map)
+                on_checkpoint(cps.pop(0), builder.map, cond)
             if record:
                 rec_t.append(tc)
                 rec_prod.append(cond.prod_state)
                 rec_bin.append(cond.phase_bin.copy())
         if progress:
             print(f"  seed {seed} t={t_now[-1] / 3600:.2f} h", flush=True)
+    while cps and on_checkpoint is not None and cps[0] <= t1 + 1e-6:     # a checkpoint at the window end
+        on_checkpoint(cps.pop(0), builder.map, cond)
     info = {"seed": seed, "t0": t0, "t1": t1}
     if record:
         info.update(t=np.array(rec_t), prod=np.array(rec_prod), bins=np.array(rec_bin), world=world, kin=kin)
     return builder.map, builder.tracker, info
 
 
+def observer_kw(opts: dict | None) -> dict:
+    """run_window keywords from a picklable options dict: {"measured": bool (CameraShim = MEASURED_SHIM),
+    "pm": path of a fitted PhaseModel (discovered line state; "bins": True also its sub-phases as L1 bins),
+    "calendar": bool (public calendar as external input; unit tests only), "shim": extra CameraShim keywords}."""
+    opts = opts or {}
+    kw: dict = {}
+    shim = dict(M.MEASURED_SHIM) if opts.get("measured") else {}
+    shim.update(opts.get("shim", {}))
+    if shim:
+        kw["shim_kw"] = shim
+    if opts.get("pm"):
+        from intercycle.observer import phases as PH
+        PH.MOTIF_ENGINE = "numpy"
+        kw["phase_model"] = PH.PhaseModel.load(opts["pm"], load())
+        kw["use_bins"] = bool(opts.get("bins", False))
+        kw["use_line_state"] = True
+    if opts.get("calendar"):
+        kw["calendar"] = True
+    return kw
+
+
 def _worker(args):
-    """(seed, t0, t1, path[, checkpoints]): build one window and save it; with checkpoints also save the partial map
-    at each checkpoint as <path stem>_<t:09d>.npz (the timeline's snapshots)."""
+    """(seed, t0, t1, path[, checkpoints[, opts]]): build one window and save it; with checkpoints also save the partial
+    map at each checkpoint as <path stem>_<t:09d>.npz plus the observer's conditioning then (<stem>_<t>.json: production
+    state, phase bins, phase), which the timeline's snapshots carry."""
     seed, t0, t1, path = args[:4]
     cps = args[4] if len(args) > 4 else None
+    opts = args[5] if len(args) > 5 else None
     t = time.time()
     stem = Path(path).with_suffix("")
-    save = (lambda tc, mp: mp.save(f"{stem}_{int(round(tc)):09d}.npz")) if cps else None
-    m, _, _ = run_window(seed, t0, t1, checkpoints=cps, on_checkpoint=save)
+
+    def save(tc, mp, cond):
+        mp.save(f"{stem}_{int(round(tc)):09d}.npz")
+        Path(f"{stem}_{int(round(tc)):09d}.json").write_text(json.dumps(dict(
+            t=tc, prod=int(cond.prod_state), phase_bin=[int(v) for v in cond.phase_bin],
+            phase=[None if not np.isfinite(v) else float(v) for v in cond.phase])))
+    m, _, _ = run_window(seed, t0, t1, checkpoints=cps, on_checkpoint=save if cps else None, **observer_kw(opts))
     m.save(path)
     return path, time.time() - t
 

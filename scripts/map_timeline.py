@@ -37,7 +37,10 @@ from intercycle.scenario import load  # noqa: E402
 OUT = ROOT / "out" / "timeline"
 PARTS = OUT / "parts"
 H, DAY = 3600.0, 86_400.0
-MILESTONES = {"1h": 1 * H, "6h": 6 * H, "1d": DAY, "3d": 3 * DAY, "1w": 7 * DAY}
+MILESTONES = {"1h": 1 * H, "6h": 6 * H, "1d": DAY, "3d": 3 * DAY, "5d": 5 * DAY, "1w": 7 * DAY}
+# Observer options for every published run (audit Tier 1 #1 + waiver (a)): camera shim at the MEASURED perception error
+# and the production state DISCOVERED by workstream P's PhaseModel (fitted on training day 0, measured shim); no calendar.
+OPTS = dict(measured=True, pm=str(OUT / "phases" / "pm_measured.pkl"))
 
 
 def checkpoints(days: int) -> list[float]:
@@ -57,8 +60,8 @@ def cmd_build(a) -> None:
     cps = checkpoints(a.days)
     jobs = []
     for i, (s, t0, t1) in enumerate(windows(a.days)):
-        inside = [c for c in cps if t0 < c < t1]
-        jobs.append((s, t0, t1, str(PARTS / f"w{i:03d}.npz"), inside))
+        inside = [c for c in cps if t0 < c <= t1]
+        jobs.append((s, t0, t1, str(PARTS / f"w{i:03d}.npz"), inside, OPTS))
     todo = [j for j in jobs if not Path(j[3]).exists()]           # resumable
     print(f"{len(jobs)} windows, {len(todo)} to run, {a.workers} workers", flush=True)
     t = time.time()
@@ -135,7 +138,7 @@ def main():
         cmd_build(a)
     elif a.cmd == "heldout":
         from intercycle.eval import map_metrics as MM
-        MM.record_heldout(OUT / "heldout", workers=a.workers)
+        MM.record_splits(OUT / "heldout", workers=a.workers, opts=OPTS)
     else:
         cmd_replay(a)
 
@@ -147,11 +150,20 @@ FULL_PREDS = ((("env", "bin", 0.0, 0), ("inner", "robot", 0.0, 0))
 QUICK_PREDS = (("env", "bin", 0.0, 0), ("box", "robot", 0.0, 0))
 
 
-def snapshot_layers(m: M.LayeredMap, T: float, scn, max_boxes: int = 8):
-    """Stream-contract arrays for the map at observation time T (the slice the robot would read at T)."""
+def cond_at(meta: dict, T: float) -> dict | None:
+    """The observer's own conditioning at checkpoint T (saved by the build worker): prod, phase_bin, phase."""
+    for w in meta["windows"]:
+        f = Path(f"{Path(w[3]).with_suffix('')}_{int(round(T)):09d}.json")
+        if f.exists():
+            return json.loads(f.read_text())
+    return None
+
+
+def snapshot_layers(m: M.LayeredMap, T: float, scn, max_boxes: int = 8, cond: dict | None = None):
+    """Stream-contract arrays for the map at observation time T (the slice the robot would read at T), indexed by the
+    production state the observer discovered at T (no calendar)."""
     tod = M.tod_bin(T)
-    cal = M.calendar_state(scn, T)
-    prod = cal if cal is not None else M.RUNNING
+    prod = int(cond["prod"]) if cond else M.RUNNING
     l2, h2 = m.traffic(M.VEHICLE, tod, prod)
     l3, h3 = m.traffic(M.PERSON, tod, prod)
     unk = m.unknown_mask(tod, prod)
@@ -236,15 +248,15 @@ def cmd_replay(a) -> None:
     from intercycle.observer.stream import StreamWriter
     scn = load()
     meta = json.loads((OUT / "build.json").read_text())
-    recs = MM.load_records(OUT / "heldout")
+    recs = MM.load_records(OUT / "heldout", "test_s0_")
     quick_recs = recs if a.quick_all else recs[:1]
     rows, full = [], {}
     sw = StreamWriter(a.run, out_root=ROOT / "out" / "stream", live=a.live,
                       meta=dict(kind="timeline", days=meta["days"], label="SYNTHETIC: simulated plant",
-                                prod_state_source="break / shift_change: from public calendar (external input), pending discovered "
-                                                  "states (workstream P); andon / running: discovered from line motion",
-                                note="metrics on held-out day 7 (never used to build the map); camera-shim noise assumed until "
-                                     "workstream V calibrates it"))
+                                prod_state_source="discovered (workstream P PhaseModel.line_state; no calendar)",
+                                note="metrics on held-out day 7 of seed 0 (never used to build the map); camera shim at the "
+                                     "perception error measured by workstream V (32 % miss, 0.38 m median, 15 % gross errors, "
+                                     "12 % false positives)"))
     ms_left = dict(sorted(MILESTONES.items(), key=lambda kv: kv[1]))
     t_wall = time.time()
     k = 0
@@ -271,10 +283,12 @@ def cmd_replay(a) -> None:
             full[label]["headline_quick"] = hl
         row = dict(T=T, hours=hours, milestone=label, **hl)
         rows.append(row)
-        L = snapshot_layers(m, T, scn)
+        cnd = cond_at(meta, T)
+        L = snapshot_layers(m, T, scn, cond=cnd)
         sw.snapshot(t_sim=T, t_obs=hours * H, prod_state=M.PROD_NAMES[L["prod"]], grid=dict(m.spec["site"]), l1=L["l1"],
                     l2_occ=L["l2"], l2_head=L["h2"], l3_occ=L["l3"], l3_head=L["h3"], unknown=L["unknown"],
-                    phase_now={d["id"]: None for d in m.spec["machines"]},
+                    phase_now={d["id"]: (int(cnd["phase_bin"][j]) if cnd and j < len(cnd["phase_bin"]) and cnd["phase_bin"][j] >= 0 else None)
+                               for j, d in enumerate(m.spec["machines"])},
                     metrics={kk: float(vv) for kk, vv in row.items() if isinstance(vv, (int, float)) and kk != "T"})
         if a.live and a.pace > 0:
             time.sleep(a.pace)
@@ -303,7 +317,7 @@ def _f(v, nd=4):
 
 def cmd_report(a) -> None:
     from intercycle.eval import map_metrics as MM
-    recs = MM.load_records(OUT / "heldout")
+    recs = MM.load_records(OUT / "heldout", "test_s0_")
     L = []
     sc = {lab: json.loads((OUT / f"score_{lab}.json").read_text()) for lab in MILESTONES if (OUT / f"score_{lab}.json").exists()}
     # ---- convergence table
@@ -370,6 +384,7 @@ def cmd_report(a) -> None:
         (OUT / "part_speeds.json").write_text(json.dumps(sp, indent=1))
         L.append("\nFastest body circle per machine (truth, m/s, p99 / max): " +
                  ", ".join(f"{k} {v['p99']:.1f} / {v['max']:.1f}" for k, v in sp.items()))
+    L += conformal_tables()
     (OUT / "tables.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     print("\n".join(L))
 
@@ -377,13 +392,14 @@ def cmd_report(a) -> None:
 # ------------------------------------------------------------------------------------------------ discovered phases (P)
 
 PHD = OUT / "phases"
-PM_FIT = (6.0 * H, 9.75 * H)               # day 0, 06:00-09:45: running, andon stops and the 09:00 break
+PM_FIT = (6.0 * H, 9.75 * H)               # day 0 (training), 06:00-09:45: running, andon stops and the 09:00 break
+PM_PATH = PHD / "pm_measured.pkl"          # PhaseModel fitted on measured-shim observations of PM_FIT
 
 
 def _pm_load():
     from intercycle.observer import phases as PH
     PH.MOTIF_ENGINE = "numpy"
-    return PH.PhaseModel.load(PHD / "pm.pkl", load())
+    return PH.PhaseModel.load(PM_PATH, load())
 
 
 def _pm_window(args):
@@ -410,14 +426,14 @@ def _pm_record(args):
 def cmd_phases(a) -> None:
     from intercycle.eval import map_metrics as MM
     PHD.mkdir(parents=True, exist_ok=True)
-    if a.step in ("fit", "all") and not (PHD / "pm.pkl").exists():
+    if a.step in ("fit", "all") and not PM_PATH.exists():
         from intercycle.observer import phases as PH
         PH.MOTIF_ENGINE = "numpy"
         obs = []
-        B.run_window(0, *PM_FIT, tick_hook=lambda k, tc, st, o, c: obs.append(o), build=False)
+        B.run_window(0, *PM_FIT, tick_hook=lambda k, tc, st, o, c: obs.append(o), build=False, **B.observer_kw(dict(measured=True)))
         t = time.time()
         pm = PH.PhaseModel.fit(obs, load())
-        pm.save(PHD / "pm.pkl")
+        pm.save(PM_PATH)
         print(f"PhaseModel fitted on {len(obs)} ticks in {time.time() - t:.0f} s", flush=True)
     if a.step in ("build", "all"):
         jobs = [(s_, t0, t1, str(PHD / f"d{i:02d}.npz")) for i, (s_, t0, t1) in enumerate(windows(1))]
@@ -457,6 +473,80 @@ def cmd_phases(a) -> None:
         res["line_state_agreement_with_calendar_rule"] = float((pe[:n] == pd_[:n]).mean())
         (PHD / "compare.json").write_text(json.dumps(res, indent=1, default=float))
         print(json.dumps(res, indent=1, default=float))
+
+
+ALPHAS = (0.01, 0.005)
+MARGINS = (0, 1, 2, 3, 4, 6, 8)
+
+
+def conformal_tables() -> list[str]:
+    """A2: margin by conformal risk control on the calibration days (5-6, map trained on days 0-4), then scored ONCE on
+    the test day 7 of seed 0 and on day 7 of seeds 1 and 2; traffic skill vs climatology on the same test records."""
+    from intercycle.eval import map_metrics as MM
+    L = []
+    cal = MM.load_records(OUT / "heldout", "cal_d")
+    m5 = M.LayeredMap.load(OUT / "map_5d.npz")
+    m7 = M.LayeredMap.load(OUT / "map_1w.npz")
+    lc = MM.episode_losses(m5, cal, MARGINS)
+    res = dict(calibration=dict(records=len(cal), episodes=int(len(lc[0])), episode_s=120.0, map="map_5d (days 0-4)"))
+    choice = {}
+    for al in ALPHAS:
+        choice[al] = MM.conformal_margin(lc, al, list(MARGINS))
+    res["choice"] = {str(k): v for k, v in choice.items()}
+    tests = {}
+    for seed in (0, 1, 2):
+        rr = MM.load_records(OUT / "heldout", f"test_s{seed}_")
+        if not rr:
+            continue
+        for mname, mp in (("map_5d", m5), ("map_1w", m7)):
+            lt = MM.episode_losses(mp, rr, MARGINS)
+            for al, ch in choice.items():
+                mg = ch["chosen_margin_cells"]
+                if mg is None:
+                    continue
+                w = lt["n_occ"]
+                rate = float((lt[mg] * w).sum() / max(w.sum(), 1))
+                ci = MM.block_bootstrap(lt[mg], w, lt["block"])
+                fo = MM.score_l1(mp, rr, preds=(("box", "robot", 0.0, mg),), per_machine=False)[f"box|robot|h0|d{mg}"]
+                tests[f"seed{seed}|{mname}|alpha{al}"] = dict(seed=seed, map=mname, alpha=al, margin_cells=mg, margin_m=mg * 0.25,
+                                                              unsafe_free=rate, ci95=list(ci), mean_episode_loss=float(lt[mg].mean()),
+                                                              false_occupied_share=fo["false_occupied_share_overlap"],
+                                                              false_occupied_m2_per_machine=fo["false_occupied_m2_per_machine_overlap"],
+                                                              unsafe_free_no_margin=float((lt[0] * w).sum() / max(w.sum(), 1)))
+        tr = MM.traffic_skill(m7, rr)
+        tests[f"seed{seed}|traffic"] = tr
+    res["tests"] = tests
+    (OUT / "conformal.json").write_text(json.dumps(res, indent=1, default=float))
+    L.append("\n| alpha | n_cal episodes (2 min) | chosen margin | bound at margin | cal risk at margin |")
+    L.append("|---|---|---|---|---|")
+    for al, ch in choice.items():
+        mg = ch["chosen_margin_cells"]
+        row = next((r for r in ch["curve"] if r["margin_cells"] == mg), None)
+        L.append(f"| {al} | {ch['n_cal']} | {('%.2f m' % (mg * 0.25)) if mg is not None else 'none'} | "
+                 f"{_f(row['bound']) if row else 'n/a'} | {_f(row['risk_cal']) if row else 'n/a'} |")
+    L.append("\n| margin (m) | cal risk (mean episode unsafe-free) | conformal bound |")
+    L.append("|---|---|---|")
+    for r in choice[ALPHAS[0]]["curve"]:
+        L.append(f"| {r['margin_cells'] * 0.25:.2f} | {_f(r['risk_cal'])} | {_f(r['bound'])} |")
+    L.append("\n| test | map | alpha | margin | **unsafe-free (strict overlap)** | 95 % CI (window block bootstrap) | without margin | false-occupied share | false-occupied m2 / machine |")
+    L.append("|---|---|---|---|---|---|---|---|---|")
+    for k, v in tests.items():
+        if k.endswith("traffic"):
+            continue
+        L.append(f"| day 7, seed {v['seed']} | {v['map']} | {v['alpha']} | {v['margin_m']:.2f} m | **{_f(v['unsafe_free'])}** | "
+                 f"[{_f(v['ci95'][0])}, {_f(v['ci95'][1])}] | {_f(v['unsafe_free_no_margin'])} | {_f(v['false_occupied_share'], 3)} | "
+                 f"{_f(v['false_occupied_m2_per_machine'], 1)} |")
+    L.append("\n| test | layer | Brier map | Brier climatology | **Brier skill** | 95 % CI | PR-AUC map | PR-AUC climatology | base rate (ever-occupied cells) |")
+    L.append("|---|---|---|---|---|---|---|---|---|")
+    for k, v in tests.items():
+        if not k.endswith("traffic"):
+            continue
+        for c, nm in (("vehicle", "L2 vehicles"), ("person", "L3 people")):
+            t = v[c]
+            L.append(f"| day 7, {k.split('|')[0]} | {nm} | {_f(t['brier_map'])} | {_f(t['brier_clim'])} | **{_f(t['skill'], 3)}** | "
+                     f"[{_f(t['skill_ci95'][0], 3)}, {_f(t['skill_ci95'][1], 3)}] | {_f(t['pr_auc_map'], 3)} | {_f(t['pr_auc_clim'], 3)} | "
+                     f"{_f(t['base_rate_ever'], 4)} |")
+    return L
 
 
 if __name__ == "__main__":

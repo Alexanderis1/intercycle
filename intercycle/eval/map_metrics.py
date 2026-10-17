@@ -181,20 +181,47 @@ class Recorder:
 
 
 def _record_worker(args):
-    seed, t0, t1, path, scn_path = args
+    seed, t0, t1, path, scn_path, opts = (tuple(args) + (None,))[:6]
     B = _scripts()
     scn = load(scn_path) if scn_path else load()
     rec = Recorder(scn, t0)
     w0 = time.time()
-    B.run_window(seed, t0 - WARM_S, t1, scn=scn, tick_hook=rec, build=False)
+    B.run_window(seed, t0 - WARM_S, t1, scn=scn, tick_hook=rec, build=False, **B.observer_kw(opts))
     rec.save(Path(path))
     return path, time.time() - w0
 
 
-def record_heldout(outdir: Path, windows=HELDOUT, seed: int = 0, workers: int = 4, scn_path: str | None = None) -> list[Path]:
+# Splits (DIRECTION / PRODUCTION_BRIEF A2): map trained on days 0-4 (+ 5-6 for the robot's 1-week map), conformal
+# calibration on days 5-6, test on day 7 (never touched before the final scoring), plus day 7 of seeds 1 and 2 (other
+# shuttle / andon / walker randomness; the observer's map is from seed 0).
+TOD_WINDOWS = [(8.25 * H, 10.25 * H), (11.0 * H, 12.75 * H), (13.4 * H, 15.0 * H), (2.6 * H, 4.5 * H)]
+SPLITS = {"cal_d5": (0, 5), "cal_d6": (0, 6), "test_s0": (0, 7), "test_s1": (1, 7), "test_s2": (2, 7)}
+
+
+def record_splits(outdir: Path, splits=None, workers: int = 6, opts: dict | None = None, scn_path: str | None = None) -> list[Path]:
+    """Record every split's windows (name_k.npz) with the given observer options (measured shim, PhaseModel)."""
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    jobs = [(seed, a, b, str(outdir / f"heldout_{k}.npz"), scn_path) for k, (a, b) in enumerate(windows)]
+    splits = splits or SPLITS
+    jobs = []
+    for name, (seed, day) in splits.items():
+        for k, (a, b) in enumerate(TOD_WINDOWS):
+            f = outdir / f"{name}_{k}.npz"
+            if not f.exists():
+                jobs.append((seed, day * DAY + a, day * DAY + b, str(f), scn_path, opts))
+    t = time.time()
+    with ProcessPoolExecutor(min(workers, max(len(jobs), 1))) as ex:
+        for p, dt in ex.map(_record_worker, jobs):
+            print(f"  record {Path(p).name} in {dt:.0f} s  (elapsed {time.time() - t:.0f} s)", flush=True)
+    (outdir / "splits.json").write_text(json.dumps(dict(splits=splits, tod_windows=TOD_WINDOWS, warm_s=WARM_S, opts=opts,
+                                                        l1_every_s=L1_EVERY / M.FRAME_HZ, l23_every_s=L23_EVERY / M.FRAME_HZ)))
+    return [Path(j[3]) for j in jobs]
+
+
+def record_heldout(outdir: Path, windows=HELDOUT, seed: int = 0, workers: int = 4, scn_path: str | None = None, opts=None) -> list[Path]:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    jobs = [(seed, a, b, str(outdir / f"heldout_{k}.npz"), scn_path, opts) for k, (a, b) in enumerate(windows)]
     with ProcessPoolExecutor(min(workers, len(jobs))) as ex:
         for p, dt in ex.map(_record_worker, jobs):
             print(f"  held-out record {Path(p).name} in {dt:.0f} s", flush=True)
@@ -203,8 +230,8 @@ def record_heldout(outdir: Path, windows=HELDOUT, seed: int = 0, workers: int = 
     return [Path(j[3]) for j in jobs]
 
 
-def load_records(outdir: Path) -> list[dict]:
-    return [dict(np.load(f, allow_pickle=False)) for f in sorted(Path(outdir).glob("heldout_*.npz"))]
+def load_records(outdir: Path, prefix: str = "heldout_") -> list[dict]:
+    return [dict(np.load(f, allow_pickle=False)) for f in sorted(Path(outdir).glob(f"{prefix}*.npz"))]
 
 
 # ------------------------------------------------------------------------------------------------ predictors
@@ -574,4 +601,151 @@ def part_speeds(scn: Scenario | None = None, seed: int = 0, t0: float = 7 * DAY 
         v = np.array(v) if v else np.zeros(1)
         mv = v[v > 0.01]
         out[mid] = dict(p50=float(np.median(mv)) if len(mv) else 0.0, p99=float(np.percentile(mv, 99)) if len(mv) else 0.0, max=float(v.max()))
+    return out
+
+
+# ------------------------------------------------------------------------------------------------ conformal margin (A2)
+
+def episode_losses(mp: M.MapView, recs: list[dict], margins=(0, 1, 2, 3, 4, 6, 8), episode_s: float = 120.0,
+                   pred: str = "box", mode: str = "robot", horizon: float = 0.0) -> dict:
+    """Per-episode strict (any-overlap) unsafe-free share of the robot's prediction inflated by m cells, for each m.
+    Episodes = consecutive `episode_s` blocks of each record (>= 2 line cycles). Returns {margin: array of losses},
+    plus 'n_occ' (truly occupied cell-instants per episode) and 'block' (record index of each episode)."""
+    g = Grids(mp.spec, recs[0]["mids"].tolist())
+    P = L1Pred(mp, g)
+    out = {m: [] for m in margins}
+    n_occ, block = [], []
+    for ri, rec in enumerate(recs):
+        nt = len(rec["l1_t"])
+        ep = ((rec["l1_t"] - rec["l1_t"][0]) // episode_s).astype(np.int64)
+        n_ep = int(ep.max()) + 1 if nt else 0
+        et, em, ec = rec["e_tick"], rec["e_mach"].astype(np.int64), rec["e_cell"].astype(np.int64)
+        tot = np.bincount(ep[et], minlength=n_ep).astype(float)
+        n_occ += tot.tolist()
+        block += [ri] * n_ep
+        bins = [[_bins_for(mp, P.idx[i], rec, n, i, mode, horizon) for i in range(len(g.mids))] for n in range(nt)]
+        for mg in margins:
+            groups, masks = {}, []
+            gid = np.zeros((nt, len(g.mids)), np.int64)
+            for n in range(nt):
+                for i in range(len(g.mids)):
+                    key = (i, bins[n][i])
+                    if key not in groups:
+                        groups[key] = len(groups)
+                        masks.append(P.mask(pred, i, bins[n][i], mg))
+                    gid[n, i] = groups[key]
+            off = np.r_[0, np.cumsum([len(x) for x in masks])[:-1]].astype(np.int64)
+            cat = np.concatenate(masks)
+            hit = cat[off[gid[et, em]] + ec]
+            miss = np.bincount(ep[et[~hit]], minlength=n_ep).astype(float)
+            out[mg] += (miss / np.maximum(tot, 1.0)).tolist()
+    res = {m: np.array(v) for m, v in out.items()}
+    res["n_occ"] = np.array(n_occ)
+    res["block"] = np.array(block)
+    return res
+
+
+def conformal_margin(cal_losses: dict, alpha: float, margins=None) -> dict:
+    """Conformal risk control (Angelopoulos et al. 2022, arXiv 2208.02814), loss in [0, 1] non-increasing in the margin:
+    lambda_hat = min{m : n/(n+1) * Rhat_cal(m) + 1/(n+1) <= alpha}. Returns the chosen margin (cells) and the curve."""
+    margins = sorted(m for m in cal_losses if isinstance(m, (int, np.integer))) if margins is None else margins
+    n = len(cal_losses[margins[0]])
+    rows = []
+    chosen = None
+    for m in margins:
+        r = float(cal_losses[m].mean())
+        b = n / (n + 1) * r + 1 / (n + 1)
+        rows.append(dict(margin_cells=int(m), risk_cal=r, bound=b))
+        if chosen is None and b <= alpha:
+            chosen = int(m)
+    return dict(alpha=alpha, n_cal=n, chosen_margin_cells=chosen, curve=rows)
+
+
+def block_bootstrap(values: np.ndarray, weights: np.ndarray, blocks: np.ndarray, n_boot: int = 2000, seed: int = 0) -> tuple[float, float]:
+    """95 % CI of the weighted mean, resampling whole blocks (record windows) with replacement."""
+    rng = np.random.default_rng(seed)
+    ub = np.unique(blocks)
+    num = np.array([(values[blocks == b] * weights[blocks == b]).sum() for b in ub])
+    den = np.array([weights[blocks == b].sum() for b in ub])
+    k = rng.integers(0, len(ub), (n_boot, len(ub)))
+    est = num[k].sum(1) / np.maximum(den[k].sum(1), 1e-12)
+    return float(np.percentile(est, 2.5)), float(np.percentile(est, 97.5))
+
+
+def _ap(pos: np.ndarray, al: np.ndarray) -> float:
+    """Average precision from score histograms (thresholds from high to low)."""
+    pos, al = pos[::-1], al[::-1]
+    tp, n_ = np.cumsum(pos), np.cumsum(al)
+    prec = tp / np.maximum(n_, 1)
+    return float((prec * pos).sum() / max(pos.sum(), 1))
+
+
+def traffic_skill(mp: M.MapView, recs: list[dict], n_rel: int = 10) -> dict:
+    """L2 / L3 vs a named climatology. Climatology = per-cell occupancy pooled over ALL time-of-day slices and
+    production states of the same map (static; what a map without time / state conditioning would say). The map = the
+    (time-of-day x discovered production state) slice the robot reads. Brier skill = 1 - Brier_map / Brier_clim with a
+    block-bootstrap 95 % CI over record windows; a reliability table (n_rel probability bins, all cells); PR-AUC (average
+    precision) on the cells ever truly occupied in these records. UNKNOWN cells count as p = 1."""
+    s = mp.spec["site"]
+    ncell = s["nx"] * s["nz"]
+    out = {}
+    NB_ = 200
+    for cname, cid, tk, ck in (("vehicle", M.VEHICLE, "v_tick", "v_cell"), ("person", M.PERSON, "p_tick", "p_cell")):
+        hit = np.zeros((mp.nx, mp.nz))
+        vis = np.zeros((mp.nx, mp.nz))
+        for S in range(M.N_TOD * M.N_PROD):
+            if mp.visits_cam[S].max() >= mp.min_ticks:
+                hit += mp.hits[cid][S]
+                vis += mp.visits_cam[S][mp.cam_of_cell]
+        clim = np.where(vis > 0, hit / np.maximum(vis, 1), 0.0).reshape(-1)
+        ever = np.zeros(ncell, bool)
+        for rec in recs:
+            ever[rec[ck]] = True
+        cache = {}
+        bm, bc, nn = [], [], []
+        rel_p, rel_y, rel_n = np.zeros(n_rel), np.zeros(n_rel), np.zeros(n_rel)
+        pos_m, all_m, pos_c, all_c = (np.zeros(NB_) for _ in range(4))
+        for rec in recs:
+            order = np.argsort(rec[tk], kind="stable")
+            ticks, cells = rec[tk][order], rec[ck][order]
+            ptr = np.searchsorted(ticks, np.arange(len(rec["l23_t"]) + 1))
+            b_m = b_c = 0.0
+            for n in range(len(rec["l23_t"])):
+                key = (int(rec["l23_tod"][n]), int(rec["l23_prod"][n]))
+                if key not in cache:
+                    p, _ = mp.traffic(cid, key[0], key[1])
+                    U = mp.unknown_mask(key[0], key[1])
+                    cache[key] = np.where(U, 1.0, p).reshape(-1).astype(float)
+                p = cache[key]
+                y = np.zeros(ncell, bool)
+                y[cells[ptr[n]:ptr[n + 1]]] = True
+                b_m += float(((p - y) ** 2).sum())
+                b_c += float(((clim - y) ** 2).sum())
+                k = np.minimum((p * n_rel).astype(int), n_rel - 1)
+                rel_p += np.bincount(k, weights=p, minlength=n_rel)
+                rel_y += np.bincount(k, weights=y.astype(float), minlength=n_rel)
+                rel_n += np.bincount(k, minlength=n_rel)
+                pe, ye, ce = p[ever], y[ever], clim[ever]
+                hb = np.minimum((pe * NB_).astype(int), NB_ - 1)
+                hc = np.minimum((ce * NB_).astype(int), NB_ - 1)
+                pos_m += np.bincount(hb[ye], minlength=NB_)
+                all_m += np.bincount(hb, minlength=NB_)
+                pos_c += np.bincount(hc[ye], minlength=NB_)
+                all_c += np.bincount(hc, minlength=NB_)
+            bm.append(b_m)
+            bc.append(b_c)
+            nn.append(len(rec["l23_t"]) * ncell)
+        bm, bc, nn = np.array(bm), np.array(bc), np.array(nn, float)
+        rng = np.random.default_rng(0)
+        k = rng.integers(0, len(bm), (2000, len(bm)))
+        boot = 1 - bm[k].sum(1) / np.maximum(bc[k].sum(1), 1e-12)
+        out[cname] = dict(brier_map=float(bm.sum() / nn.sum()), brier_clim=float(bc.sum() / nn.sum()),
+                          skill=float(1 - bm.sum() / bc.sum()),
+                          skill_ci95=[float(np.percentile(boot, 2.5)), float(np.percentile(boot, 97.5))],
+                          pr_auc_map=_ap(pos_m, all_m), pr_auc_clim=_ap(pos_c, all_c), ever_occupied_cells=int(ever.sum()),
+                          base_rate_ever=float(pos_m.sum() / max(all_m.sum(), 1)),
+                          reliability=[dict(p_mean=float(rel_p[i] / rel_n[i]) if rel_n[i] else None,
+                                            observed=float(rel_y[i] / rel_n[i]) if rel_n[i] else None, n=int(rel_n[i]))
+                                       for i in range(n_rel)],
+                          climatology="per-cell occupancy pooled over all time-of-day slices and production states (static)")
     return out

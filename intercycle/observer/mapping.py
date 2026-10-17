@@ -47,6 +47,14 @@ N_PROD = 4
 N_HEAD = 8
 FRAME_HZ = 2.0
 LATENCY_S = 0.2
+# Camera-shim parameters set to the perception error MEASURED by workstream V (RF-DETR-M + ByteTrack on PhysicalAI-
+# SmartSpaces Warehouse_000, photorealistic synthetic video; user-approved waiver (a), 17 Oct): recall 0.68 -> 32 % miss,
+# precision 0.89 -> false positives = 0.11 / 0.89 = 12.4 % of the true detections, floor-position error median ~0.38 m
+# with a heavy tail (p90 ~9.7 m: fusion / ID errors). Modelled as: 85 % of detections Gaussian sigma 0.285 m per axis
+# (median radial 0.38 m overall) + 15 % gross errors, radial U(5, 20) m in a random direction (P(err > 9.7 m) = 10.3 %);
+# false positives are person detections, half next to a true detection (0.5-3 m away), half anywhere on the floor.
+# Applied to every class (V measured people only: machine parts and vehicles inheriting it is an assumption).
+MEASURED_SHIM = dict(sigma_m=0.285, p_drop=0.32, gross_p=0.15, gross_range_m=(5.0, 20.0), fp_ratio=0.11 / 0.89, fp_near=0.5)
 SLOTS_PARTS = 4096            # noise-slot offset separating machine-part circles from skid circles
 
 
@@ -284,7 +292,14 @@ class CameraShim:
     def __init__(self, scn: Scenario, seed: int = 0, sigma_m: float = 0.15, p_drop: float = 0.05, blackout_s: float = 10.0,
                  blackouts_per_h: float = 4.0, latency_s: float = LATENCY_S, subframes: int = 3, exposure_s: float = 0.5,
                  zone_margin_m: float = 1.0, hz: float = FRAME_HZ, clutter_per_h: float = 0.0,
-                 clutter_dur_s: tuple[float, float] = (0.5, 3.0), persistent=(), bumps=()):
+                 clutter_dur_s: tuple[float, float] = (0.5, 3.0), persistent=(), bumps=(), gross_p: float = 0.0,
+                 gross_range_m: tuple[float, float] = (5.0, 20.0), fp_ratio: float = 0.0, fp_near: float = 0.5):
+        """Defaults = the original assumed shim (0.15 m, 5 % drop, no gross errors, no false positives); the measured
+        error is `CameraShim(scn, **MEASURED_SHIM)`. gross_p: share of detections with a gross position error, radial
+        U(gross_range_m); fp_ratio: false-positive person detections per true detection (fp_near of them 0.5-3 m from a
+        true detection, the rest uniform on the floor)."""
+        self.gross_p, self.gross_range, self.fp_ratio, self.fp_near = gross_p, gross_range_m, fp_ratio, fp_near
+        self._frng = np.random.default_rng([seed, 79])
         self.clutter_per_h, self.clutter_dur = clutter_per_h, clutter_dur_s
         self.persistent, self.bumps = list(persistent), list(bumps)
         self._clutter: list[tuple[float, float, float, float]] = []      # (x, z, r, t_end)
@@ -433,10 +448,38 @@ class CameraShim:
         C, cls_a, hd_a, mv_a = C[keep], cls_a[keep], hd_a[keep], mv_a[keep]
         n = len(C)
         err = self.rng.normal(0, self.sigma, (int(slot_a.max()) + 1 if n else 1, 2))
+        if self.gross_p > 0:                        # gross errors (one per body-circle slot, shared by its sub-frames)
+            g = self._frng.random(len(err)) < self.gross_p
+            if g.any():
+                rr = self._frng.uniform(*self.gross_range, g.sum())
+                aa = self._frng.uniform(0, 2 * math.pi, g.sum())
+                err[g] = np.stack([rr * np.sin(aa), rr * np.cos(aa)], 1)
         x = C[:, 0] + err[slot_a, 0]
         z = C[:, 1] + err[slot_a, 1]
         r = np.maximum(C[:, 2] + self.rng.normal(0, 0.03, n), 0.1)
         hd_a = np.where(np.isfinite(hd_a) & mv_a, hd_a + self.rng.normal(0, 0.15, n), np.nan)
+        if self.fp_ratio > 0 and n:                 # false-positive person detections
+            k = int(self._frng.poisson(self.fp_ratio * float((cls_a == PERSON).sum())))   # precision measured on people
+            if k:
+                near = self._frng.random(k) < self.fp_near
+                fx = np.empty(k)
+                fz = np.empty(k)
+                src = self._frng.integers(0, n, k)
+                d = self._frng.uniform(0.5, 3.0, k)
+                a = self._frng.uniform(0, 2 * math.pi, k)
+                fx[near] = x[src[near]] + d[near] * np.sin(a[near])
+                fz[near] = z[src[near]] + d[near] * np.cos(a[near])
+                x0, z0, x1, z1 = self._floor
+                fx[~near] = self._frng.uniform(x0, x1, (~near).sum())
+                fz[~near] = self._frng.uniform(z0, z1, (~near).sum())
+                ok_fp = ok[self.camera_of(fx, fz)]
+                fx, fz, kk = fx[ok_fp], fz[ok_fp], int(ok_fp.sum())
+                x, z = np.r_[x, fx], np.r_[z, fz]
+                r = np.r_[r, np.full(kk, 0.3)]
+                cls_a = np.r_[cls_a, np.full(kk, PERSON, np.int8)]
+                hd_a = np.r_[hd_a, np.full(kk, np.nan)]
+                mv_a = np.r_[mv_a, np.zeros(kk, bool)]
+                n = len(x)
         is_m = (cls_a == PART) | (cls_a == SKID)
         mach = np.full(n, -1, np.int16)
         if is_m.any():
@@ -478,13 +521,15 @@ class ConditionTracker:
 
     def __init__(self, scn: Scenario, hz: float = FRAME_HZ, rise_confirm: int = 2, fall_confirm: int = 4, line_confirm: int = 3,
                  use_learner: bool = True, learn_window_s: float = 1500.0, learn_every_s: float = 900.0, learn_first_s: float = 480.0,
-                 line_state: Callable | None = None):
-        """line_state(t) -> RUNNING / ANDON / BREAK / SHIFT_CHANGE or None: the single switch for the production state.
-        None (default) = the current rule: public calendar for break / shift change (EXTERNAL INPUT, pending the
-        discovered line states of observer/phases.py), line motion for andon. With a callable (e.g. the discovered
-        `line_state` of workstream P) the calendar is not used at all; a None return falls back to the motion rule."""
+                 line_state: Callable | None = None, calendar: bool = False):
+        """Production state. line_state(t) -> RUNNING / ANDON / BREAK / SHIFT_CHANGE or None: the discovered line state
+        (workstream P's PhaseModel.line_state, what every script uses). Without it the state is the motion rule only:
+        line stopped longer than its cycle allows -> ANDON ("stopped"), else RUNNING; breaks are then not told apart from
+        andons. calendar=True re-enables the public break calendar as an EXTERNAL INPUT (unit tests of the layer
+        mechanics only; no published number uses it)."""
         self.scn, self.hz = scn, hz
         self.line_state = line_state
+        self.calendar = calendar
         M = len(scn.machines)
         self.M, self.L, R = M, M, M + 1
         self.mids = [m.id for m in scn.machines]
@@ -646,7 +691,7 @@ class ConditionTracker:
             ls = self.line_state(t)
             prod = int(ls) if ls is not None else (ANDON if line_stopped else RUNNING)
         else:
-            cal = calendar_state(self.scn, t)           # external input (public calendar), see __init__
+            cal = calendar_state(self.scn, t) if self.calendar else None     # external input only when asked, see __init__
             prod = cal if cal is not None else (ANDON if line_stopped else RUNNING)
         return Cond(t, tod_bin(t), prod, bins, phase, P, self.busy[:M].copy(), jit, line_stopped)
 
@@ -1100,12 +1145,13 @@ class MapBuilder:
     """Convenience driver: observation -> conditioning -> map.
 
     phase_model (optional, duck-typed: workstream P's observer/phases.PhaseModel, never imported here): fed every tick
-    before the tracker. use_bins=True replaces the tracker's 16 equal-slice bins for L1 by the discovered sub-phases
-    (sub-phase k -> bin k, P's "blocked" bin -> STOP_BIN, -1 unknown). use_line_state=True makes the discovered line
-    state the production state (no calendar; "unknown" falls back to the motion rule)."""
+    before the tracker. use_line_state=True (default) makes the discovered line state the production state ("unknown"
+    falls back to the motion rule). use_bins=True replaces the tracker's 16 equal-slice bins for L1 by the discovered
+    sub-phases (sub-phase k -> bin k, P's "blocked" bin -> STOP_BIN, -1 unknown); off by default (see MAP_RESULTS).
+    Without a phase model the production state is the motion rule (calendar=True: public calendar, tests only)."""
 
     def __init__(self, scn: Scenario, map_: LayeredMap | None = None, tracker: ConditionTracker | None = None,
-                 phase_model=None, use_bins: bool = True, use_line_state: bool = False, **map_kw):
+                 phase_model=None, use_bins: bool = False, use_line_state: bool = True, calendar: bool = False, **map_kw):
         self.scn = scn
         self.map = map_ or LayeredMap(scn, **map_kw)
         self.pm = phase_model
@@ -1114,7 +1160,7 @@ class MapBuilder:
         if phase_model is not None and use_line_state:
             names = {n: i for i, n in enumerate(PROD_NAMES)}
             ls = lambda t: names.get(phase_model.line_state(t))
-        self.tracker = tracker or ConditionTracker(scn, line_state=ls)
+        self.tracker = tracker or ConditionTracker(scn, line_state=ls, calendar=calendar)
         if tracker is not None and ls is not None:
             tracker.line_state = ls
         self.mids = [m.id for m in scn.machines]
