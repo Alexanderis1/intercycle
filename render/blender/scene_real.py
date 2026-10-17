@@ -44,7 +44,13 @@ COMPARE_LINE_X, COMPARE_LINE_Z, COMPARE_LINE_DX = 15.5, 7.0, 14.0   # compare_li
 FRAME_Z = 4.4               # m, top of the overhead cell frame (dress cables, trays); CCTV at 9 m looks over it
 END_REACH = 1.8             # m, base -> gun tip of the FANUC weld poses (fanuc.WELD_Q)
 ARM_REACH_STANDOFF = 2.65    # m, line centre -> FANUC base for on-line cells
+FILM_TEXT = "SYNTHETIC REPLAY OF OUR SIMULATION"   # burned into every cinematic frame (--film)
 STACK = {"ACTIVE": "g", "IDLE": "g", "STOPPED": "y", "HELD": "y", "TRIPPED": "r"}
+
+
+def _near(a: float, prev: float) -> float:
+    """`a` shifted by a multiple of 2 pi to lie within pi of `prev` (keyed rotations never spin the long way)."""
+    return prev + (a - prev + math.pi) % (2.0 * math.pi) - math.pi
 
 
 class RealScene(rb.BScene):
@@ -87,6 +93,13 @@ class RealScene(rb.BScene):
         super().set_thermal(on)                      # BScene resets the world to its own 0.15 when leaving thermal
         if not on:
             self.world_bg.inputs["Strength"].default_value = self.args.sky_strength
+
+    def _place(self, obj, x, y, yaw, z=0.0):
+        """BScene._place with the yaw kept continuous with the object's last one, so keyframed (motion-blurred)
+        turns never spin the long way when a heading wraps at +-180 deg."""
+        prev = obj.rotation_euler.z
+        super()._place(obj, x, y, yaw, z)
+        obj.rotation_euler.z = _near(obj.rotation_euler.z, prev)
 
     def _hide_hero(self):
         r = self.prims.pop(self.ctx.hero.entity_id, None)
@@ -586,8 +599,27 @@ def still_cam(name: str, scn: dict) -> "core.Cam":
     raise SystemExit(f"unknown still {name!r}: wide | compare_line | weld_close | cctv_<i>")
 
 
-def label_synthetic(png: Path) -> None:
-    """Burn a small 'SYNTHETIC RENDER' label (bottom-left) into a non-CCTV still."""
+FILMS = ("establishing", "flyalong", "weldclose")
+
+
+def film_cam(name: str, u: float, scn: dict) -> "core.Cam":
+    """Camera of cinematic shot `name` at clip fraction u (0..1, eased; outside is clamped)."""
+    u = core.smooth(u)
+    if name == "establishing":                                 # high crane along the north wall, the whole line in view
+        return core.Cam(core.lerp3((1.2, 46.5, 9.8), (24.0, 46.5, 8.2), u), core.lerp3((45.0, 19.0, 0.0), (60.0, 21.0, 0.0), u), 19.0)
+    if name == "flyalong":                                     # 3.5 m over aisle S, gliding down the line, looking into the cells
+        y = next(m["z"] for m in scn["machines"] if m.get("on_line"))
+        x = 10.0 + 48.0 * u
+        return core.Cam((x, y - 7.5, 3.5), (x + 9.0, y, 1.0), 20.0)
+    if name == "weldclose":                                    # push-in through the S30 north opening onto the weld_close framing
+        end = still_cam("weld_close", scn)
+        start = (end.eye[0] - 0.6, end.eye[1] + 2.5, end.eye[2] + 0.6)
+        return core.Cam(core.lerp3(start, end.eye, u), end.tgt, 28.0 + (end.focal_mm - 28.0) * u)
+    raise SystemExit(f"unknown film {name!r}: {' | '.join(FILMS)}")
+
+
+def label_synthetic(png: Path, text: str = "SYNTHETIC RENDER") -> None:
+    """Burn a small label (bottom-left) into a non-CCTV frame."""
     from PIL import Image, ImageDraw, ImageFont
     im = Image.open(png).convert("RGB")
     d = ImageDraw.Draw(im)
@@ -600,7 +632,7 @@ def label_synthetic(png: Path) -> None:
         except OSError:
             continue
     font = font or ImageFont.load_default()
-    d.text((sz, im.height - 2 * sz), "SYNTHETIC RENDER", fill=(255, 255, 255), font=font, stroke_width=2, stroke_fill=(0, 0, 0))
+    d.text((sz, im.height - 2 * sz), text, fill=(255, 255, 255), font=font, stroke_width=2, stroke_fill=(0, 0, 0))
     im.save(png)
 
 
@@ -716,45 +748,86 @@ def _key_pose(bs, frame: int) -> None:
                 j.keyframe_insert("rotation_euler", frame=frame)
 
 
-def run_cctv_seq(scn, ctx, args, out_dir: Path) -> Path:
-    """One CCTV camera over [t, t + seconds] at --fps: clean frames (overscanned) + GT per frame, with motion blur
-    over a 1/(2*fps) s shutter that ends on the frame (like a CCTV sensor exposing the frame interval).
-    Feed the result to render/cctv: python -m render.cctv.cctv_post --in <out>/frames --gt <out>/gt --overscan ..."""
-    bs = RealScene(scn, ctx, args)
-    bs.build()
-    bpy, sc = bs.bpy, bs.scene
+def _render_clip(bs, t0: float, n: int, dt: float, frames: Path, after, tag: str, cam_at=None) -> None:
+    """Render frames/f_00000.. at t0 + k dt with motion blur over a dt/2 shutter that ends on the frame (like a sensor
+    exposing the frame interval). Entity roots, arm joints and, when cam_at(t) moves it, the camera are keyed per
+    frame so Cycles blurs them; after(png) runs on each written frame."""
+    bpy, sc, cam = bs.bpy, bs.scene, bs.cam_obj
     bpy.context.preferences.edit.keyframe_new_interpolation_type = "LINEAR"
     sc.render.use_motion_blur = True
     sc.render.motion_blur_shutter = 0.5
     sc.render.motion_blur_position = "END"
-    W, H = (int(v) for v in args.res.split("x"))
-    margin = _frame(bs, args.cctv_seq, W, H, args.overscan)
-    seq = out_dir / args.cctv_seq
-    frames = seq / "frames"
     frames.mkdir(parents=True, exist_ok=True)
-    n = max(1, int(round(args.seconds * args.fps)))
-    dt = 1.0 / args.fps
-    bs.pick_extras([args.t + i * dt for i in range(n)], margin)       # once per clip, checked on every frame
-    ids = assign_ids(bs) if args.gt else {}
-    bs.apply(args.t - dt)
-    _key_pose(bs, 0)
-    for i in range(1, n + 1):
-        t = args.t + (i - 1) * dt
+    for old in frames.glob("f_*.png"):    # a shorter re-run must not leave the old tail for the mp4 / cctv_post
+        old.unlink()
+
+    def pose(i: int, t: float) -> None:
         bs.apply(t)
+        if cam_at is not None:
+            prev = cam.rotation_euler.z
+            bs.point_camera(cam_at(t))
+            cam.rotation_euler.z = _near(cam.rotation_euler.z, prev)
+            cam.keyframe_insert("location", frame=i)
+            cam.keyframe_insert("rotation_euler", frame=i)
+            cam.data.keyframe_insert("lens", frame=i)
         _key_pose(bs, i)
+
+    pose(0, t0 - dt)
+    for i in range(1, n + 1):
+        t = t0 + (i - 1) * dt
+        pose(i, t)
         sc.frame_set(i)
         bs.apply(t)                      # frame_set re-evaluates the curves; re-apply for the non-keyed state (sparks, lamps)
         dst = frames / f"f_{i - 1:05d}.png"
         sc.render.filepath = str(dst)
         bpy.ops.render.render(write_still=True)
-        if args.gt:
-            write_gt(bs, dst.stem, seq / "gt", ids)
+        after(dst)
         if (i - 1) % 25 == 0:
-            rb.log(f"[{args.cctv_seq}] frame {i}/{n} t={t:.2f}s")
+            rb.log(f"[{tag}] frame {i}/{n} t={t:.2f}s")
+
+
+def run_cctv_seq(scn, ctx, args, out_dir: Path) -> Path:
+    """One CCTV camera over [t, t + seconds] at --fps: clean frames (overscanned, motion blur) + GT per frame.
+    Feed the result to render/cctv: python -m render.cctv.cctv_post --in <out>/frames --gt <out>/gt --overscan ..."""
+    if not args.cctv_seq.startswith("cctv_"):
+        raise SystemExit(f"--cctv-seq needs cctv_<i>, got {args.cctv_seq!r}")
+    bs = RealScene(scn, ctx, args)
+    bs.build()
+    W, H = (int(v) for v in args.res.split("x"))
+    margin = _frame(bs, args.cctv_seq, W, H, args.overscan)
+    seq = out_dir / args.cctv_seq
+    n = max(1, int(round(args.seconds * args.fps)))
+    dt = 1.0 / args.fps
+    bs.pick_extras([args.t + i * dt for i in range(n)], margin)       # once per clip, checked on every frame
+    ids = assign_ids(bs) if args.gt else {}
+    after = (lambda dst: write_gt(bs, dst.stem, seq / "gt", ids)) if args.gt else (lambda dst: None)
+    _render_clip(bs, args.t, n, dt, seq / "frames", after, args.cctv_seq)
     (seq / "seq_manifest.json").write_text(json.dumps(dict(cam=args.cctv_seq, t0=args.t, fps=args.fps, frames=n, overscan=args.overscan,
                                                           device=bs.device, extras=sorted(bs.shown_extras), args=vars(args)),
                                                      indent=2, default=str))
     return seq
+
+
+def run_film(scn, ctx, args, out_dir: Path) -> Path:
+    """Cinematic shot --film over [t, t + seconds] at --fps: moving camera (film_cam) and motion blur, every frame
+    labelled FILM_TEXT, no extras (trace persons only). Writes <out>/<shot>/frames/ and <out>/<shot>.mp4."""
+    args.extras = 0
+    bs = RealScene(scn, ctx, args)
+    bs.build()
+    W, H = (int(v) for v in args.res.split("x"))
+    bs.cam_obj.data.sensor_width = 36.0
+    bs.scene.render.resolution_x, bs.scene.render.resolution_y = W, H
+    n = max(1, int(round(args.seconds * args.fps)))
+    dt = 1.0 / args.fps
+    span = max(n - 1, 1) * dt
+    shot = out_dir / args.film
+    _render_clip(bs, args.t, n, dt, shot / "frames", lambda dst: label_synthetic(dst, FILM_TEXT), args.film,
+                 cam_at=lambda t: film_cam(args.film, (t - args.t) / span, scn))
+    mp4 = out_dir / f"{args.film}.mp4"
+    core.ffmpeg_frames_to_mp4([shot / "frames" / f"f_{i:05d}.png" for i in range(n)], mp4, args.fps)
+    (shot / "film_manifest.json").write_text(json.dumps(dict(film=args.film, t0=args.t, fps=args.fps, frames=n, mp4=str(mp4),
+                                                             device=bs.device, args=vars(args)), indent=2, default=str))
+    return mp4
 
 
 def main(argv=None) -> int:
@@ -765,7 +838,8 @@ def main(argv=None) -> int:
     ap.add_argument("--sky-strength", type=float, default=1.0)
     ap.add_argument("--overscan", type=float, default=0.055, help="extra field per side for cctv_* stills (fraction of the rendered width)")
     ap.add_argument("--cctv-seq", default="", help="render a CCTV sequence from camera cctv_<i> starting at --t")
-    ap.add_argument("--seconds", type=float, default=4.0, help="length of --cctv-seq (s)")
+    ap.add_argument("--seconds", type=float, default=4.0, help="length of --cctv-seq / --film (s)")
+    ap.add_argument("--film", default="", choices=("", *FILMS), help="render a cinematic shot starting at --t (use --fps 24)")
     ap.add_argument("--gt", action="store_true", help="also write instance/depth ground truth for cctv_* stills (<out>/gt)")
     ap.add_argument("--extras", type=int, default=2,
                     help="cap of line-side extras per view (never more than the trace persons in it); 0 = none")
@@ -781,6 +855,9 @@ def main(argv=None) -> int:
         return 0
     if args.cctv_seq:
         run_cctv_seq(scn, ctx, args, out_dir)
+        return 0
+    if args.film:
+        run_film(scn, ctx, args, out_dir)
         return 0
     shots = [s.strip() for s in args.shots.split(",") if s.strip()]
     rb.run_bpy(scn, ctx, shots, args, out_dir, scene_cls=RealScene)

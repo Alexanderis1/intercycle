@@ -60,14 +60,14 @@ class Extra:
         go, back = math.atan2(by - ay, bx - ax), math.atan2(ay - by, ax - bx)
         u = (t + self.phase) % self.period
         if u < self.dwell_a:
-            return ax, ay, _turn(back, self.face_a, u), self.clip_a, 0.0
+            return ax, ay, _dwell_yaw(back, self.face_a, go, u, self.dwell_a), self.clip_a, 0.0
         u -= self.dwell_a
         if u < w:
             k = u / w
             return ax + k * (bx - ax), ay + k * (by - ay), go, "walk", WALK_V
         u -= w
         if u < self.dwell_b:
-            return bx, by, _turn(go, self.face_b, u), self.clip_b, 0.0
+            return bx, by, _dwell_yaw(go, self.face_b, back, u, self.dwell_b), self.clip_b, 0.0
         k = (u - self.dwell_b) / w
         return bx + k * (ax - bx), by + k * (ay - by), back, "walk", WALK_V
 
@@ -75,6 +75,13 @@ class Extra:
 def _turn(y0: float, y1: float, u: float) -> float:
     d = (y1 - y0 + math.pi) % (2.0 * math.pi) - math.pi
     return y0 + d * min(1.0, u / TURN_S)
+
+
+def _dwell_yaw(arrive: float, face: float, leave: float, u: float, dwell: float) -> float:
+    """Turn from the arrival heading to `face`, hold, turn to the next walk heading in the last TURN_S (dwell >= 2 TURN_S)."""
+    if u < dwell - TURN_S:
+        return _turn(arrive, face, u)
+    return _turn(face, leave, u - (dwell - TURN_S))
 
 
 def _phase(seed: int, *key) -> float:

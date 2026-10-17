@@ -1,6 +1,6 @@
 # Blender / Cycles fallback renderer
 
-Photoreal replay of `trace.parquet` with `pip install bpy` (Blender as a Python module) on a Modal GPU.
+Path-traced synthetic replay of our simulation (SYNTHETIC): `trace.parquet` rendered with `pip install bpy` (Blender as a Python module) on a Modal GPU.
 Same trace contract, same `bodyshop.yaml`, same shots and same camera functions as the Isaac path:
 `replay_bpy.py` imports the pure-python half of `render/isaac/replay.py` (trace loading, tracks, shots,
 layout, plan, ffmpeg), so the two renderers cannot drift apart.

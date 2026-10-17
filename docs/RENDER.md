@@ -72,10 +72,28 @@ Rules are tested in `render/blender/test_extras.py`. `--extras 0` renders the tr
 Second V sequence: `--cctv-seq cctv_4 --t 36245` (north ceiling camera at (6, 46)). It shows weld cells S10, S20 and S30, all
 ACTIVE, and forklift FL0 on the north aisle for the whole 10 s.
 
-# Photoreal render tier: decision, research, shot list
+Final video shots (build lead, 17 Oct). There is no robot/AMR in any of them.
+- **Cinematic shots:** 1080p, 24 fps, 64 spp, motion blur on the moving camera too, no extras.
+  - Every frame is labelled "SYNTHETIC REPLAY OF OUR SIMULATION". The paths are in `scene_real.film_cam`.
+  - Output goes to `<out>/<shot>/frames/` and `<out>/<shot>.mp4`.
+  - Commands:
+```powershell
+& $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\film --film establishing --t 36560 --seconds 8 --fps 24 --samples 64 --res 1920x1080
+#   --film flyalong --seconds 12  (3.5 m over aisle S, x 10 -> 58, looking into the cells)
+#   --film weldclose --seconds 6  (push-in through the S30 north opening onto the weld_close framing, 28 -> 35 mm, sparks)
+```
+- **CCTV wall:** one shared clock, 36560-36570 at 25 fps.
+  - Tiles: `cctv_0`, `cctv_1`, `cctv_5`, `cctv_6`.
+  - `cctv_1` is the 1080p V sequence, downscaled. The other three are rendered at 960x540.
+  - The 960x540 tiles are post-processed with `--size 960x540 --sensor-scale 1.0`, because the half-size render already does
+    the softening. Their extras follow the per-view rule.
+  - `python -m render.cctv.wall --tiles <TL> <TR> <BL> <BR> --out D:\icdata\renders\wall\out` tiles them 2x2, keeps each
+    tile's burned-in text, and adds one label.
+
+# Path-traced render tier (synthetic replay of our simulation): decision, research, shot list
 
 *Written 2026-10-17 12:40 CEST for the 18 Oct 16:00 submission. Owner: render pipeline. Everything here is
-**replay of `trace.parquet`**; the photoreal tier never simulates and never feeds back into the sim. Every frame is a
+**replay of `trace.parquet`**; the render tier never simulates and never feeds back into the sim. Every frame is a
 synthetic replay of our simulation and must be captioned that way.*
 
 ## 1. Recommendation
@@ -100,7 +118,7 @@ synthetic replay of our simulation and must be captioned that way.*
 | Licence exposure for a public MIT repo | CC-BY credits + NVIDIA licence reading (section 4) | none beyond CC0 HDRI (and any optional CC-BY asset) |
 | Cost per 2 min cut (3 600 frames) | about $3 'fast' / about $19 fully path-traced (hero shots only: about $5) + debug runs | about $4-8 (L4 or L40S) |
 | Failure modes | driver/Vulkan on Modal, 6.0-bucket USD not opening in 5.1, EULA/auth, articulation base snap | OptiX libs missing (falls back to CUDA/CPU), art direction |
-| Pitch value | "NVIDIA stack, real robot models" | "photoreal enough, fully reproducible, zero licence risk" |
+| Pitch value | "NVIDIA stack, real robot models" | "path-traced, fully reproducible, zero licence risk" |
 
 ## 3. Go / no-go gate
 

@@ -1,4 +1,4 @@
-"""InterCycle photoreal tier: Isaac Sim 5.1 (pip) on a Modal L40S.
+"""InterCycle path-traced render tier (synthetic replay of our simulation): Isaac Sim 5.1 (pip) on a Modal L40S.
 
 Modelled on github.com/TheFloatingString/isaac-lab-on-modal (same base image, same pip
 extras, same "run the heavy thing in a subprocess, check a sentinel, return PNG bytes"
