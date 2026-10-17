@@ -1,0 +1,435 @@
+[
+ {
+  "asset": "forklift_blue",
+  "source_asset": "Vehicle_Forklift_Blue_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Equipment/Vehicle_Forklift_Blue_A01/sm_vehicle_forklift_blue_a01_01.usd",
+  "used_for": "forklift traffic"
+ },
+ {
+  "asset": "forklift_red",
+  "source_asset": "Vehicle_Forklift_Red_B01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Equipment/Vehicle_Forklift_Red_B01/sm_vehicle_forklift_red_b01_01.usd",
+  "used_for": "forklift traffic"
+ },
+ {
+  "asset": "forklift_c",
+  "source_asset": "Vehicle_Forklift_Blue_C01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Equipment/Vehicle_Forklift_Blue_C01/sm_vehicle_forklift_blue_c01_01.usd",
+  "used_for": "forklift traffic"
+ },
+ {
+  "asset": "conveyor",
+  "source_asset": "Conveyor_Belt_A35",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Equipment/Conveyor_Belt_A35/sm_conveyor_belt_a35_01.usd",
+  "used_for": "NOT USABLE AS IS: imports with the roller bed standing vertical (A02 is broken too); keep the procedural conveyor"
+ },
+ {
+  "asset": "machine_guard",
+  "source_asset": "Machine_Guard_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Barriers/Machine_Guard_A01/sm_machineGuard_a01_01.usd",
+  "used_for": "solid machine guard panels"
+ },
+ {
+  "asset": "wire_guard_a",
+  "source_asset": "Wire_Machine_Guard_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Barriers/Wire_Machine_Guard_A01/sm_wire_machineGuard_a01_01.usd",
+  "used_for": "wire-mesh robot cell fencing"
+ },
+ {
+  "asset": "wire_guard_b",
+  "source_asset": "Wire_Machine_Guard_A02",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Barriers/Wire_Machine_Guard_A02/sm_wire_machineGuard_a02_01.usd",
+  "used_for": "wire-mesh robot cell fencing"
+ },
+ {
+  "asset": "fence_metal",
+  "source_asset": "Barrier_Fence_Metal_A02",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Barriers/Barrier_Fence_Metal_A02/sm_barrier_fence_metal_a02_01.usd",
+  "used_for": "walkway fencing"
+ },
+ {
+  "asset": "safety_gate",
+  "source_asset": "Barrier_Gate_Safety_A02",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Barriers/Barrier_Gate_Safety_A02/sm_barrier_gate_safety_a02_01.usd",
+  "used_for": "cell access gate"
+ },
+ {
+  "asset": "rail_guard",
+  "source_asset": "Rail_Guard_A09",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Barriers/Rail_Guard_A09/sm_rail_guard_a09_01.usd",
+  "used_for": "floor rail / bollard guard"
+ },
+ {
+  "asset": "rack_3m",
+  "source_asset": "3m_S01_Rack",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Racks/3m_S01_Rack/sm_rack_h3m_s01_01.usd",
+  "used_for": "pallet racking"
+ },
+ {
+  "asset": "rack_large",
+  "source_asset": "Large_Empty_Rack_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Racks/Large_Empty_Rack_A01/sm_rack_large_empty_a01_01.usd",
+  "used_for": "pallet racking"
+ },
+ {
+  "asset": "shelf_heavy",
+  "source_asset": "Heavy_Duty_Steel_Shelve_A06",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Racks/Heavy_Duty_Steel_Shelve_A06/sm_shelve_steel_heavyDuty_a06_01.usd",
+  "used_for": "parts shelving"
+ },
+ {
+  "asset": "column",
+  "source_asset": "Wall_Column_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Structures/Wall_Column_A01/sm_structure_wall_column_a01_01.usd",
+  "used_for": "building columns"
+ },
+ {
+  "asset": "beam",
+  "source_asset": "Structure_Beam_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Structures/Structure_Beam_A01/sm_structure_beam_a01_01.usd",
+  "used_for": "roof beams"
+ },
+ {
+  "asset": "sign_warning",
+  "source_asset": "Warning_Sign_A04",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Signs/Warning_Sign_A04/sm_sign_warning_a04_01.usd",
+  "used_for": "safety signage"
+ },
+ {
+  "asset": "sign_floor",
+  "source_asset": "Movable_Floor_Sign_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Signs/Movable_Floor_Sign_A01/sm_sign_floor_movable_a01_01.usd",
+  "used_for": "floor signage"
+ },
+ {
+  "asset": "pallet_wood",
+  "source_asset": "Pallet_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Pallets/Pallet_A01/sm_pallet_a01_01.usd",
+  "used_for": "pallets"
+ },
+ {
+  "asset": "pallet_block",
+  "source_asset": "Block_Pallet_B02_01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Pallets/Block_Pallet_B02_01/sm_pallet_block_b02_01.usd",
+  "used_for": "pallets"
+ },
+ {
+  "asset": "pallet_steel",
+  "source_asset": "Steel_Galvanized_Pallet_A01_01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Warehouse/Pallets/Steel_Galvanized_Pallet_A01_01/sm_pallet_steel_galvanized_a01_01.usd",
+  "used_for": "parts pallets"
+ },
+ {
+  "asset": "car_frame",
+  "source_asset": "Car_Frame_Car_Frame_Assembled_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Frames/Car_Frame_Car_Frame_Assembled_A01/sm_carFrame_car_frame_assembled_a01_01.usd",
+  "used_for": "body-in-white frame"
+ },
+ {
+  "asset": "door_front",
+  "source_asset": "Door_Front_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Door_Front_A01/sm_bodyPart_door_front_a01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "door_rear",
+  "source_asset": "Door_Rear_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Door_Rear_A01/sm_bodyPart_door_rear_a01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "hood",
+  "source_asset": "Body_Part_Hood_D01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Body_Part_Hood_D01/sm_bodyPart_hood_d01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "fender_front",
+  "source_asset": "Body_Part_Fender_Front_D01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Body_Part_Fender_Front_D01/sm_bodyPart_fender_front_d01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "fender_rear",
+  "source_asset": "Fender_Rear_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Fender_Rear_A01/sm_bodyPart_fender_rear_a01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "roof_panel",
+  "source_asset": "Body_Part_Exterior_Roof_Panel_A01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Body_Part_Exterior_Roof_Panel_A01/sm_bodyPart_exterior_roof_panel_a01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "bumper_front",
+  "source_asset": "Front_Bumper_D01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Front_Bumper_D01/sm_bodyPart_bumper_front_d01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "bumper_rear",
+  "source_asset": "Rear_Bumper_C01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Rear_Bumper_C01/sm_bodyPart_bumper_rear_c01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "boot_lid",
+  "source_asset": "Body_Part_Boot_Lid_C01",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/SimReady/Industrial/Machines/Automotive/Body_Parts/Body_Part_Boot_Lid_C01/sm_bodyPart_boot_lid_c01_01.usd",
+  "used_for": "body-in-white panel"
+ },
+ {
+  "asset": "autoshop_01",
+  "owner": "Oliksiy Yakovlyev",
+  "licence": "CC0-1.0",
+  "source_url": "https://polyhaven.com/a/autoshop_01",
+  "licence_url": "https://polyhaven.com/license",
+  "kind": "HDRI (Poly Haven)",
+  "used_for": "HDRI (world lighting)"
+ },
+ {
+  "asset": "concrete_floor_worn_001",
+  "owner": "Dimitrios Savva, Rico Cilliers",
+  "licence": "CC0-1.0",
+  "source_url": "https://polyhaven.com/a/concrete_floor_worn_001",
+  "licence_url": "https://polyhaven.com/license",
+  "kind": "PBR texture (Poly Haven)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "PaintedMetal004",
+  "owner": "ambientCG (Lennart Demes)",
+  "licence": "CC0-1.0",
+  "source_url": "https://ambientcg.com/view?id=PaintedMetal004",
+  "licence_url": "https://docs.ambientcg.com/license/",
+  "kind": "PBR texture (ambientCG)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "Metal032",
+  "owner": "ambientCG (Lennart Demes)",
+  "licence": "CC0-1.0",
+  "source_url": "https://ambientcg.com/view?id=Metal032",
+  "licence_url": "https://docs.ambientcg.com/license/",
+  "kind": "PBR texture (ambientCG)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "Rubber004",
+  "owner": "ambientCG (Lennart Demes)",
+  "licence": "CC0-1.0",
+  "source_url": "https://ambientcg.com/view?id=Rubber004",
+  "licence_url": "https://docs.ambientcg.com/license/",
+  "kind": "PBR texture (ambientCG)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "Plastic013A",
+  "owner": "ambientCG (Lennart Demes)",
+  "licence": "CC0-1.0",
+  "source_url": "https://ambientcg.com/view?id=Plastic013A",
+  "licence_url": "https://docs.ambientcg.com/license/",
+  "kind": "PBR texture (ambientCG)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "Cardboard004",
+  "owner": "ambientCG (Lennart Demes)",
+  "licence": "CC0-1.0",
+  "source_url": "https://ambientcg.com/view?id=Cardboard004",
+  "licence_url": "https://docs.ambientcg.com/license/",
+  "kind": "PBR texture (ambientCG)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "raw_plank_wall",
+  "owner": "Dimitrios Savva",
+  "licence": "CC0-1.0",
+  "source_url": "https://polyhaven.com/a/raw_plank_wall",
+  "licence_url": "https://polyhaven.com/license",
+  "kind": "PBR texture (Poly Haven)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "box_profile_metal_sheet",
+  "owner": "Amal Kumar",
+  "licence": "CC0-1.0",
+  "source_url": "https://polyhaven.com/a/box_profile_metal_sheet",
+  "licence_url": "https://polyhaven.com/license",
+  "kind": "PBR texture (Poly Haven)",
+  "used_for": "CC0 PBR material in render/blender/materials.py"
+ },
+ {
+  "asset": "fanuc_r2000ic_210f",
+  "source_asset": "Robots/Fanuc/r2000ic_210f",
+  "owner": "NVIDIA Corporation (Isaac Sim / SimReady assets)",
+  "licence": "CC-BY-4.0",
+  "licence_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/6.0/Isaac/Robots/Fanuc/r2000ic_210f/r2000ic_210f.usd",
+  "used_for": "spot-welding robots (meshes + joint frames, render/blender/fanuc.py)"
+ },
+ {
+  "asset": "kloofendal_overcast_puresky",
+  "owner": "Poly Haven",
+  "licence": "CC0-1.0",
+  "licence_url": "https://polyhaven.com/license",
+  "source_url": "https://polyhaven.com/a/kloofendal_overcast_puresky",
+  "kind": "HDRI (Poly Haven)",
+  "used_for": "sky seen through skylights and wall bands (render/blender/scene_real.py)"
+ },
+ {
+  "asset": "MPFB 2.0.18 base mesh, targets, game_engine rig + weights (generated humans)",
+  "owner": "MakeHuman team / Joel Palmius",
+  "licence": "CC0 (assets and output; MPFB code is GPL-3.0)",
+  "licence_url": "https://static.makehumancommunity.org/about/license.html",
+  "source_url": "https://static.makehumancommunity.org/about/license.html",
+  "used_for": "rigged workers in PPE (render/blender/humans.py)"
+ },
+ {
+  "asset": "MakeHuman system assets: skins, low-poly eyes, eyebrows, eyelashes, hair, male_casualsuit01, shoes03",
+  "owner": "makehuman_system (Data Collection AB, Joel Palmius, Jonas Hauquier)",
+  "licence": "CC0",
+  "licence_url": "https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html",
+  "source_url": "https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html",
+  "used_for": "rigged workers in PPE (render/blender/humans.py)"
+ },
+ {
+  "asset": "Gloves 01 pack: toigo_gloves_short",
+  "owner": "MargaretToigo",
+  "licence": "CC0",
+  "licence_url": "https://static.makehumancommunity.org/assets/assetpacks/gloves01.html",
+  "source_url": "https://static.makehumancommunity.org/assets/assetpacks/gloves01.html",
+  "used_for": "rigged workers in PPE (render/blender/humans.py)"
+ },
+ {
+  "asset": "hard hat, hi-vis vest, safety glasses (procedural), walk/idle/work clips (procedural)",
+  "owner": "InterCycle (ours)",
+  "licence": "ours",
+  "licence_url": "",
+  "source_url": "",
+  "used_for": "rigged workers in PPE (render/blender/humans.py)"
+ },
+ {
+  "asset": "tesla_biw_line_high_angle_jurvetson.jpg",
+  "owner": "Steve Jurvetson from Los Altos, USA",
+  "licence": "CC BY 2.0",
+  "licence_url": "https://creativecommons.org/licenses/by/2.0",
+  "source_url": "https://commons.wikimedia.org/wiki/File:Tesla_Motors_Assembly_Line_(6858583426).jpg",
+  "used_for": "reference photo for the side-by-side check only (render/side_by_side.py); never inside a render"
+ },
+ {
+  "asset": "tesla_biw_robot_dance_jurvetson.jpg",
+  "owner": "Steve Jurvetson from Los Altos, USA",
+  "licence": "CC BY 2.0",
+  "licence_url": "https://creativecommons.org/licenses/by/2.0",
+  "source_url": "https://commons.wikimedia.org/wiki/File:Tesla_Robot_Dance_(7408451314).jpg",
+  "used_for": "reference photo for the side-by-side check only (render/side_by_side.py); never inside a render"
+ },
+ {
+  "asset": "fanuc_yellow_biw_zaz_mixabest.jpg",
+  "owner": "Mixabest (author assumed on Commons, no machine-readable author in file)",
+  "licence": "Public domain (PD-self tag on Commons)",
+  "licence_url": "https://commons.wikimedia.org/wiki/Template:PD-self",
+  "source_url": "https://commons.wikimedia.org/wiki/File:FANUC_R2000iB_AtWork.jpg",
+  "used_for": "reference photo for the side-by-side check only (render/side_by_side.py); never inside a render"
+ },
+ {
+  "asset": "ford_koeln_kuka_bodyshop_gillyberlin.jpg",
+  "owner": "GillyBerlin from Spain",
+  "licence": "CC BY 2.0",
+  "licence_url": "https://creativecommons.org/licenses/by/2.0",
+  "source_url": "https://commons.wikimedia.org/wiki/File:Besuch_bei_Ford_in_K%C3%B6ln.jpg",
+  "used_for": "reference photo for the side-by-side check only (render/side_by_side.py); never inside a render"
+ }
+]

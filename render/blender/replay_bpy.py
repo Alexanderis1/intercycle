@@ -715,8 +715,8 @@ def smoke(out_dir: Path) -> Path:
     return dst
 
 
-def run_bpy(scn, ctx, shots, args, out_dir: Path):
-    bs = BScene(scn, ctx, args)
+def run_bpy(scn, ctx, shots, args, out_dir: Path, scene_cls=None):
+    bs = (scene_cls or BScene)(scn, ctx, args)
     bs.build()
     outs = []
     for name, p in zip(shots, core.plan(ctx, shots, args.fps, args.t0, args.t1, args.speed)):
@@ -728,8 +728,8 @@ def run_bpy(scn, ctx, shots, args, out_dir: Path):
     (out_dir / "manifest_blender.json").write_text(json.dumps(dict(outputs=outs, device=bs.device, args=vars(args)), indent=2, default=str))
 
 
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="Blender/Cycles replay of the InterCycle sim trace")
     ap.add_argument("--scenario", default="scenario/bodyshop.yaml")
     ap.add_argument("--trace", default="trace.parquet")
     ap.add_argument("--out", default="render/out")
@@ -754,7 +754,11 @@ def main(argv=None) -> int:
     ap.add_argument("--keep-frames", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--smoke", action="store_true")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     if args.smoke:
