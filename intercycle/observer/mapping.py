@@ -298,7 +298,14 @@ class Observation:
 #                              touches the zone between grid cells, or while the hold bridges a missed detection.
 #   cam_floor_ok (n_cam,) bool one per camera polygon (the camera's visible floor), same order as cam_ok: the image is
 #                              valid for floor observation. Implies cam_ok. The v1 converter copies the heartbeat
-#                              (cam_ok); the M-W10 watchdog (frozen / obstructed / dark image) sets it False on its own.
+#                              (cam_ok); the M-W10 watchdog (`intercycle/observer/watchdog.py`: frozen / black /
+#                              obstructed / blurred image) sets it False on its own (`ObsV2Converter(obs, floor_ok=)`).
+#   M-W10 consumers (`floor_ok_of`): a camera with cam_floor_ok False is not evidence. ConditionTracker does not debounce
+#                              its machines (no motion seen through it is MISSING, not a stop); LayeredMap drops its
+#                              detections, gives it no visit (its cells are not pushed towards p = 0) and marks every
+#                              cell of its floor region UNKNOWN while it is unhealthy (`cam_unhealthy`, lifted on the
+#                              first healthy tick; the watchdog's recover_s holds it before that); a camera with fewer
+#                              than min_ticks visits in a slice is UNKNOWN in that slice (`unknown_mask(tod, prod)`).
 # Zones are indexed like `Observation.machine` (scenario / site machine order); cameras like `cam_ok`.
 OBS_V1_FIELDS = ("t", "t_cap", "cls", "x", "z", "r", "heading", "moving", "machine", "cam_ok")
 OBS_V2_FIELDS = ("zone_motion", "zone_vis", "cam_floor_ok")
@@ -332,6 +339,35 @@ def zone_camera_share(rects, cams, margin: float = 1.0, res: float = 0.25) -> np
         cam = np.hypot(px.reshape(-1, 1) - C[None, :, 0], pz.reshape(-1, 1) - C[None, :, 1]).argmin(1)
         W[i] = np.bincount(cam, minlength=len(C)) / cam.size
     return W
+
+
+def floor_ok_of(obs: Observation) -> np.ndarray:
+    """(n_cam,) bool: the camera's floor view is valid this tick. cam_floor_ok & cam_ok on v2, the heartbeat on v1."""
+    ok = np.asarray(obs.cam_ok, bool)
+    return ok if obs.cam_floor_ok is None else np.asarray(obs.cam_floor_ok, bool) & ok
+
+
+def mask_cameras(obs: Observation, floor_ok, share: np.ndarray, vis_min: float = ZONE_VIS_MIN) -> Observation:
+    """M-W10 on a v2 observation: AND cam_floor_ok with `floor_ok` (the image watchdog's (n_cam,) bool), take each lost
+    camera's floor share off zone_vis (a lower bound: its share may overlap the occluded share already removed) and
+    set zone_motion MISSING where zone_vis < vis_min. Detections are passed through: consumers gate them by
+    `floor_ok_of`. Returns a new Observation."""
+    zm, zv, cf = obs.zone_motion, obs.zone_vis, obs.cam_floor_ok
+    if zm is None or zv is None or cf is None:
+        raise ValueError("mask_cameras needs a v2 observation")
+    ok = np.asarray(floor_ok, bool).reshape(-1)
+    share = np.asarray(share, float)
+    if ok.shape != cf.shape or share.shape != (len(zm), len(cf)):
+        raise ValueError(f"floor_ok {ok.shape} / share {share.shape} do not match {len(zm)} zones x {len(cf)} cameras")
+    new = cf & ok
+    lost = cf & ~new
+    if not lost.any():
+        return replace(obs, cam_floor_ok=new)
+    vis = np.maximum(zv.astype(float) - share[:, lost].sum(1), 0.0)
+    vis = np.where(vis < 1e-9, 0.0, vis)
+    motion = zm.astype(float)
+    motion[vis < vis_min] = np.nan
+    return replace(obs, zone_motion=motion.astype(np.float32), zone_vis=vis.astype(np.float32), cam_floor_ok=new)
 
 
 def _occluders(obs: Observation, occ_classes) -> np.ndarray:
@@ -394,12 +430,14 @@ def _occlude(v: Observation, zones: list, vis_min: float, margin: float, pad: fl
 
 
 def _to_v2(obs: Observation, share, vis_min: float, zones, margin: float, pad: float, occ_classes,
-           gate: HoldGate | None, cells: ZoneCells | None) -> Observation:
+           gate: HoldGate | None, cells: ZoneCells | None, floor_ok=None) -> Observation:
     zones = list(zones)
     n_zone = np.asarray(share).shape[0]
     if len(zones) != n_zone:
         raise ValueError(f"{len(zones)} zones but share has {n_zone} rows")
     v = obs if obs.is_v2 else _camera_v2(obs, share, vis_min)
+    if floor_ok is not None:
+        v = mask_cameras(v, floor_ok, share, vis_min)
     return _occlude(v, zones, vis_min, margin, pad, occ_classes, gate, cells)
 
 
@@ -425,9 +463,10 @@ class ObsV2Converter:
     def reset(self) -> None:
         self.gate.reset()
 
-    def __call__(self, obs: Observation) -> Observation:
+    def __call__(self, obs: Observation, floor_ok=None) -> Observation:
+        """`floor_ok` = the image watchdog's (n_cam,) bool for this tick (watchdog.ImageWatchdog.step), or None."""
         return _to_v2(obs, self.share, self.vis_min, self.zones, self.margin, self.pad, self.occ_classes, self.gate,
-                      self.cells)
+                      self.cells, floor_ok)
 
 
 def check_obs_v2(obs: Observation, n_zone: int | None = None, n_cam: int | None = None) -> None:
@@ -893,8 +932,9 @@ class ConditionTracker:
             y[obs.machine[sel]] = True
         y[M] = bool(((obs.cls == SKID) & obs.moving).any())
         valid = np.empty(M + 1, bool)
-        valid[:M] = obs.cam_ok[self.cam_of_machine]
-        valid[M] = bool(obs.cam_ok.any())
+        fok = floor_ok_of(obs)                             # M-W10: a frozen / blind camera's "no motion" is not a stop
+        valid[:M] = fok[self.cam_of_machine]
+        valid[M] = bool(fok.any())
         first = valid & np.isnan(self.last_valid)          # the stream starts mid-cycle: adopt the first state, no edge
         self.cur[first] = y[first]
         diff = valid & (y != (self.cur == 1))
@@ -968,9 +1008,16 @@ class MapView:
 
     spec: dict
     cam_offline: set = frozenset()
+    cam_unhealthy: set[int] | frozenset[int] = frozenset()   # M-W10 live state: cameras whose floor view is invalid now
+    cam_of_cell: np.ndarray                # [nx, nz] camera index per site cell (set by views that have cameras)
 
     def _unknown_static(self) -> np.ndarray:
         raise NotImplementedError
+
+    def _slice_unknown(self, tod: int, prod: int) -> np.ndarray | None:
+        """[nx, nz] bool: cells whose camera was seen too little in slice (tod, prod) to trust their counts (M-W10), or
+        None when the view cannot tell (a decoded map from a payload without that section)."""
+        return None
 
     def machine_ids(self) -> list[str]:
         return [m["id"] for m in self.spec["machines"]]
@@ -1059,14 +1106,23 @@ class MapView:
     # ---------------------------------------------------------------- UNKNOWN
     def unknown_mask(self, tod: int | None = None, prod: int | None = None) -> np.ndarray:
         """Site grid [nx, nz] of UNKNOWN cells (to be treated as occupied): the static part (`_unknown_static`: never
-        observed, new-machine regions, machines with no learned envelope), every cell of an offline camera, and the
-        whole site when the traffic slice (tod, prod) cannot be resolved for either class (nothing comparable seen)."""
+        observed, new-machine regions, machines with no learned envelope), every cell of an offline (bumped) or
+        currently unhealthy camera (M-W10: frozen / blind image or heartbeat lost; lifted when its health returns),
+        and, for a slice (tod, prod), the whole site when the slice cannot be resolved for either class (nothing
+        comparable seen), else every cell of a camera with too few visits in the resolved slice (M-W10: its counts
+        would read p = 0, i.e. free)."""
         U = self._unknown_static().copy()
-        for c in self.cam_offline:
+        for c in set(self.cam_offline) | set(self.cam_unhealthy):
             U |= self.cam_of_cell == int(c)
         if tod is not None and prod is not None:
-            if any(self._resolve(int(tod), int(prod), c) is None for c in (VEHICLE, PERSON)):
+            res = [self._resolve(int(tod), int(prod), c) for c in (VEHICLE, PERSON)]
+            if any(r is None for r in res):
                 U[:] = True
+                return U
+            for r in set(cast(list[tuple[int, int]], res)):
+                bad = self._slice_unknown(*r)
+                if bad is not None:
+                    U |= bad
         return U
 
     def unknown_boxes(self, tod: int | None = None, prod: int | None = None, max_boxes: int = 24) -> np.ndarray:
@@ -1167,6 +1223,7 @@ class LayeredMap(MapView):
         self.t_first, self.t_last = math.inf, -math.inf
         self._cover_cache: dict = {}
         self.cam_offline: set[int] = set()                 # cameras currently offline (live state; their cells are UNKNOWN)
+        self.cam_unhealthy = set()                         # M-W10: floor view invalid at the last update (cells UNKNOWN)
         self.unknown_rects: list[tuple[float, float, float, float]] = []   # e.g. a new machine still being learned
         self.min_cam_ticks = min_ticks                      # a camera region seen fewer ticks than this is never-observed
 
@@ -1177,7 +1234,11 @@ class LayeredMap(MapView):
         self.n_ticks += 1
         self.t_first, self.t_last = min(self.t_first, t), max(self.t_last, t)
         self._cover_cache.clear()
-        if self.cam_offline:                    # an offline / bumped camera's detections are not evidence (its cells are UNKNOWN)
+        fok = floor_ok_of(obs)
+        if fok.shape != (len(self.spec["cameras"]),):
+            raise ValueError(f"observation has {fok.shape[0]} cameras, the map {len(self.spec['cameras'])}")
+        self.cam_unhealthy = set(np.flatnonzero(~fok).tolist())      # M-W10 live state: replaced every tick
+        if self.cam_offline or self.cam_unhealthy:   # an offline / bumped / unhealthy camera's detections are not evidence
             obs = self._drop_offline(obs)
         # ---- L1: machine parts and skids inside a zone, binned by the machine's phase
         sel = ((obs.cls == PART) | (obs.cls == SKID)) & (obs.machine >= 0)
@@ -1195,11 +1256,12 @@ class LayeredMap(MapView):
                     pos = np.arange(len(flat), dtype=np.int32)
                     self._scratch[flat] = pos
                     self.l1_hits[flat[self._scratch[flat] == pos]] += 1.0
-        okm = (cond.phase_bin >= 0) & obs.cam_ok[self.cam_of_machine[:len(cond.phase_bin)]]   # spawned machines: change.py
+        fok = floor_ok_of(obs)                              # after _drop_offline: offline / unhealthy cameras are False
+        okm = (cond.phase_bin >= 0) & fok[self.cam_of_machine[:len(cond.phase_bin)]]   # spawned machines: change.py
         k = np.flatnonzero(okm)
         self.l1_visits[k, cond.phase_bin[k]] += 1.0
         # ---- L2 / L3
-        self.visits_cam[S] += obs.cam_ok
+        self.visits_cam[S] += fok
         for cid in (PERSON, VEHICLE):
             sel = obs.cls == cid
             if not sel.any():
@@ -1223,9 +1285,10 @@ class LayeredMap(MapView):
         s = self.spec["site"]
         ix = np.clip(np.floor((obs.x - s["x0"]) / s["res"]).astype(np.int64), 0, self.nx - 1)
         iz = np.clip(np.floor((obs.z - s["z0"]) / s["res"]).astype(np.int64), 0, self.nz - 1)
-        keep = ~np.isin(self.cam_of_cell[ix, iz], list(self.cam_offline))
+        gone = sorted(set(self.cam_offline) | set(self.cam_unhealthy))
+        keep = ~np.isin(self.cam_of_cell[ix, iz], gone)
         ok = obs.cam_ok.copy()
-        ok[list(self.cam_offline)] = False
+        ok[gone] = False
         floor_ok = None if obs.cam_floor_ok is None else obs.cam_floor_ok & ok     # v2 fields kept (cam_floor_ok implies cam_ok)
         return replace(obs, cls=obs.cls[keep], x=obs.x[keep], z=obs.z[keep], r=obs.r[keep], heading=obs.heading[keep],
                        moving=obs.moving[keep], machine=obs.machine[keep], cam_ok=ok, cam_floor_ok=floor_ok)
@@ -1358,8 +1421,15 @@ class LayeredMap(MapView):
     def _observed(self, tod: int, prod: int, cls: int | None = None) -> bool:
         return self.slice_ticks(tod, prod) >= self.min_ticks
 
+    def _slice_unknown(self, tod: int, prod: int) -> np.ndarray:
+        """M-W10: cells of the cameras with fewer than min_ticks healthy visits in the slice (the slice trust rule,
+        per camera)."""
+        return (self.visits_cam[tod * N_PROD + prod] < self.min_ticks)[self.cam_of_cell]
+
     def traffic(self, cls, tod_bin: int, prod_state: int, fallback: bool = True) -> tuple[np.ndarray, np.ndarray]:
-        """(occupancy probability [nx, nz] float32, dominant heading [nx, nz] int8 in 0..7, -1 where unknown)."""
+        """(occupancy probability [nx, nz] float32, dominant heading [nx, nz] int8 in 0..7, -1 where unknown).
+        Cells of a camera under-observed in the resolved slice read 0 here; they are UNKNOWN in
+        `unknown_mask(tod, prod)` (M-W10), which every consumer that plans on the map must apply."""
         c = self._cls(cls)
         r = self._resolve(tod_bin, prod_state, c) if fallback else ((tod_bin, prod_state) if self._observed(tod_bin, prod_state, c) else None)
         if r is None:
