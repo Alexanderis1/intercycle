@@ -73,9 +73,9 @@ def agents(scn: Scenario, seed: int) -> list[PathAgent]:
         out.append(PathAgent(f"AGV{k}", MoverClass.AGV, loop, 1.2, phase_s=k * L / 4 / 1.2 + rng.uniform(0, 10), pause_s=4.0))
     # tugger trains on the transport aisle
     for k in range(2):
-        out.append(PathAgent(f"TUG{k}", MoverClass.TUGGER, [(3, 8), (93, 8)], 1.8, phase_s=rng.uniform(0, 100), loop=False, pause_s=40.0))
+        out.append(PathAgent(f"TUG{k}", MoverClass.TUGGER, [(10, 8), (86, 8)], 1.8, phase_s=rng.uniform(0, 100), loop=False, pause_s=40.0))
     # forklifts: market -> line ends -> closures cells along the north aisle (crosses the robot's main route)
-    for k, x in enumerate((2.0, 90.0, 52.5)):
+    for k, x in enumerate((3.0, 90.0, 52.5)):
         route = [(x, 3.0), (x, 32.0), (21.0 if k != 1 else 46.0, 32.0), (21.0 if k != 1 else 46.0, 35.5)]
         if k == 2:
             route = [(52.5, 3.0), (52.5, 10.0), (88.0, 10.0), (88.0, 3.0)]

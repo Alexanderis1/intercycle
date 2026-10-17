@@ -84,11 +84,16 @@ class SiteGraph:
             self.targets.append(Target(m.id, "machine", n, m.id, scn.inspection.dwell_s))
         # data-hall rack rows (no machine hazard)
         rows = scn.data_hall_targets["rows"]
-        for r in range(rows):
-            for k, x in enumerate((104.0, 112.0)):
+        for r in range(rows):                       # cold aisles just north of each rack row
+            z = 14.4 + r * 8.0
+            self._node(f"DA{r}", 99.0, z)
+            self._edge("DH", f"DA{r}", v)
+            prev = f"DA{r}"
+            for k, x in enumerate((103.0, 106.6)):
                 n = f"R{r}{k}"
-                self._node(n, x, 16.0 + r * 8.0)
-                self._edge("DH", n, v)
+                self._node(n, x, z)
+                self._edge(prev, n, v)
+                prev = n
                 self.targets.append(Target(n, "rack", n, None, 6.0))
 
     def inspect_pose(self, target: Target) -> tuple[float, float]:
