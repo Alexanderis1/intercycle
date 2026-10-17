@@ -15,6 +15,26 @@ import pandas as pd
 DATA_ENV = "INTERCYCLE_DATA"
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 COLUMNS = ["clip_id", "camera", "framing_id", "group_id", "class", "duration", "sha256", "split"]
+# extra columns (amendment A1+): dup_of = the other clip ids with a byte-identical file (comma-separated, "" if none);
+# dup_classes = the distinct class prefixes of that byte-identical set when they disagree ("" otherwise)
+EXTRA_COLUMNS = ["dup_of", "dup_classes"]
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def active_split_path(repo_root: str | Path | None = None) -> Path:
+    """The split in force: prereg/<name> where name is the single line of prereg/ACTIVE_SPLIT (amendment A1+).
+
+    prereg/split.csv stays the original pre-registered record; without ACTIVE_SPLIT it is the active split.
+    """
+    pre = Path(repo_root or REPO_ROOT) / "prereg"
+    ptr = pre / "ACTIVE_SPLIT"
+    name = ptr.read_text(encoding="utf-8").strip() if ptr.exists() else "split.csv"
+    if "/" in name or "\\" in name or not name.endswith(".csv"):
+        raise ValueError(f"bad prereg/ACTIVE_SPLIT entry {name!r}")
+    p = pre / name
+    if not p.exists():
+        raise FileNotFoundError(p)
+    return p
 SPLITS = ("train", "dev", "test")
 CAMERA_OF_PREFIX = {0: 9, 1: 9, 2: 9, 4: 9, 5: 9, 6: 9, 3: 14, 7: 14}
 
@@ -63,12 +83,16 @@ def clip_path(clip_id: str, root: str | Path | None = None) -> Path:
     return data_root(root) / "clips" / f"{clip_id}.mp4"
 
 
-def check_against_split(inv: pd.DataFrame, split_csv: str | Path) -> None:
-    """Raise unless inventory rows match prereg/split.csv exactly on clip_id, group_id, split and sha256."""
+def check_against_split(inv: pd.DataFrame, split_csv: str | Path | None = None) -> None:
+    """Raise unless inventory rows match the split csv exactly on clip_id, group_id, split and sha256 (and framing_id
+    when the csv has that column, as split_a1.csv does). Default: the active split (``active_split_path``)."""
+    split_csv = split_csv or active_split_path()
     with open(split_csv, newline="", encoding="utf-8") as fh:
-        ref = {r["clip_id"]: (r["group_id"], r["split"], r["sha256"]) for r in csv.DictReader(fh)}
-    got = {str(c): (str(g), str(s), str(h)) for c, g, s, h in
-           zip(inv["clip_id"], inv["group_id"], inv["split"], inv["sha256"])}
+        rd = csv.DictReader(fh)
+        cols = ["group_id", "split", "sha256"] + (["framing_id"] if "framing_id" in (rd.fieldnames or []) else [])
+        ref = {r["clip_id"]: tuple(r[c] for c in cols) for r in rd}
+    got = {str(row[0]): tuple(str(v) for v in row[1:]) for row in
+           zip(inv["clip_id"], *(inv[c] for c in cols))}
     if got != ref:
         only_inv = sorted(set(got) - set(ref))[:5]
         only_ref = sorted(set(ref) - set(got))[:5]

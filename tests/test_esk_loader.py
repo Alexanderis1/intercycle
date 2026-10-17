@@ -63,3 +63,28 @@ def test_check_against_split(tmp_path, monkeypatch):
     inv.loc[0, "split"] = "dev"
     with pytest.raises(AssertionError):
         esk.check_against_split(inv, root / "split.csv")
+
+
+def test_active_split_pointer_and_framing_column(tmp_path):
+    root = _inv(tmp_path)
+    pre = tmp_path / "prereg"
+    pre.mkdir()
+    (pre / "split.csv").write_text((root / "split.csv").read_text(encoding="utf-8"), encoding="utf-8")
+    assert esk.active_split_path(tmp_path) == pre / "split.csv"  # no pointer: the original split
+    (pre / "split_a1.csv").write_text(
+        "clip_id,group_id,split,sha256,framing_id\n0_tr1,c9_g000,train,a,c9_f0\n3_tr2,c14_g000,dev,b,c14_f0\n"
+        "7_te1,c14_g001,test,c,c14_f0\n", encoding="utf-8")
+    (pre / "ACTIVE_SPLIT").write_text("split_a1.csv\n", encoding="utf-8")
+    assert esk.active_split_path(tmp_path) == pre / "split_a1.csv"
+    inv = pd.read_parquet(root / "inventory.parquet")
+    esk.check_against_split(inv, pre / "split_a1.csv")
+    inv.loc[1, "framing_id"] = "c14_f9"
+    with pytest.raises(AssertionError):
+        esk.check_against_split(inv, pre / "split_a1.csv")
+    (pre / "ACTIVE_SPLIT").write_text("../x.csv\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        esk.active_split_path(tmp_path)
+
+
+def test_repo_active_split_is_a1():
+    assert esk.active_split_path().name == "split_a1.csv"

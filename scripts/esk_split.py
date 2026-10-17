@@ -186,6 +186,124 @@ def make_split(meta: list[dict], feats: dict[str, dict], seed: int = SEED) -> tu
     return rows_out, diag
 
 
+# ----------------------------------------------------------------------------- amendment A1+ (prereg/AMENDMENTS.md)
+# Only behind --rule a1plus; the committed default path above is unchanged.
+#   groups   = the agglomerative clusters at CLUSTER_DISTANCE (no pHash link), then clusters that share a byte-identical
+#              sha256 are merged;
+#   test     = only groups with no agent-viewed clip (prereg/viewed_clips.txt) and whose every framing_id already has
+#              a TRAIN clip;
+#   split    = rule 4 (60/20/20 by group, strata camera x safe/unsafe, SEED); when the largest-deficit split is test and
+#              the group is not eligible for test, the group goes to the next-largest deficit among train/dev.
+A1_RULE = "a1plus"
+
+
+def group_camera_a1plus(ids: list[str], feats: dict[str, dict], sha_of: dict[str, str]) -> tuple[list[int], dict]:
+    """A1+ grouping of one camera: agglomerative clusters, then merge clusters sharing a byte-identical sha256."""
+    from scipy.cluster.hierarchy import fcluster, linkage
+
+    n = len(ids)
+    dsu = _DSU(n)
+    n_clusters = n
+    if n > 1:
+        cond = np.array([pair_distance(feats[ids[i]], feats[ids[j]]) for i in range(n) for j in range(i + 1, n)])
+        lab = fcluster(linkage(cond, method=CLUSTER_LINKAGE), t=CLUSTER_DISTANCE, criterion="distance")
+        n_clusters = int(len(set(lab.tolist())))
+        first: dict[int, int] = {}
+        for i, c in enumerate(lab.tolist()):
+            if c in first:
+                dsu.union(first[c], i)
+            else:
+                first[c] = i
+    before = len({dsu.find(i) for i in range(n)})
+    first_sha: dict[str, int] = {}
+    n_dup_files = 0
+    for i, cid in enumerate(ids):
+        s = sha_of[cid]
+        if s in first_sha:
+            dsu.union(first_sha[s], i)
+            n_dup_files += 1
+        else:
+            first_sha[s] = i
+    comp = [dsu.find(i) for i in range(n)]
+    after = len(set(comp))
+    return comp, {"n_clips": n, "agglomerative_clusters": n_clusters, "byte_identical_extra_files": n_dup_files,
+                  "cluster_merges_by_sha256": before - after}
+
+
+def assign_splits_a1plus(groups: dict[str, dict], seed: int = SEED) -> dict[str, str]:
+    """A1+ rule 4. groups: gid -> {"camera", "n_clips", "n_unsafe", "framings": set, "viewed": bool}."""
+    names = [s for s, _ in SPLIT_FRACTIONS]
+    fr = np.array([f for _, f in SPLIT_FRACTIONS])
+    out: dict[str, str] = {}
+    strata: dict[tuple[int, int], list[str]] = {}
+    for gid, g in groups.items():
+        unsafe = 1 if 2 * g["n_unsafe"] >= g["n_clips"] else 0
+        strata.setdefault((int(g["camera"]), unsafe), []).append(gid)
+    train_framings: set[str] = set()
+    for (cam, unsafe), gids in sorted(strata.items()):
+        rng = np.random.default_rng([seed, cam, unsafe])
+        gids = sorted(gids)
+        order = [gids[k] for k in rng.permutation(len(gids))]
+        order.sort(key=lambda g: -groups[g]["n_clips"])  # stable: ties keep the seeded order
+        total = sum(groups[g]["n_clips"] for g in order)
+        got = np.zeros(len(names))
+        for g in order:
+            deficit = fr * total - got
+            ranked = sorted(range(len(names)), key=lambda k: (-deficit[k], k))  # ties -> train, dev, test
+            test_ok = (not groups[g]["viewed"]) and set(groups[g]["framings"]) <= train_framings
+            k = next(k for k in ranked if names[k] != "test" or test_ok)
+            out[g] = names[k]
+            got[k] += groups[g]["n_clips"]
+            if names[k] == "train":
+                train_framings |= set(groups[g]["framings"])
+    for g, s in out.items():  # every test framing exists in train
+        assert s != "test" or set(groups[g]["framings"]) <= train_framings, g
+    return out
+
+
+def make_split_a1plus(meta: list[dict], feats: dict[str, dict], viewed: set[str], framing_of: dict[str, str],
+                      seed: int = SEED) -> tuple[list[dict], dict]:
+    """A1+ rules. meta rows: clip_id, camera, cls, sha256; framing_of: clip_id -> framing_id (every clip)."""
+    by_id = {m["clip_id"]: m for m in meta}
+    missing = sorted(set(by_id) - set(framing_of))
+    if missing:
+        raise ValueError(f"no framing_id for {len(missing)} clips, e.g. {missing[:3]}")
+    unknown = sorted(viewed - set(by_id))
+    if unknown:
+        raise ValueError(f"viewed ids not in the clip list: {unknown[:3]}")
+    cams_of_sha: dict[str, set[int]] = {}
+    for m in meta:
+        cams_of_sha.setdefault(m["sha256"], set()).add(int(m["camera"]))
+    if any(len(v) > 1 for v in cams_of_sha.values()):
+        raise ValueError("a byte-identical file spans two cameras")
+    gid_of: dict[str, str] = {}
+    diag: dict = {"rule": A1_RULE, "constants": {k: v for k, v in globals().items() if k.isupper()}, "cameras": {}}
+    sha_of = {m["clip_id"]: m["sha256"] for m in meta}
+    for cam in sorted({int(m["camera"]) for m in meta}):
+        ids = sorted(m["clip_id"] for m in meta if int(m["camera"]) == cam)
+        comp, d = group_camera_a1plus(ids, feats, sha_of)
+        roots = sorted(set(comp), key=lambda r: min(ids[i] for i in range(len(ids)) if comp[i] == r))
+        name = {r: f"c{cam}_a{k:03d}" for k, r in enumerate(roots)}
+        for i, cid in enumerate(ids):
+            gid_of[cid] = name[comp[i]]
+        d["groups"] = len(roots)
+        diag["cameras"][str(cam)] = d
+    groups: dict[str, dict] = {}
+    for cid, gid in gid_of.items():
+        g = groups.setdefault(gid, {"camera": int(by_id[cid]["camera"]), "n_clips": 0, "n_unsafe": 0,
+                                    "framings": set(), "viewed": False, "n_viewed": 0})
+        g["n_clips"] += 1
+        g["n_unsafe"] += int(int(by_id[cid]["cls"]) in UNSAFE_PREFIXES)
+        g["framings"].add(framing_of[cid])
+        g["viewed"] = g["viewed"] or cid in viewed
+        g["n_viewed"] += int(cid in viewed)
+    split_of = assign_splits_a1plus(groups, seed)
+    rows_out = [{"clip_id": cid, "group_id": gid_of[cid], "split": split_of[gid_of[cid]],
+                 "sha256": by_id[cid]["sha256"], "framing_id": framing_of[cid]} for cid in sorted(gid_of)]
+    diag["groups"] = {g: dict(v, framings=sorted(v["framings"]), split=split_of[g]) for g, v in sorted(groups.items())}
+    return rows_out, diag
+
+
 def load_features(features_dir: Path, ids: list[str]) -> dict[str, dict]:
     out = {}
     for cid in ids:
@@ -201,13 +319,28 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--meta", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--summary", type=Path)
+    ap.add_argument("--rule", choices=("committed", A1_RULE), default="committed",
+                    help="committed = the pre-registered rule (default); a1plus = amendment A1+")
+    ap.add_argument("--viewed", type=Path, help="a1plus: agent-viewed clip ids, one per line ('#' comments)")
+    ap.add_argument("--framing", type=Path, help="a1plus: csv clip_id,framing_id for every clip")
     a = ap.parse_args(argv)
     meta = json.loads(a.meta.read_text(encoding="utf-8"))
     feats = load_features(a.features, [m["clip_id"] for m in meta])
-    rows, diag = make_split(meta, feats)
+    fields = ["clip_id", "group_id", "split", "sha256"]
+    if a.rule == A1_RULE:
+        if not (a.viewed and a.framing):
+            ap.error("--rule a1plus needs --viewed and --framing")
+        viewed = {ln.strip() for ln in a.viewed.read_text(encoding="utf-8").splitlines()
+                  if ln.strip() and not ln.startswith("#")}
+        with a.framing.open(newline="", encoding="utf-8") as fh:
+            framing_of = {r["clip_id"]: r["framing_id"] for r in csv.DictReader(fh)}
+        rows, diag = make_split_a1plus(meta, feats, viewed, framing_of)
+        fields.append("framing_id")
+    else:
+        rows, diag = make_split(meta, feats)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with a.out.open("w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=["clip_id", "group_id", "split", "sha256"], lineterminator="\n")
+        w = csv.DictWriter(fh, fieldnames=fields, lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
     if a.summary:

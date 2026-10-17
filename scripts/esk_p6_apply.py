@@ -25,8 +25,9 @@ from intercycle import framing as fr  # noqa: E402
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--p6-json", type=Path, required=True)
-    ap.add_argument("--split", type=Path, default=ROOT / "prereg" / "split.csv")
+    ap.add_argument("--split", type=Path, default=None, help="default: the active split (prereg/ACTIVE_SPLIT)")
     a = ap.parse_args()
+    a.split = a.split or esk.active_split_path()
     framing = json.loads(a.p6_json.read_text(encoding="utf-8"))["framing_of"]
     with open(a.split, newline="", encoding="utf-8") as fh:
         split = {r["clip_id"]: r["split"] for r in csv.DictReader(fh)}

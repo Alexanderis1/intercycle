@@ -54,7 +54,14 @@ cpu_image = (
     .apt_install("ffmpeg")
     .pip_install("av==19.0.0", "numpy==2.2.6", "scipy==1.16.2", "opencv-python-headless==4.12.0.88")
     .add_local_file(str(ROOT / "scripts" / "esk_split.py"), "/root/esk_split.py")
+    .add_local_file(str(ROOT / "intercycle" / "framing.py"), "/root/framing.py")
 )
+SPLIT_A1 = "split_a1.csv"
+# P6 framing references (docs/probes/S3a-P6.md, twin/cal/k1_v0.json ref_clip_id), in P6's framing-index order
+P6_REFS = ("0_te21", "0_te1", "3_te1")  # c9_f0, c9_f1, c14_f0
+P6_SMALL = (960, 540)
+P6_MIN_INLIERS = 60
+P6_MAX_DISP_SMALL_PX = 12.0
 
 
 def _prefetch_weights() -> None:
@@ -238,10 +245,12 @@ def _decode_features_fixed(path, fps, times, fps_pts, dur_pts) -> dict:
             "phash_fps": fps, "n_sampled": len(phash)}
 
 
-def _read_split() -> dict[str, dict]:
+def _read_split(name: str = "split.csv") -> dict[str, dict]:
     import csv
 
-    with open(f"{ESK}/split/split.csv", newline="", encoding="utf-8") as fh:
+    if name not in ("split.csv", SPLIT_A1):
+        raise ValueError(f"unknown split file {name!r}")
+    with open(f"{ESK}/split/{name}", newline="", encoding="utf-8") as fh:
         return {r["clip_id"]: r for r in csv.DictReader(fh)}
 
 
@@ -316,6 +325,92 @@ def run_split() -> dict:
             "public": public, "groups": summary["groups"], "cameras": summary["cameras"]}
 
 
+def _register_framings(ids: list[str]) -> dict[str, str]:
+    """framing_id of every clip: SIFT/RANSAC registration of its t=0.5 s frame to the P6 framing references.
+
+    Same matcher and thresholds as cloud/modal_p6.py (SIFT 3000, ratio 0.75, RANSAC 3 px, >= 60 inliers, corner
+    displacement <= 12 px at 960x540). The P6 references come first, in P6's index order, so c9_f0 / c9_f1 / c14_f0 keep
+    their P6 meaning; a clip that matches no reference founds a new framing (c<cam>_f<k>, k >= the P6 count).
+    """
+    import cv2
+    import numpy as np
+
+    sys.path.insert(0, "/root")
+    import framing as fr
+
+    sift = cv2.SIFT_create(nfeatures=3000)
+    feats: dict[str, tuple] = {}
+    for cid in ids:
+        g = cv2.imread(f"{ESK}/frame05/{cid}.jpg", cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            raise RuntimeError(f"no frame05 for {cid}")
+        kp, d = sift.detectAndCompute(cv2.resize(g, P6_SMALL, interpolation=cv2.INTER_AREA), None)
+        feats[cid] = (np.float32([k.pt for k in kp]), d)
+    bf = cv2.BFMatcher()
+
+    def match(a: str, b: str) -> tuple[int, float]:
+        pa, da = feats[a]
+        pb, db = feats[b]
+        if da is None or db is None or len(pa) < 8 or len(pb) < 8:
+            return 0, float("inf")
+        good = [m[0] for m in bf.knnMatch(da, db, k=2) if len(m) == 2 and m[0].distance < 0.75 * m[1].distance]
+        if len(good) < 8:
+            return len(good), float("inf")
+        Hm, mask = cv2.findHomography(pa[[m.queryIdx for m in good]], pb[[m.trainIdx for m in good]], cv2.RANSAC, 3.0)
+        if Hm is None:
+            return 0, float("inf")
+        return int(mask.sum()), fr.corner_displacement(Hm, *P6_SMALL)
+
+    order = list(P6_REFS) + sorted(c for c in ids if c not in P6_REFS)
+    asg = fr.assign_framings(order, lambda c: _cid_meta(c)[1], lambda c: True, match, P6_MIN_INLIERS,
+                             P6_MAX_DISP_SMALL_PX)
+    out = {c: v["framing_id"] for c, v in asg["clips"].items()}
+    assert (out["0_te21"], out["0_te1"], out["3_te1"]) == ("c9_f0", "c9_f1", "c14_f0"), "P6 reference order changed"
+    return out
+
+
+@app.function(image=cpu_image, volumes={VOL: vol}, cpu=8, memory=16384, timeout=1800)
+def run_split_a1(viewed: list[str], p6_framing: dict[str, str]) -> dict:
+    """Amendment A1+ (prereg/AMENDMENTS.md): framing registration of every clip + scripts/esk_split.py --rule a1plus.
+
+    Runs ONCE (refuses if split_a1.csv exists). Returns the split rows (clip_id, group_id, split, sha256, framing_id),
+    group-level counts and how many of the P6 framing ids (train+dev of the original split) it reproduces. Nothing else
+    per clip leaves Modal.
+    """
+    import csv
+    import glob
+    import os
+    import subprocess
+
+    vol.reload()
+    out_dir = f"{ESK}/split"
+    if os.path.exists(f"{out_dir}/{SPLIT_A1}"):
+        raise RuntimeError(f"{SPLIT_A1} already exists on the volume: the A1+ split runs only once")
+    metas = [json.load(open(p, encoding="utf-8")) for p in sorted(glob.glob(f"{ESK}/meta/*.json"))]
+    if len(metas) != N_EXPECTED:
+        raise RuntimeError(f"expected {N_EXPECTED} clips with features, found {len(metas)}")
+    ids = [m["clip_id"] for m in metas]
+    framing_of = _register_framings(ids)
+    p6_same = sum(1 for c, f in p6_framing.items() if framing_of.get(c) == f)
+    with open(f"{out_dir}/framing_a1.csv", "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh, lineterminator="\n")
+        w.writerow(["clip_id", "framing_id"])
+        w.writerows(sorted(framing_of.items()))
+    with open(f"{out_dir}/viewed_a1.txt", "w", encoding="utf-8") as fh:
+        fh.write("\n".join(sorted(viewed)) + "\n")
+    r = subprocess.run([sys.executable, "/root/esk_split.py", "--features", f"{ESK}/feat", "--meta",
+                        f"{out_dir}/meta_in.json", "--out", f"{out_dir}/{SPLIT_A1}", "--summary",
+                        f"{out_dir}/summary_a1.json", "--rule", "a1plus", "--viewed", f"{out_dir}/viewed_a1.txt",
+                        "--framing", f"{out_dir}/framing_a1.csv"], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr[-3000:])
+    vol.commit()
+    summary = json.load(open(f"{out_dir}/summary_a1.json", encoding="utf-8"))
+    return {"stdout": r.stdout[-4000:], "split_csv": open(f"{out_dir}/{SPLIT_A1}", encoding="utf-8").read(),
+            "groups": summary["groups"], "cameras": summary["cameras"],
+            "p6_framing_reproduced": [p6_same, len(p6_framing)]}
+
+
 # --------------------------------------------------------------------------- RF-DETR on the t=0.5 s frames
 
 
@@ -379,7 +474,7 @@ def _occluded_share(det: dict) -> tuple[int, int]:
 
 
 @app.function(image=cpu_image, volumes={VOL: vol}, cpu=2, memory=4096, timeout=1800)
-def report() -> dict:
+def report(split_name: str = "split.csv") -> dict:
     """P1/P2/P3 aggregates per split x camera. Only aggregates are returned for TEST clips."""
     import glob
     import os
@@ -388,7 +483,7 @@ def report() -> dict:
     import numpy as np
 
     vol.reload()
-    split = _read_split()
+    split = _read_split(split_name)
     metas = {Path(p).stem: json.load(open(p, encoding="utf-8")) for p in glob.glob(f"{ESK}/meta/*.json")}
     acc: dict = defaultdict(lambda: defaultdict(list))
     p2: dict = defaultdict(lambda: defaultdict(int))
@@ -459,8 +554,9 @@ def report() -> dict:
            "p2_creation_time_examples_train": sorted(p2_values.get("train", set()))[:5],
            "authors_overlap": {"groups": len(groups), "groups_with_both_tr_and_te": len(mixed),
                                "authors_test_clips": len(te_ids), "authors_test_clips_in_mixed_groups": te_in_mixed},
-           "group_counts": dict(group_counts), "person_conf": PERSON_CONF, "occ_ioa": OCC_IOA}
-    with open(f"{ESK}/split/report.json", "w", encoding="utf-8") as fh:
+           "group_counts": dict(group_counts), "person_conf": PERSON_CONF, "occ_ioa": OCC_IOA, "split_file": split_name}
+    rep = "report.json" if split_name == "split.csv" else "report_a1.json"
+    with open(f"{ESK}/split/{rep}", "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=1)
     vol.commit()
     return out
@@ -479,24 +575,28 @@ def _fps_mismatch(rate: str | None, fps_pts: float | None) -> bool:
 
 
 @app.function(image=cpu_image, volumes={VOL: vol}, cpu=1, memory=2048, timeout=900)
-def purge_test() -> dict:
-    """Delete meta/feat/frame05/det of every TEST clip; keep sha256 + camera/class counts in test_manifest.json."""
+def purge_test(split_name: str = "split.csv") -> dict:
+    """Delete meta/feat (pHash, median background, luma)/frame05/det/clips/keyframes of every TEST clip.
+
+    Keeps sha256 + camera/class counts in test_manifest[_a1].json (and the §2 inventory columns in public.json).
+    """
     import os
     from collections import Counter
 
     vol.reload()
-    split = _read_split()
+    split = _read_split(split_name)
     test = sorted(c for c, r in split.items() if r["split"] == "test")
-    manifest = {"n": len(test), "sha256": sorted(split[c]["sha256"] for c in test),
+    manifest = {"split_file": split_name, "n": len(test), "sha256": sorted(split[c]["sha256"] for c in test),
                 "by_camera": dict(Counter(str(_cid_meta(c)[1]) for c in test)),
                 "by_class": dict(Counter(str(_cid_meta(c)[0]) for c in test))}
-    with open(f"{ESK}/split/test_manifest.json", "w", encoding="utf-8") as fh:
+    name = "test_manifest.json" if split_name == "split.csv" else "test_manifest_a1.json"
+    with open(f"{ESK}/split/{name}", "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=1)
     removed = 0
     for c in test:
         for d, ext in (("meta", "json"), ("feat", "npz"), ("frame05", "jpg"), ("det", "json"),
-                       ("clips", "mp4")):
-            p = f"{ESK}/{d}/{c}.{ext}"
+                       ("clips", "mp4"), ("keyframes", "k1.jpg"), ("keyframes", "k2.jpg")):
+            p = f"{ESK}/{d}/{c}.{ext}" if d != "keyframes" else f"{ESK}/{d}/{c}_{ext}"
             if os.path.exists(p):
                 os.remove(p)
                 removed += 1
@@ -507,38 +607,66 @@ def purge_test() -> dict:
 
 
 def _stem_ids(name: str) -> set[str]:
+    import re
+
     stem = name.rsplit(".", 1)[0]
-    return {stem, stem.rsplit("_k", 1)[0]}
+    return {stem, stem.rsplit("_k", 1)[0]} | set(re.findall(r"(?<![0-9A-Za-z])\d_t[re]\d+(?![0-9])", name))
 
 
 @app.function(image=cpu_image, volumes={VOL: vol}, cpu=1, memory=2048, timeout=900)
-def check_no_test_images() -> dict:
-    """Assert that no file in a per-clip directory of the volume belongs to a TEST clip."""
+def check_no_test_images(split_name: str = "split.csv") -> dict:
+    """Assert that no file anywhere on the volume (except the id/hash tables in esk/split/) belongs to a TEST clip."""
     import os
 
     vol.reload()
-    split = _read_split()
+    split = _read_split(split_name)
     test = {c for c, r in split.items() if r["split"] == "test"}
     bad, n_files = [], 0
-    for d in PER_CLIP_DIRS:
-        root = f"{ESK}/{d}"
-        if not os.path.isdir(root):
+    for dp, _, files in os.walk(ESK):
+        if os.path.normpath(dp).startswith(os.path.normpath(f"{ESK}/split")):
             continue
-        for dp, _, files in os.walk(root):
-            for f in files:
-                n_files += 1
-                if _stem_ids(f) & test:
-                    bad.append(f"{dp}/{f}")
+        for f in files:
+            n_files += 1
+            if _stem_ids(f) & test:
+                bad.append(f"{dp}/{f}")
     if bad:
-        raise AssertionError(f"{len(bad)} TEST files on the volume, e.g. {bad[:3]}")
-    return {"ok": True, "files_checked": n_files, "test_ids": len(test)}
+        raise AssertionError(f"{len(bad)} TEST files on the volume")
+    return {"ok": True, "files_checked": n_files, "test_ids": len(test), "split_file": split_name}
+
+
+def check_local_no_test(test: set[str], roots: list[Path]) -> dict:
+    """Desktop half of the check: no file under ``roots`` is named after a TEST clip, and no image-derived per-clip
+    table in the data root (p5/detections.json, keyframes/*.json) carries a TEST clip id. inventory.parquet and the
+    framing table hold only the §2 columns of test clips and are allowed."""
+    bad: list[str] = []
+    n = 0
+    for root in roots:
+        if not root.exists():
+            continue
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            n += 1
+            if _stem_ids(p.name) & test:
+                bad.append(str(p))
+            if p.suffix == ".json" and p.parent.name in ("p5", "keyframes"):
+                d = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(d, list):
+                    ids = {r.get("clip_id") if isinstance(r, dict) else str(r) for r in d}
+                else:
+                    ids = set(d) if isinstance(d, dict) else set()
+                if ids & test:
+                    bad.append(f"{p} (content)")
+    if bad:
+        raise AssertionError(f"{len(bad)} local TEST traces (names withheld; rerun with care)")
+    return {"ok": True, "local_files_checked": n, "roots": [str(r) for r in roots]}
 
 
 # --------------------------------------------------------------------------- Pass 2 (train + dev only)
 
 
 @app.function(image=cpu_image, volumes={VOL: vol}, cpu=1, memory=2048, timeout=900, max_containers=16, retries=2)
-def pass2_clip(cid: str, expected_sha: str, expected_split: str) -> dict:
+def pass2_clip(cid: str, expected_sha: str, expected_split: str, split_name: str = "split.csv") -> dict:
     """Fetch one TRAIN/DEV clip, verify its sha256, store it and its 2 keyframes (960 px) on the volume."""
     import os
 
@@ -547,7 +675,7 @@ def pass2_clip(cid: str, expected_sha: str, expected_split: str) -> dict:
 
     if expected_split not in ("train", "dev"):
         raise ValueError(f"pass2 refuses split={expected_split!r} for {cid}")
-    split = _read_split()
+    split = _read_split(split_name)
     if split[cid]["split"] != expected_split or split[cid]["split"] not in ("train", "dev"):
         raise ValueError(f"{cid} is not train/dev on the volume split")
     for d in ("clips", "keyframes"):
@@ -660,12 +788,45 @@ def _all_ids() -> list[str]:
     return ids
 
 
+def _local_roots(scratch: str) -> list[Path]:
+    import os
+
+    roots = [Path(os.environ["INTERCYCLE_DATA"])] if os.environ.get("INTERCYCLE_DATA") else []
+    return roots + [Path(s) for s in scratch.split(";") if s]
+
+
+def _local_split(split_name: str) -> list[dict]:
+    import csv
+
+    with open(ROOT / "prereg" / split_name, newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
 @app.local_entrypoint()
-def main(action: str = "pass1", ids_file: str = "", out: str = ""):
+def main(action: str = "pass1", ids_file: str = "", out: str = "", split_name: str = "split.csv",
+         scratch: str = ""):
     import csv
     import time
 
     t0 = time.time()
+    if action == "split_a1":
+        import os
+
+        viewed = [ln.strip() for ln in (ROOT / "prereg" / "viewed_clips.txt").read_text(encoding="utf-8").splitlines()
+                  if ln.strip() and not ln.startswith("#")]
+        p6 = {}
+        p6_csv = Path(os.environ["INTERCYCLE_DATA"]) / "p6_framing.csv"
+        with open(p6_csv, newline="", encoding="utf-8") as fh:
+            p6 = {r["clip_id"]: r["framing_id"] for r in csv.DictReader(fh)}
+        res = run_split_a1.remote(viewed, p6)
+        (ROOT / "prereg" / SPLIT_A1).write_text(res["split_csv"], encoding="utf-8", newline="\n")
+        Path(out).write_text(json.dumps({k: v for k, v in res.items() if k != "split_csv"}, indent=1),
+                             encoding="utf-8")
+        print(res["stdout"])
+        print(json.dumps({"p6_framing_reproduced": res["p6_framing_reproduced"]}))
+        return
+    if action in ("report", "purge_test", "check", "pass2") and split_name not in ("split.csv", SPLIT_A1):
+        raise SystemExit(f"unknown split file {split_name}")
     if action == "pass1":
         ids = Path(ids_file).read_text(encoding="utf-8").split() if ids_file else _all_ids()
         ok, fail = 0, []
@@ -682,7 +843,7 @@ def main(action: str = "pass1", ids_file: str = "", out: str = ""):
     elif action == "detect":
         print(json.dumps(detect_people.remote()))
     elif action == "report":
-        res = report.remote()
+        res = report.remote(split_name)
         Path(out).write_text(json.dumps(res, indent=1), encoding="utf-8")
         print(json.dumps(res["group_counts"]))
     elif action == "p7":
@@ -702,13 +863,14 @@ def main(action: str = "pass1", ids_file: str = "", out: str = ""):
             print(kind, len(sel), {k: [min(r[k] for r in sel), sorted(r[k] for r in sel)[len(sel) // 2],
                                        max(r[k] for r in sel)] for k in ("lg_inliers", "sift_inliers")})
     elif action == "purge_test":
-        print(json.dumps(purge_test.remote()))
+        print(json.dumps(purge_test.remote(split_name)))
     elif action == "check":
-        print(json.dumps(check_no_test_images.remote()))
+        print(json.dumps(check_no_test_images.remote(split_name)))
+        test = {r["clip_id"] for r in _local_split(split_name) if r["split"] == "test"}
+        print(json.dumps(check_local_no_test(test, _local_roots(scratch))))
     elif action == "pass2":
-        with open(ROOT / "prereg" / "split.csv", newline="", encoding="utf-8") as fh:
-            rows = [r for r in csv.DictReader(fh) if r["split"] in ("train", "dev")]
-        args = [(r["clip_id"], r["sha256"], r["split"]) for r in rows]
+        rows = [r for r in _local_split(split_name) if r["split"] in ("train", "dev")]
+        args = [(r["clip_id"], r["sha256"], r["split"], split_name) for r in rows]
         ok, fail = 0, []
         for r in pass2_clip.starmap(args, return_exceptions=True):
             if isinstance(r, dict) and r.get("keyframes") == 2:
