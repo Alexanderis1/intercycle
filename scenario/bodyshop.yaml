@@ -1,0 +1,109 @@
+# InterCycle reference scenario: automotive body-in-white (BIW) shop + on-site data hall.
+# SYNTHETIC. All machine timings, safety parameters and traffic levels are design assumptions,
+# not measurements from a real plant. Units: metres, seconds, local time (CEST).
+name: bodyshop-hall-b
+version: 1
+site_id: 0x4A3D11
+key_id: 1
+
+hall:            # body shop, x along the line, z across
+  x: [0, 96]
+  z: [0, 48]
+data_hall:       # attached on the east wall, door at (96, 24)
+  x: [96, 120]
+  z: [12, 36]
+  door: [96, 24]
+
+# Shift calendar. During breaks the main line stops (status-quo inspection windows).
+shifts:
+  - {name: early, start: "06:00", end: "14:00"}
+  - {name: late,  start: "14:00", end: "22:00"}
+  - {name: night, start: "22:00", end: "06:00"}
+breaks:          # line stopped
+  - {start: "09:00", minutes: 15}
+  - {start: "11:30", minutes: 30}
+  - {start: "17:00", minutes: 15}
+  - {start: "19:30", minutes: 30}
+  - {start: "01:00", minutes: 30}
+  - {start: "03:30", minutes: 15}
+shift_change_stop_min: 5
+
+line:            # main framing line: stations index together on one takt
+  takt_s: 60.0
+  jitter: 0.01               # cycle-to-cycle sigma, fraction of takt
+  drift_per_h: 0.001         # slow takt drift, fraction per hour
+  andon_stops_per_h: 4.0     # unplanned line stops (Poisson)
+  andon_stop_s: [20, 120]    # uniform duration range
+  recovery_after_trip_s: 90  # line restart after a protective stop
+
+# Hazard zones. A zone is ACTIVE while its machine moves. Crossing the boundary of an active
+# zone trips its light curtain / area scanner (protective stop). A robot inside an idle zone
+# inhibits the machine's next start (hold). Inspection = enter `entry_m` past the boundary,
+# dwell `dwell_s`, back out.
+machines:
+  - {id: S10, kind: weld_station,  on_line: true,  x: 12, z: 24, size: [8, 11], busy: 0.80, offset_s: 0.0}
+  - {id: S20, kind: weld_station,  on_line: true,  x: 21, z: 24, size: [8, 11], busy: 0.80, offset_s: 1.5}
+  - {id: S30, kind: weld_station,  on_line: true,  x: 30, z: 24, size: [8, 11], busy: 0.80, offset_s: 3.0}
+  - {id: S40, kind: weld_station,  on_line: true,  x: 39, z: 24, size: [8, 11], busy: 0.80, offset_s: 4.5}
+  - {id: S50, kind: framing,       on_line: true,  x: 48, z: 24, size: [8, 11], busy: 0.90, offset_s: 6.0}
+  - {id: S60, kind: respot,        on_line: true,  x: 57, z: 24, size: [8, 11], busy: 0.70, offset_s: 7.5}
+  - {id: S70, kind: respot,        on_line: true,  x: 66, z: 24, size: [8, 11], busy: 0.70, offset_s: 9.0}
+  - {id: S80, kind: unload_lifter, on_line: true,  x: 78, z: 24, size: [10, 9], busy: 0.40, offset_s: 10.5}
+  - {id: HEM1, kind: roller_hemming, on_line: false, x: 21, z: 41, size: [10, 8], period_s: 45.0, busy: 0.65, jitter: 0.008, stops_per_h: 2.0, stop_s: [5, 30]}
+  - {id: SEAL1, kind: sealer,        on_line: false, x: 46, z: 41, size: [10, 8], period_s: 60.0, busy: 0.60, jitter: 0.012, stops_per_h: 2.0, stop_s: [5, 30]}
+
+inspection:
+  entry_m: 1.5
+  dwell_s: 4.0
+  robot_speed_mps: 1.0
+  safety_margin_s: 1.0       # robot needs predicted idle >= inside time + margin
+  local_check_latency_s: 0.3 # robot's own camera confirms "no motion" this long before crossing
+
+# Walkable traffic zones for the hour-of-day layer (4-bit level per hour).
+zones:
+  - {id: Z_AISLE_N,  rect: [0, 30, 96, 34]}    # x0, z0, x1, z1
+  - {id: Z_AISLE_S,  rect: [0, 14, 96, 18]}
+  - {id: Z_TRANSPORT, rect: [0, 6, 96, 10]}    # tuggers, forklifts
+  - {id: Z_MARKET,   rect: [0, 0, 96, 5]}      # parts supermarket
+  - {id: Z_CLOSURES, rect: [10, 36, 60, 48]}
+  - {id: Z_DATA_HALL, rect: [96, 12, 120, 36]}
+  - {id: Z_DOCK,     rect: [0, 30, 8, 34]}
+
+traffic:
+  people_per_shift: {early: 34, late: 30, night: 14}
+  data_hall_techs: {day: 3, night: 1}          # day = 07:00-19:00
+  agv_loop_period_s: 240                         # south aisle AGV loop
+  tuggers_per_h: 6                               # transport aisle
+  forklifts: 3
+
+robot:
+  dock: [4, 32]
+  kind: wheeled_inspection_amr                  # thermal + RGB + microphone mast
+  ble_rx: true
+
+ble:              # observer broadcasters, ceiling-mounted
+  adv_interval_s: 0.5
+  range_m: 25
+  packet_loss: 0.10
+  broadcasters: [[12, 32], [36, 32], [60, 32], [84, 32], [12, 16], [36, 16], [60, 16], [84, 16], [108, 24]]
+
+cameras:          # existing CCTV, ceiling, 9 m
+  - [6, 2]
+  - [30, 2]
+  - [54, 2]
+  - [78, 2]
+  - [6, 46]
+  - [30, 46]
+  - [54, 46]
+  - [78, 46]
+  - [100, 14]
+  - [116, 34]
+
+data_hall_targets: # thermal inspection, no machine hazard; traffic + door only
+  rows: 3
+  racks_per_row: 12
+  crah_units: 4
+
+seeds:
+  train: [0, 99]
+  heldout: [1000, 1199]
