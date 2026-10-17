@@ -105,15 +105,19 @@ class World:
         return t + self.idle_remaining(mid, t)
 
     # ---- robot effects ----
+    def trip(self, mid: str, t: float, who: str, where: str | None = None) -> dict:
+        g = self.group(mid)
+        rec = self.scn.line.recovery_after_trip_s
+        g.freezes.append(Freeze(t, t + rec, "trip", mid))
+        ev = {"t": t, "type": "trip", "machine": where or mid, "who": who, "lost_s": rec, "group": g.name}
+        self.events.append(ev)
+        return ev
+
     def cross(self, mid: str, t: float, inside_s: float, who: str) -> dict:
         """Robot crosses into zone `mid` at t and stays inside for inside_s. Returns what happened."""
         g = self.group(mid)
         if self.active(mid, t):
-            rec = self.scn.line.recovery_after_trip_s
-            g.freezes.append(Freeze(t, t + rec, "trip", mid))
-            ev = {"t": t, "type": "trip", "machine": mid, "who": who, "lost_s": rec, "group": g.name}
-            self.events.append(ev)
-            return ev
+            return self.trip(mid, t, who)
         t_exit = t + inside_s
         start = self.next_start_after(mid, t)
         hold = 0.0
