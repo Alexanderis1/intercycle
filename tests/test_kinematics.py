@@ -130,8 +130,8 @@ def test_tip_dress_reaches_boundary_weld_does_not(base, scn):
                 weld.append(rect_margin(kin.bodies(window_time(ws, i, f))[mid], m.rect))
             for f in np.linspace(0.86, 0.92, 31):
                 dress.append(rect_margin(kin.bodies(window_time(ws, i, f))[mid], m.rect))
-        assert min(weld) > 1.3, (mid, min(weld))
-        assert min(dress) < 1.3, (mid, min(dress))
+        assert min(weld) > 1.0, (mid, min(weld))       # S50/S60 zones are 7 m wide (3 m walkway gap): 1.05 m there
+        assert min(dress) < min(weld) - 0.2, (mid, min(dress), min(weld))
         assert min(dress) > 0.0, (mid, min(dress))     # still inside the zone
 
 
@@ -229,7 +229,8 @@ def test_skids_stay_on_conveyor_and_move_one_pitch(base, scn):
     b = np.array(kin.poses(ws[5].bs + TRANSFER_S + 0.01)["SKIDS"]["x"])
     assert len(a) == len(b) == 8
     pitch = b - a
-    assert np.allclose(pitch[1:7], 9.0)                     # every body moves +9 m (S70 -> S80 hop is 12 m)
+    xs_line = [scn.machine(f"S{k}0").x for k in range(1, 8)]
+    assert np.allclose(pitch[1:7], np.diff(xs_line))        # every body moves one station (S70 -> S80 hop is 12 m)
     assert np.isclose(pitch[7], 12.0)
     # body speed bounded (cubic ease: peak 1.5 x mean)
     ts = np.arange(ws[5].bs, ws[5].bs + TRANSFER_S, 0.05)
@@ -272,7 +273,7 @@ def test_agv_dock_every_sixth_cycle_for_20_s(base, scn):
         occ = []
         for t in t_all:
             c = kin.bodies(float(t))["AGVDOCK"]
-            sel = c[np.abs(c[:, 0] - m.x) < 1.0]
+            sel = c[np.abs(c[:, 0] - (m.x + K.DOCK_DX)) < 1.0]                            # dock sits DOCK_DX east
             occ.append(len(sel) > 0)
             if len(sel):
                 assert np.allclose(sel[:, 1], K.DOCK_Z)

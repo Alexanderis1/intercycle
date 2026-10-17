@@ -341,6 +341,8 @@ def route_hits(sm, scn):
             if L < 1e-9:
                 continue
             if cls == "tugger":            # carts trail straight behind the route start: test from one train length on
+                if L <= 6.5:               # corner of the one-way loop: shorter than the train, the approximation doesn't apply
+                    continue
                 u = ((q[0] - p[0]) / L, (q[1] - p[1]) / L)
                 p = (p[0] + 6.5 * u[0], p[1] + 6.5 * u[1])
             hit = G.segment_hit(sm, p, q, cls, 0.1)
@@ -351,12 +353,10 @@ def route_hits(sm, scn):
 
 
 def test_mover_routes_are_clear(sm, scn):
-    """AGV loop, tugger, forklift, person and technician routes from truth/agents.py never touch static geometry,
-    except the one known corner below."""
+    """AGV loop, tugger, forklift, person and technician routes from truth/agents.py never touch static geometry."""
     hits, checked = route_hits(sm, scn)
     assert checked > 60
-    unexpected = {k: v for k, v in hits.items() if not (k[0] == "FL0" and k[1:] == ((21.0, 32.0), (2.0, 32.0)))}
-    assert not unexpected, unexpected
+    assert not hits, hits
 
 
 def test_forklift_corner_at_west_wall(sm, scn):
