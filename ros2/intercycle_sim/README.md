@@ -163,6 +163,17 @@ Each episode writes to the Volume `/vol/episodes/<tag>/`:
 - `contacts.json`.
 - `*.log`: one per process.
 
+## Measured throughput (Modal L4, 8 CPU, 24 GiB; 17 Oct)
+
+| Run | Result | RTF | Container wall |
+|---|---|---|---|
+| Constant `/cmd_vel` 0.6 m/s, empty scene | 11.3 m in 20 s | 0.78 | about 100 s |
+| One Nav2 goal | SUCCEEDED in 37 s of sim time | 1.0 (paced) | about 90 s |
+| 15-min patrol (`patrol15_l4_1`), demo movers | 20/20 legs SUCCEEDED, 0 recoveries, 483 m walked, 0 contacts, no fall, min truth gap to a mover 0.16 m | 0.67 (0.79 counting physics steps only) | 23.6 min |
+
+Boot time is 21–25 s. A 15-min episode therefore costs about 24 container-minutes. At about $1.37/h
+(L4 $0.80 + 8 CPU + 24 GiB) that is about $0.54 per episode.
+
 ## Limits (state these in the README/ROBOT_RESULTS)
 
 - 2D lidar only. Bodies below the lidar plane are not seen.
