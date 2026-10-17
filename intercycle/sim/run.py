@@ -143,8 +143,9 @@ class Runner:
             seen_active, t_start = False, t
             while t - t_start < 600.0:                          # a stopped line can restart at any moment
                 ps = planned_stop_at(self.scn, t)
-                if ps and ps[1] - t > dur + 5.0:
-                    break                                       # calendar guarantees the line stays stopped
+                if (ps and ps[1] - t > dur + 5.0 and t - ps[0] > TRANSFER_S + 2.0
+                        and not self.transfer_active(t - lat)):
+                    break                                       # calendar + own camera: line has finished its last cycle
                 act = self.transfer_active(t - lat)
                 if seen_active and not act:
                     break                                       # observed a transfer end: full gap ahead
