@@ -310,6 +310,7 @@ SAFETY_YELLOW = _srgb(240, 168, 0)        # RAL 1003 signal yellow
 RAL7035 = _srgb(197, 199, 196)            # light grey (machine guards, cabinets)
 MACHINE_GREY = _srgb(96, 102, 105)        # RAL 7043-ish machine body
 CLADDING_GREY = _srgb(196, 200, 201)        # light grey liner sheet (RAL 9002-ish), as in most halls
+FLOOR_LIGHT = _srgb(200, 202, 198)          # light grey epoxy (RAL 7035-ish)
 BIW_STEEL = (0.42, 0.43, 0.45)            # linear F0 of cold-rolled steel, lightly oiled (not chrome)
 
 # key -> pbr() kwargs (+ "post": procedural overlay). Painted metals take roughness/scratch bump from
@@ -318,6 +319,10 @@ PLANT: dict[str, dict] = {
     "floor_epoxy": dict(asset_id="concrete_floor_worn_001", scale=4.0, tint=_srgb(178, 182, 178), tint_mix=0.6,
                         desaturate=True, rough_mul=0.6, rough_add=0.18, bump=0.15, coat=0.35, coat_rough=0.3),
     "floor_concrete": dict(asset_id="concrete_floor_worn_001", scale=4.0, bump=0.3),
+    # light-grey epoxy coating as in most body shops: one paint colour; the concrete scan adds AO mottling,
+    # roughness wear and bump under a clear coat
+    "floor_light": dict(asset_id="concrete_floor_worn_001", scale=4.0, color_override=FLOOR_LIGHT, ao=0.5,
+                        rough_mul=0.5, rough_add=0.2, bump=0.08, coat=0.4, coat_rough=0.25),
     "safety_yellow": dict(asset_id="PaintedMetal004", color_override=SAFETY_YELLOW, metallic=0.0, rough_mul=0.6,
                           rough_add=0.1, bump=0.08, scale=1.5),
     "painted_grey": dict(asset_id="PaintedMetal004", color_override=RAL7035, metallic=0.0, rough_mul=0.6,

@@ -279,7 +279,7 @@ def skylight_mat(bs, name="skylight"):
 # plant key -> CC0 PBR key in render/blender/materials.py PLANT (world-mapped). Keys not listed stay procedural:
 # glows, thin markings, wire mesh/grating (need alpha), and finishes with no matching scan.
 PBR_KEYS = {
-    "floor": "floor_epoxy", "safety_yellow": "safety_yellow", "ral7035": "painted_grey", "steel_grey": "machine_grey",
+    "floor": "floor_light", "safety_yellow": "safety_yellow", "ral7035": "painted_grey", "steel_grey": "machine_grey",
     "galv": "galvanized", "rubber": "rubber_black", "wood": "wood_pallet", "cardboard": "cardboard",
     "cladding": "cladding", "hazard": "guard_hazard",
 }
@@ -363,7 +363,8 @@ def building(bs, rng: random.Random):
         x = i * COL_DX
         for j, y in enumerate(COL_ROWS_Y):
             yy = min(max(y, 0.25), Y - 0.25)
-            h_column(bs, f"col_{i}_{j}", x if 0 < x < X else min(max(x, 0.25), X - 0.25), yy, ROOF_EAVE)
+            h_column(bs, f"col_{i}_{j}", x if 0 < x < X else min(max(x, 0.25), X - 0.25), yy, ROOF_EAVE,
+                     matk="ral7035")             # light grey structure, as in most body shops
     roof(bs, X, Y)
 
 

@@ -36,6 +36,9 @@ import replay_bpy as rb  # noqa: E402
 core = rb.core
 CCTV_Z = 9.0
 FORKLIFT_YAW_DEG = 90.0       # forklift_c forks point to -Y in the library; +90 deg turns them to +X
+BODY_CORNER = (2.1, 0.8)     # m from the station centre: where the corner robots weld (BIW is 4.65 x 1.74 m)
+FRAME_Z = 4.4               # m, top of the overhead cell frame (dress cables, trays); CCTV at 9 m looks over it
+END_REACH = 1.8             # m, base -> gun tip of the FANUC weld poses (fanuc.WELD_Q)
 ARM_REACH_STANDOFF = 2.65    # m, line centre -> FANUC base for on-line cells
 STACK = {"ACTIVE": "g", "IDLE": "g", "STOPPED": "y", "HELD": "y", "TRIPPED": "r"}
 
@@ -118,6 +121,8 @@ class RealScene(rb.BScene):
             if kind in ("weld_station", "respot") and w >= 8:   # real weld cells are dense: a third robot per side
                 for side, sg in (("N", 1), ("S", -1)):
                     places.append((f"_Line_{mid}_arm_{side}mid", cx, cy + sg * ARM_REACH_STANDOFF, -90.0 * sg, 4 + (sg < 0), False))
+            if kind in ("weld_station", "respot"):              # and one robot per corner of the body, angled onto it
+                places += self._end_robots(mid, cx, cy, w)
             for name, x, y, yaw, k, cabinet in places:
                 joints, tip = fanuc.build_fanuc(name, (x, y, 0.0), yaw, collection=self.col_real)
                 self.arms[mid].append((joints, k, tip))
@@ -128,6 +133,67 @@ class RealScene(rb.BScene):
                     self.box(name + "_ctrl", (0.75, 0.55, 1.45), (x, yc, 0.73), plant.mat(self, "ral7035"))
                     self.box(name + "_ctrl_hmi", (0.2, 0.01, 0.15), (x, yc - sg * 0.28, 1.1), plant.glow_cam_only(self, "hmi", (0.2, 0.5, 0.9), 2.0))
                     self.box(name + "_valve", (0.5, 0.25, 0.35), (x + 0.65, yc, 1.2), plant.mat(self, "steel_grey"))
+            if m.get("on_line") and kind in ("weld_station", "respot", "framing"):
+                bases = [(x, y) for _, x, y, _, _, _ in places]
+                for name, x, y, yaw, _, _ in places:
+                    self._tip_dresser(name, x, y, yaw, m, bases)
+                self._cell_frame(m, places)
+
+    def _tip_dresser(self, name, x, y, yaw, m, bases):
+        """Electrode tip dresser on a pedestal beside the robot, on whichever side stays inside the cell rect and
+        farthest from the other robot bases and the skid tooling (|y - line| > 1.6 m)."""
+        cx, cy, (w, d) = m["x"], m["z"], m["size"]
+        hx, hy = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
+        best = None
+        for sd in (1, -1):                                      # beside the base and 0.3 m behind it, out of the gun's path
+            px, py = x - sd * 0.85 * hy - 0.3 * hx, y + sd * 0.85 * hx - 0.3 * hy
+            if abs(px - cx) > w / 2 - 0.3 or abs(py - cy) > d / 2 - 0.3 or abs(py - cy) < 1.6:
+                continue
+            clear = min(math.hypot(px - bx, py - by) for bx, by in bases)
+            if best is None or clear > best[0]:
+                best = (clear, px, py)
+        if best is None or best[0] < 0.7:
+            return
+        _, px, py = best
+        self.box(name + "_td_post", (0.14, 0.14, 1.0), (px, py, 0.5), plant.mat(self, "steel_grey"))
+        self.box(name + "_td_head", (0.3, 0.22, 0.16), (px, py, 1.08), plant.mat(self, "ral7035"))
+        self.cyl(name + "_td_motor", 0.06, 0.22, (px, py, 1.27), plant.mat(self, "dark_steel"))
+
+    def _cell_frame(self, m, places):
+        """Overhead steel frame inside the cell rect: four corner posts, edge and end beams at FRAME_Z, a cable
+        tray over each robot row and a dress-cable drop from the tray to every robot (behind its base)."""
+        mid, cx, cy, (w, d) = m["id"], m["x"], m["z"], m["size"]
+        st, galv, cab = plant.mat(self, "ral7035"), plant.mat(self, "galv"), plant.mat(self, "rubber")
+        hx, hy = w / 2 - 0.2, d / 2 - 0.2
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                self.box(f"cf_{mid}_post{sx}{sy}", (0.2, 0.2, FRAME_Z), (cx + sx * hx, cy + sy * hy, FRAME_Z / 2), st)
+            self.box(f"cf_{mid}_end{sx}", (0.2, 2 * hy, 0.3), (cx + sx * hx, cy, FRAME_Z - 0.15), st)
+        for sy in (-1, 1):
+            self.box(f"cf_{mid}_edge{sy}", (2 * hx, 0.2, 0.3), (cx, cy + sy * hy, FRAME_Z - 0.15), st)
+            ty = cy + sy * ARM_REACH_STANDOFF
+            self.box(f"cf_{mid}_tray{sy}", (2 * hx, 0.45, 0.08), (cx, ty, FRAME_Z - 0.35), galv)
+            self.box(f"cf_{mid}_cables{sy}", (2 * hx, 0.32, 0.06), (cx, ty, FRAME_Z - 0.28), cab)
+        for name, x, y, yaw, _, _ in places:
+            bx, by = x - 0.35 * math.cos(math.radians(yaw)), y - 0.35 * math.sin(math.radians(yaw))
+            top = FRAME_Z - 0.35
+            self.cyl(name + "_drop", 0.045, top - 2.3, (bx, by, 2.3 + (top - 2.3) / 2), cab)
+            self.box(name + "_drop_arm", (0.08, abs(by - (cy + math.copysign(ARM_REACH_STANDOFF, by - cy))) + 0.08, 0.08),
+                     (bx, (by + cy + math.copysign(ARM_REACH_STANDOFF, by - cy)) / 2, top), galv)
+
+    @staticmethod
+    def _end_robots(mid, cx, cy, w):
+        """Four robots facing the body's corners from inside the cell rect. The FANUC weld poses put the gun
+        END_REACH in front of the base, so each base sits END_REACH from its corner, as far out along x as the
+        cell allows (base half-width 0.55 m inside the rect)."""
+        bx = min(w / 2 - 0.55, BODY_CORNER[0] + END_REACH * math.cos(math.radians(45)))
+        by = BODY_CORNER[1] + math.sqrt(max(END_REACH ** 2 - (bx - BODY_CORNER[0]) ** 2, 0.0))
+        out = []
+        for side, sg in (("N", 1), ("S", -1)):
+            for end, sx in (("W", -1), ("E", 1)):
+                yaw = math.degrees(math.atan2(sg * (BODY_CORNER[1] - by), sx * (BODY_CORNER[0] - bx)))
+                out.append((f"_Line_{mid}_arm_{side}{end}", cx + sx * bx, cy + sg * by, yaw, 6 + (sx < 0) + 2 * (sg < 0), False))
+        return out
 
     def _conveyor(self, x0, x1, y, dark, galv):
         """Roller-bed skid conveyor: two side frames, rollers every 0.6 m, legs every 2.4 m."""
@@ -265,7 +331,7 @@ class RealScene(rb.BScene):
                     self.box(f"fx_{mid}_tw{k}{s}", (0.18, 0.18, 0.75), (x, y, 0.65), red)
                     self.box(f"fx_{mid}_tp{k}{s}", (0.3, 0.3, 0.04), (x, y, 1.04), white)
                     self.box(f"fx_{mid}_tc{k}{s}", (0.08, 0.35, 0.08), (x, y - s * 0.2, 1.1), plant.mat(self, "dark_steel"))
-                self.box(f"fx_{mid}_vt{s}", (0.6, 0.2, 0.3), (cx + 2.7, y + s * 0.3, 0.5), plant.mat(self, "galv"))
+                self.box(f"fx_{mid}_vt{s}", (0.6, 0.2, 0.3), (cx + 2.2, y + s * 0.3, 0.5), plant.mat(self, "galv"))
 
     def _biw_static(self, name, x, y, z, panel=False):
         steel = plant.proc_mat(self, "biw_steel", (0.6, 0.62, 0.64), rough=0.32, metal=0.85, var=0.1, scale=3.0, bump=0.05, grime=0.15)
@@ -585,7 +651,7 @@ def main(argv=None) -> int:
     ap = rb.build_parser()
     ap.add_argument("--stills", default="", help="comma list: wide, weld_close, cctv_<i>")
     ap.add_argument("--t", type=float, default=36030.0, help="sim time of the stills (s since 00:00)")
-    ap.add_argument("--light-e", type=float, default=60.0, help="power of each LED high-bay area light (W)")
+    ap.add_argument("--light-e", type=float, default=150.0, help="power of each LED high-bay area light (W)")
     ap.add_argument("--sky-strength", type=float, default=1.0)
     ap.add_argument("--overscan", type=float, default=0.055, help="extra field per side for cctv_* stills (fraction of the rendered width)")
     ap.add_argument("--cctv-seq", default="", help="render a CCTV sequence from camera cctv_<i> starting at --t")

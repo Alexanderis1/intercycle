@@ -24,7 +24,7 @@ visible to a camera), capsule people, the wheeled AMR (robot shots are R4's).
 Commands (repo root, PowerShell; `$B` = `C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`):
 ```powershell
 & $B -b --factory-startup --python render\blender\bl_run.py -- render\blender\scene_real.py --trace <trace.parquet> --synth-bodies `
-    --out D:\icdata\renders\stills --stills wide,weld_close,cctv_1,cctv_5 --t 36562.95 --samples 128 --res 1920x1080 --gt
+    --out D:\icdata\renders\stills --stills wide,weld_close,cctv_1,cctv_5 --t 36562.8167 --samples 128 --res 1920x1080 --gt
 & $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\seq --cctv-seq cctv_1 --t 36620 --seconds 10 --fps 25 --gt
 $env:PYTHONPATH="D:\icdata\pylib"; python -m render.cctv.cctv_post --in D:\icdata\renders\seq\cctv_1\frames --gt D:\icdata\renders\seq\cctv_1\gt `
     --out D:\icdata\renders\seq\cctv_1\cctv --cam CAM02 --cam-label "BODY SHOP S20" --t0 "2026-10-17 10:10:20" --fps 25 --overscan 0.055 --video
@@ -37,6 +37,10 @@ body, forklift, agv, tugger, person). Speed: ~5-10 s per 1080p frame at 64 spp.
 First stills (17 Oct, `render/stills/first/`, trace `trace_synth15.parquet`): `--t 36562.95` is a frame where the near
 middle robot of S30 welds, so the `weld_close` shot shows sparks (spatter leaves the gun on the robot side). Side-by-sides
 against the Jurvetson photos (CC BY 2.0): `compare_*.jpg`.
+Brightness + density pass (`render/stills/dense/`, `--t 36562.8167`): light-grey epoxy floor and columns, LED high-bays
+150 W each (`--light-e`), 8 robots per 8 m weld/respot cell (4 corner, 2 middle, 4 angled onto the body ends; the 7 m
+cell gets 8 without the middle pair), a tip dresser beside every robot, and an overhead cell frame (4.4 m) with cable
+trays and a dress-cable drop to each robot. All of it stays inside the station rects of `bodyshop.yaml`.
 
 # Photoreal render tier: decision, research, shot list
 
