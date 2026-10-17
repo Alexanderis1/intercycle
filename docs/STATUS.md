@@ -16,6 +16,10 @@
 | 17 Oct 16:00 | RunPod | Isaac RTX render smoke (monitor), pod terminated | RTX 4090 | ≈ 0.18 | RunPod ≈ 0.18 / cap 10 |
 | 17 Oct ~17:15 | Modal | R1 image build (CPU builders) + bridge/Nav2 CPU test with a kinematic test double | CPU | < 0.06 | Isaac ≈ 1.51 |
 | 17 Oct ~17:30 | Modal | R1 ANYmal-D `/cmd_vel` smoke, Isaac headless physics-only | L4, ~100 s | ≈ 0.04 | Isaac ≈ 1.55 |
+| 17 Oct 17:00–17:40 | Modal | R1 gate + movers + 15-min patrol (RTF 0.67 under Nav2 load, 23.6 container-min ≈ $0.54) | L4 | ≈ 0.75 | Isaac ≈ 2.3 |
+| 17 Oct 17:09–17:37 | Modal | R2 test-double runs (6 × 8 CPU × 4–8 min) | CPU | ≈ 0.15 | Isaac ≈ 2.45 |
+
+**Robot batch decision (user, 17 Oct ~17:45):** **10-min episodes**, 10 held-out seeds (1000–1009) × 4 conditions = 40 episodes in parallel L4 containers, ≈ $0.35 each ≈ $14. R1 measured ≈ $0.55 per 15-min episode at full container rate, so 15-min episodes would have broken the $20 Isaac stop line. R1 finished (both gates early). R3 launched 17:45.
 
 **Lead item done (1671f9e): the learned observer replaces ShimObserver in the event sim.** Robot B's broadcast = models learned by `learn_cycles` on a separate training day (seed 99, 06:10–10:00) + `line_nowcast`/`nowcast` on the episode's own camera signal (past samples only). C uses the scenario's true models. Dev seeds 0–19 (6 h): B 39.9 insp/h, 0 trips, 0.5 holds/shift, 1.5 s lost; A 50.4 insp/h, 5.0 trips, 568 s lost; C 46.7; A0 7.6. Gain retained 99.7 %, B/C throughput 0.854. With the shim (old): B 35.5, 0.05 holds, gain 99.9 %. A/C/A0 also moved since the shim run because the layout changed (S50/S60, dock, routes) and C now uses true models; A0 now shows 0.25 trips/shift from the walkway crossing (not observer-related; to check). Fault-injection tests 10/10 pass.
 
