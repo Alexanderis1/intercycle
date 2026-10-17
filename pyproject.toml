@@ -8,7 +8,7 @@ dependencies = ["numpy", "scipy", "astropy", "pyyaml", "pydantic>=2", "pynacl", 
 
 [project.optional-dependencies]
 dev = ["pytest"]
-dashboard = ["fastapi", "uvicorn"]
+dashboard = ["websockets", "imageio-ffmpeg"]   # live map view relay (observer/stream.py), screen recording
 cloud = ["modal", "openai"]
 
 [build-system]
