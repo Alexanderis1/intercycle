@@ -47,6 +47,12 @@ test_change_present_when_the_layer_starts_is_learned_as_its_null: 17 bins, broad
 cycle from the start gives no alarm in 4 h; an always-occupied cell alarmed after ~15 min in a probe). Such a change is taken in only by the map's undecayed counts (hours). Failing closed
 instead (the whole machine grid UNKNOWN in bins the layer has not learned) would cost each machine's zone + margin for
 ~8.5 min after every start and during its first ~30 s of observed STOP ticks; that choice is the lead's.
+LEAD DECISION (Sun ~01:10, lane S6): the twin fails closed. `L1ChangeDetector(mp, fail_closed_unlearned=True,
+bins=...)` marks UNKNOWN every cell of a machine's grid that is not trusted (n < cfg.min_visits) in ANY of `bins` (the
+phase bins the broadcast can be used in; default all 17), from construction on, and lifts it once every bin has learned
+the cell. The map is a snapshot the robot keeps for its mission, so one unlearned bin makes the cell UNKNOWN in all
+bins. `availability_cost()` reports the share of grid cells held UNKNOWN only by this rule. The default stays False
+(body shop / A-lite unchanged, the disclosed gap above applies there).
 
 Every tick: `mp.update(obs, t, cond)` then `det.step(obs, cond)` (the comparison must see this tick's counts; a step
 without a new map update is refused with RuntimeError). `step` pushes the UNKNOWN boxes into map.unknown_rects itself.
@@ -73,10 +79,15 @@ L1_CFG = ChangeConfig(dilate=2)        # 2 cells = 0.5 m around every UNKNOWN ce
 
 
 class L1ChangeDetector:
-    def __init__(self, mp: M.LayeredMap, cfg: ChangeConfig | None = None, vis_min: float = M.ZONE_VIS_MIN):
+    def __init__(self, mp: M.LayeredMap, cfg: ChangeConfig | None = None, vis_min: float = M.ZONE_VIS_MIN,
+                 fail_closed_unlearned: bool = False, bins=None):
         self.map = mp
         self.cfg = cfg or L1_CFG
         self.vis_min = float(vis_min)
+        self.fail_closed = bool(fail_closed_unlearned)
+        self.bins = tuple(range(M.N_BINS)) if bins is None else tuple(int(b) for b in bins)
+        if not self.bins or any(not 0 <= b < M.N_BINS for b in self.bins):
+            raise ValueError(f"bins must be a non-empty subset of 0..{M.N_BINS - 1}")
         self.ids = [d["id"] for d in mp.spec["machines"]]
         self.layers = [ChangeLayer(int(mp.l1_nx[i] * mp.l1_nz[i]), M.N_BINS, self.cfg,
                                    shape=(int(mp.l1_nx[i]), int(mp.l1_nz[i]))) for i in range(len(self.ids))]
@@ -90,6 +101,8 @@ class L1ChangeDetector:
             self.cam_of_l1_cell.append(mp.cam_of_cell[ix[:, None], iz[None, :]].reshape(-1))
         self._owned: list[tuple] = []
         self._map_tick: int | None = None
+        if self.fail_closed:
+            self.sync()                                  # UNKNOWN from the start: nothing is learned yet
 
     # ------------------------------------------------------------------ evidence (the map's L1 rule)
     def _gone(self, obs: M.Observation) -> list[int]:
@@ -153,9 +166,32 @@ class L1ChangeDetector:
                 float(mp.l1_x0[i] + (ix.max() + 1) * res), float(mp.l1_z0[i] + (iz.max() + 1) * res))
 
     # ------------------------------------------------------------------ queries / broadcast
+    def unlearned(self, i: int) -> np.ndarray:
+        """Flat bool over machine i's grid: cells not trusted in at least one of `bins` (False everywhere unless
+        fail_closed_unlearned)."""
+        layer = self.layers[i]
+        if not self.fail_closed:
+            return np.zeros(layer.n_cells, bool)
+        return ~np.all([layer.trusted(b) for b in self.bins], axis=0)
+
+    def _unknown_flat(self, i: int) -> np.ndarray:
+        return self.layers[i].unknown_mask() | self.unlearned(i)
+
+    def availability_cost(self) -> dict:
+        """Share of grid cells UNKNOWN only because a bin is not learned yet (the fail-closed rule), per machine and
+        over all machines (cells weighted equally)."""
+        per, n_un, n_all = {}, 0, 0
+        for i, layer in enumerate(self.layers):
+            un = self.unlearned(i) & ~layer.unknown_mask()
+            per[self.ids[i]] = float(un.mean()) if layer.n_cells else 0.0
+            n_un += int(un.sum())
+            n_all += layer.n_cells
+        return dict(per_machine=per, all=float(n_un / n_all) if n_all else 0.0, bins=list(self.bins),
+                    fail_closed=self.fail_closed)
+
     def unknown_mask(self, machine_id: str) -> np.ndarray:
         i = self.ids.index(machine_id)
-        return self.layers[i].unknown_mask().reshape(self.layers[i].shape)
+        return self._unknown_flat(i).reshape(self.layers[i].shape)
 
     def monitored(self, machine_id: str, phase_bin: int) -> np.ndarray:
         i = self.ids.index(machine_id)
@@ -167,7 +203,7 @@ class L1ChangeDetector:
         out = []
         res = mp.spec["env_res"]
         for i, layer in enumerate(self.layers):
-            U = layer.unknown_mask()
+            U = self._unknown_flat(i)
             if not U.any():
                 continue
             for i0, j0, i1, j1 in M.safe_box_cover(U.reshape(layer.shape), max_boxes):
