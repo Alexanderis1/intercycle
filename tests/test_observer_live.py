@@ -165,6 +165,7 @@ def test_press_stop_reads_stopped_bin(run):
 # ---------------------------------------------------------------- M-W4 lead decision: fail closed in unlearned bins
 def test_press_grids_are_unknown_until_both_twin_bins_are_learned(tmp_path, run):
     fresh = OL.ObserverLive(SPEC, OL.ObserverLiveConfig(margin_path=margin_file(tmp_path)))
+    assert all(L.half_life_ticks == 24 * 3600 * 2 for L in fresh.det.layers)     # 24 h for the running bin (M-W4)
     for i, pid in enumerate(fresh.ids):
         assert fresh.det.unknown_mask(pid).all()
     assert fresh.availability()["unlearned"]["all"] == 1.0

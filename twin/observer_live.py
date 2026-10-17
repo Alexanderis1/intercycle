@@ -45,7 +45,7 @@ import copy
 import json
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -58,7 +58,8 @@ from intercycle.codec.trust import TrustError, key_id_of
 from intercycle.margin_inflate import Margin, inflate, load_margin
 from intercycle.observer import learn_cycles as LC
 from intercycle.observer import mapping as M
-from intercycle.observer.change_detect_l1 import L1ChangeDetector
+from intercycle.observer import change_detect as CD
+from intercycle.observer.change_detect_l1 import L1_CFG, L1ChangeDetector
 from intercycle.types import DAY0_UNIX, FastLayer, MachineModel, MachineNow, SlowLayer, State
 
 OBS_FILE = "obs_v2.jsonl"
@@ -172,7 +173,11 @@ class ObserverLive:
         if self.margin.margin_m > float(spec["margin"]) + 1e-9:
             raise ValueError(f"M-W7 margin {self.margin.margin_m} m does not fit in the {spec['margin']} m L1 grid margin")
         self.map = M.LayeredMap(spec=spec)
-        self.det = L1ChangeDetector(self.map, fail_closed_unlearned=True, bins=TWIN_BINS)
+        # half-life: the L1 adapter's default (24 h / 17 bins of ticks per bin) assumes 17 evenly visited bins; the twin
+        # visits bin 0 nearly always, so a bin-0 cell would forget in ~1.4 h of wall clock. 24 h of ticks per bin
+        # keeps M-W4's 24 h half-life for the running bin (forgetting runs on observed coverage, never on wall time).
+        self.det = L1ChangeDetector(self.map, cfg=replace(L1_CFG, half_life_ticks=CD.DAY_TICKS),
+                                    fail_closed_unlearned=True, bins=TWIN_BINS)
         self.reader = None if obs_path is None else ObsV2Reader(obs_path, self.M, len(spec["cameras"]))
         self._pending: list[M.Observation] = []
         self._t: list[float] = []
