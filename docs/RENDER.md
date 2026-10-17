@@ -25,7 +25,7 @@ Commands (repo root, PowerShell; `$B` = `C:\Program Files\Blender Foundation\Ble
 ```powershell
 & $B -b --factory-startup --python render\blender\bl_run.py -- render\blender\scene_real.py --trace <trace.parquet> --synth-bodies `
     --out D:\icdata\renders\stills --stills compare_line,wide,weld_close,cctv_1,cctv_5 --t 36562.8167 --samples 128 --res 1920x1080 --gt
-& $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\seq --cctv-seq cctv_1 --t 36620 --seconds 10 --fps 25 --gt
+& $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\seq --cctv-seq cctv_1 --t 36560 --seconds 10 --fps 25 --samples 64 --gt
 $env:PYTHONPATH="D:\icdata\pylib"; python -m render.cctv.cctv_post --in D:\icdata\renders\seq\cctv_1\frames --gt D:\icdata\renders\seq\cctv_1\gt `
     --out D:\icdata\renders\seq\cctv_1\cctv --cam CAM02 --cam-label "BODY SHOP S20" --t0 "2026-10-17 10:10:20" --fps 25 --overscan 0.055 --video
 ```
@@ -43,6 +43,11 @@ cell gets 8 without the middle pair), a tip dresser beside every robot, and an o
 trays and a dress-cable drop to each robot. All of it stays inside the station rects of `bodyshop.yaml`.
 `compare_line` (still name) is the reference photo's viewpoint: 7 m above the line axis at x 15.5, looking down +x, 16.5 mm
 (~95 deg); `compare_wide.jpg` uses it.
+Detail pass: servo C-gun v2 (two C side plates, ribbed transformer, servo actuator) and a dress pack (retract unit, main
+hose, blue/red cooling water) on every robot; fixtures with locator blocks, pins, toggle clamps and gussets;
+`RealScene.rounded()` rounds edges in shading (Cycles Bevel node, radius in metres; the first render after a fresh install
+compiles the OptiX kernel once, ~2 min); closures carts with door panels at each station's line side; `cctv_post`
+`sensor_scale` (per camera 0.65-0.85 of 1080p, `--sensor-scale`) for CCTV sensor softness.
 
 # Photoreal render tier: decision, research, shot list
 
