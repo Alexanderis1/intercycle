@@ -8,7 +8,8 @@ Conventions
 -----------
 * instance map: uint16, 0 = background.
 * depth: float32 metres (NaN / inf are kept as they are, nearest neighbour only).
-* ids: ``{instance_id: {"cls": str, "entity_id": str}}`` (JSON keys are strings).
+* ids: ``{instance_id: {"cls": str, "entity_id": str}}`` (JSON keys are strings); a rendered worker who is
+  NOT in the trace (line-side extra) also has ``"extra": true``, kept in its box and COCO annotation.
 * boxes: ``bbox = [x1, y1, x2, y2]`` in output pixels, x2/y2 EXCLUSIVE (pixel edge
   convention: ``w = x2 - x1`` is the width in pixels, COCO-compatible).
 
@@ -91,15 +92,16 @@ def boxes_from_instances(inst: np.ndarray, ids: Optional[dict], min_pixels: int 
             continue
         iid = int(uniq[k])
         meta = (ids or {}).get(str(iid)) or (ids or {}).get(iid) or {}
-        boxes.append(
-            {
-                "instance_id": iid,
-                "cls": str(meta.get("cls", "unknown")),
-                "entity_id": str(meta.get("entity_id", f"inst{iid}")),
-                "bbox": [int(x1[k]), int(y1[k]), int(x2[k]), int(y2[k])],
-                "pixels": int(counts[k]),
-            }
-        )
+        box = {
+            "instance_id": iid,
+            "cls": str(meta.get("cls", "unknown")),
+            "entity_id": str(meta.get("entity_id", f"inst{iid}")),
+            "bbox": [int(x1[k]), int(y1[k]), int(x2[k]), int(y2[k])],
+            "pixels": int(counts[k]),
+        }
+        if meta.get("extra"):
+            box["extra"] = True
+        boxes.append(box)
     return boxes
 
 
@@ -159,7 +161,7 @@ def build_coco(frames: list, categories: Optional[list] = None) -> dict:
     ``frames``: list of ``{"file_name", "width", "height", "frame", "t", "boxes"}``.
     Category ids are 1..N over the sorted class names found in the boxes unless
     ``categories`` (list of class names) is given. Every annotation also carries
-    ``instance_id``, ``entity_id`` (use as track id) and ``visible_pixels``.
+    ``instance_id``, ``entity_id`` (use as track id) and ``visible_pixels``; extras also ``extra: true``.
     ``bbox`` is COCO ``[x, y, w, h]``; ``area`` is the visible pixel count.
     """
     if categories is None:
@@ -179,19 +181,20 @@ def build_coco(frames: list, categories: Optional[list] = None) -> dict:
         )
         for b in f["boxes"]:
             x1, y1, x2, y2 = b["bbox"]
-            anns.append(
-                {
-                    "id": len(anns) + 1,
-                    "image_id": i + 1,
-                    "category_id": cat_id[b["cls"]],
-                    "bbox": [x1, y1, x2 - x1, y2 - y1],
-                    "area": b["pixels"],
-                    "iscrowd": 0,
-                    "instance_id": b["instance_id"],
-                    "entity_id": b["entity_id"],
-                    "visible_pixels": b["pixels"],
-                }
-            )
+            ann = {
+                "id": len(anns) + 1,
+                "image_id": i + 1,
+                "category_id": cat_id[b["cls"]],
+                "bbox": [x1, y1, x2 - x1, y2 - y1],
+                "area": b["pixels"],
+                "iscrowd": 0,
+                "instance_id": b["instance_id"],
+                "entity_id": b["entity_id"],
+                "visible_pixels": b["pixels"],
+            }
+            if b.get("extra"):
+                ann["extra"] = True
+            anns.append(ann)
     return {
         "info": {"description": "InterCycle synthetic CCTV sequence (SYNTHETIC)"},
         "images": images,

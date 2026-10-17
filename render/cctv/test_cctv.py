@@ -131,6 +131,18 @@ def test_small_boxes_dropped():
     assert boxes[0]["bbox"] == [50, 50, 70, 70] and boxes[0]["pixels"] == 400
 
 
+def test_extra_flag_reaches_boxes_and_coco():
+    from render.cctv.gt import build_coco
+    inst = np.zeros((100, 100), np.uint16)
+    inst[10:40, 10:40] = 1
+    inst[50:80, 50:80] = 2
+    ids = {"1": {"cls": "person", "entity_id": "W3"}, "2": {"cls": "person", "entity_id": "extra_1", "extra": True}}
+    boxes = boxes_from_instances(inst, ids)
+    assert ["extra" in b for b in boxes] == [False, True] and boxes[1]["extra"] is True
+    anns = build_coco([{"file_name": "f.png", "width": 100, "height": 100, "boxes": boxes}])["annotations"]
+    assert [a.get("extra", False) for a in anns] == [False, True]
+
+
 def test_geometry_has_no_black_corners():
     for i in range(30):
         p = camera_params(f"CAM{i}", i)

@@ -20,6 +20,7 @@ ROOF_EAVE = 12.0          # bottom chord of the roof trusses (m); CCTV is at 9 m
 ROOF_TOP = 13.6
 COL_DX = 12.0             # column pitch along x
 COL_ROWS_Y = (0.0, 12.0, 35.5, 48.0)   # wall rows + two internal rows that fall between sim zones
+LINE_SIDE_Y = 13.2        # row of line-side pallets + part carts, south of aisle S (extras pick parts here)
 
 
 # =====================================================================================
@@ -508,8 +509,8 @@ def clutter(bs, rng: random.Random):
         if not m.get("on_line"):
             continue
         for k in range(2):
-            pallet_load(bs, f"ls_{m['id']}_{k}", m["x"] - 2.5 + 5.0 * k, 13.2, rng, wood, mesh_m, galv, bins)
-        part_cart(bs, f"pc_{m['id']}", m["x"], 13.2, rng)
+            pallet_load(bs, f"ls_{m['id']}_{k}", m["x"] - 2.5 + 5.0 * k, LINE_SIDE_Y, rng, wood, mesh_m, galv, bins)
+        part_cart(bs, f"pc_{m['id']}", m["x"], LINE_SIDE_Y, rng)
     # extinguishers + signs on internal columns, bollards at the roller doors
     for i in range(0, int(X / COL_DX) + 1):
         x = i * COL_DX
