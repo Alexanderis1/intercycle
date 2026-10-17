@@ -152,7 +152,7 @@ class ChangeDetector:
             s = self.site
             _, ix, iz = M.raster(obs.x[sel], obs.z[sel], obs.r[sel], s["x0"], s["z0"], self.nx, self.nz, s["res"], centre=False)
             x[np.unique(ix * self.nz + iz)] = 1.0
-        valid = obs.cam_ok[self.cam_of_cell] & self.static.reshape(-1)
+        valid = M.floor_ok_of(obs)[self.cam_of_cell] & self.static.reshape(-1)   # M-W10: a frozen / blind view is no evidence
         for cam in self.bumped:
             valid &= self.cam_of_cell != cam
         self.S = np.where(valid, np.clip(self.S + x - self.k, 0.0, 2.0 * self.h), self.S)   # capped: re-arms after motion stops
@@ -379,7 +379,9 @@ class ChangeDetector:
     def _learn(self, cd: Candidate, obs: M.Observation, t: float, ev: list) -> None:
         mp, i = self.map, cd.machine_index
         b = self.phase_bin(cd, t)
-        if b < 0 or not obs.cam_ok[mp.cam_of_machine[i]]:
+        # M-W10: learn only when every camera covering the machine's L1 grid has a valid floor view (else the grid is
+        # partly unobserved and a visit would push those cells towards p = 0), the LayeredMap.update rule
+        if b < 0 or not mp.l1_cams_ok(M.floor_ok_of(obs))[i]:
             return
         mp.l1_visits[i, b] += 1.0
         sel = (obs.cls == M.PART) & (obs.machine < 0)

@@ -82,7 +82,7 @@ def test_unknown_reaches_robot_through_the_codec():
     m.unknown_rects = [(70.0, 38.0, 75.0, 44.0)]
     m.cam_offline = {9}
     payload, sizes = ML.encode_payload(m)
-    assert payload[4] == ML.PAYLOAD_VERSION == 2 and sizes["UNKNOWN"] > 0
+    assert payload[4] == ML.PAYLOAD_VERSION == 3 and sizes["UNKNOWN"] > 0
     dm = ML.decode_payload(payload)
     assert np.array_equal(dm.unknown_mask(), m.unknown_mask())
     steps = dm.predict_obstacles(10 * 3600.0, 1.0, {}, M.RUNNING, step_s=1.0, with_traffic=False)
@@ -94,7 +94,7 @@ def test_unknown_reaches_robot_through_the_codec():
         cov[int(x0 - s["x0"]):int(x1 - s["x0"]), int(z0 - s["z0"]):int(z1 - s["z0"])] = True
     assert (cov | ~m.unknown_mask()).all(), "every UNKNOWN cell is inside an UNKNOWN box the robot treats as occupied"
     # a v1 payload (no UNKNOWN section) still decodes, with no unknown cells
-    v1 = payload[:4] + bytes([1]) + payload[5:len(payload) - sizes["UNKNOWN"]]
+    v1 = payload[:4] + bytes([1]) + payload[5:len(payload) - sizes["UNKNOWN"] - sizes["SLICE_UNKNOWN"]]
     assert not ML.decode_payload(v1).unknown_mask().any()
     # signed bundle round trip carries it too
     b = ML.pack_map(m, demo_key(SCN.key_id), version=2, issue_time=1.8e9)

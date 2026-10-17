@@ -51,6 +51,7 @@ from pathlib import Path
 
 import numpy as np
 
+from intercycle.observer.mapping import floor_ok_of
 from intercycle.scenario import Scenario
 
 PART, SKID, PERSON, VEHICLE = 2, 3, 0, 1          # mapping.py class codes (kept in sync by a test)
@@ -109,7 +110,7 @@ class Features:
                 # move, so a real frame always has still parts). The shim does this when any body group changes size
                 # (e.g. the lifter carriage appears); the frame carries no usable machine evidence -> missing.
                 X[:] = np.nan
-        X[~obs.cam_ok[self.lay.cam_of_machine]] = np.nan
+        X[~floor_ok_of(obs)[self.lay.cam_of_machine]] = np.nan     # M-W10: a frozen / blind camera's features are missing
         sk = cls == SKID
         pe = cls == PERSON
         ve = cls == VEHICLE
