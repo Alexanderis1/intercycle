@@ -48,6 +48,11 @@ FILM_TEXT = "SYNTHETIC REPLAY OF OUR SIMULATION"   # burned into every cinematic
 STACK = {"ACTIVE": "g", "IDLE": "g", "STOPPED": "y", "HELD": "y", "TRIPPED": "r"}
 
 
+def _near(a: float, prev: float) -> float:
+    """`a` shifted by a multiple of 2 pi to lie within pi of `prev` (keyed rotations never spin the long way)."""
+    return prev + (a - prev + math.pi) % (2.0 * math.pi) - math.pi
+
+
 class RealScene(rb.BScene):
     def build(self):
         self.rng = random.Random(5)
@@ -94,8 +99,7 @@ class RealScene(rb.BScene):
         turns never spin the long way when a heading wraps at +-180 deg."""
         prev = obj.rotation_euler.z
         super()._place(obj, x, y, yaw, z)
-        rz = obj.rotation_euler.z
-        obj.rotation_euler.z = prev + (rz - prev + math.pi) % (2.0 * math.pi) - math.pi
+        obj.rotation_euler.z = _near(obj.rotation_euler.z, prev)
 
     def _hide_hero(self):
         r = self.prims.pop(self.ctx.hero.entity_id, None)
@@ -754,11 +758,15 @@ def _render_clip(bs, t0: float, n: int, dt: float, frames: Path, after, tag: str
     sc.render.motion_blur_shutter = 0.5
     sc.render.motion_blur_position = "END"
     frames.mkdir(parents=True, exist_ok=True)
+    for old in frames.glob("f_*.png"):    # a shorter re-run must not leave the old tail for the mp4 / cctv_post
+        old.unlink()
 
     def pose(i: int, t: float) -> None:
         bs.apply(t)
         if cam_at is not None:
+            prev = cam.rotation_euler.z
             bs.point_camera(cam_at(t))
+            cam.rotation_euler.z = _near(cam.rotation_euler.z, prev)
             cam.keyframe_insert("location", frame=i)
             cam.keyframe_insert("rotation_euler", frame=i)
             cam.data.keyframe_insert("lens", frame=i)
@@ -816,7 +824,7 @@ def run_film(scn, ctx, args, out_dir: Path) -> Path:
     _render_clip(bs, args.t, n, dt, shot / "frames", lambda dst: label_synthetic(dst, FILM_TEXT), args.film,
                  cam_at=lambda t: film_cam(args.film, (t - args.t) / span, scn))
     mp4 = out_dir / f"{args.film}.mp4"
-    core.ffmpeg_frames_to_mp4(sorted((shot / "frames").glob("f_*.png")), mp4, args.fps)
+    core.ffmpeg_frames_to_mp4([shot / "frames" / f"f_{i:05d}.png" for i in range(n)], mp4, args.fps)
     (shot / "film_manifest.json").write_text(json.dumps(dict(film=args.film, t0=args.t, fps=args.fps, frames=n, mp4=str(mp4),
                                                              device=bs.device, args=vars(args)), indent=2, default=str))
     return mp4

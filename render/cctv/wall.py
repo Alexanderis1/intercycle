@@ -17,7 +17,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .cctv_post import _ffmpeg, _font, load_rgb, save_rgb
+from .cctv_post import _COLOR_ENC, _VF_ENC, _ffmpeg, _font, load_rgb, save_rgb
 
 FILM_TEXT = "SYNTHETIC REPLAY OF OUR SIMULATION"   # = scene_real.FILM_TEXT
 GUTTER = 4                                          # px, dark seam between tiles
@@ -55,12 +55,14 @@ def main(argv=None) -> int:
         raise SystemExit(f"tiles need the same, non-zero frame count; got {[len(fs) for fs in lists]}")
     frames = a.out / "frames"
     frames.mkdir(parents=True, exist_ok=True)
+    for old in frames.glob("w_*.png"):        # a shorter re-run must not leave the old tail
+        old.unlink()
     for i, paths in enumerate(zip(*lists)):
         save_rgb(frames / f"w_{i:05d}.png", compose([load_rgb(p) for p in paths], w, h))
     mp4 = a.out / "wall.mp4"
     subprocess.run([_ffmpeg(), "-y", "-loglevel", "error", "-framerate", str(a.fps), "-i", str(frames / "w_%05d.png"),
-                    "-c:v", "libx264", "-preset", "slow", "-crf", str(a.crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-                    str(mp4)], check=True)
+                    "-frames:v", str(len(lists[0])), "-vf", _VF_ENC, "-c:v", "libx264", "-preset", "slow", "-crf", str(a.crf),
+                    "-pix_fmt", "yuv420p", *_COLOR_ENC, "-movflags", "+faststart", str(mp4)], check=True)   # same colour tags as cctv_post
     print("wrote", mp4, f"({len(lists[0])} frames)")
     return 0
 

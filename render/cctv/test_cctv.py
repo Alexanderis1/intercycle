@@ -244,3 +244,19 @@ def test_wall_tiles_in_order_with_seams_and_label():
         assert tuple(w[r, c]) == col                       # TL, TR, BL, BR
     assert (w[180, 50] < 20).all() and (w[50, 320] < 20).all() and GUTTER >= 2
     assert (w[340:356, 300:340] > 230).all(axis=2).any()   # white label text bottom-centre
+
+
+def test_wall_cli_writes_video_and_drops_stale_frames(tmp_path):
+    from render.cctv.cctv_post import save_rgb
+    from render.cctv.wall import main as wall_main
+    dirs = []
+    for k in range(4):
+        d = tmp_path / f"t{k}"
+        for i in range(3):
+            save_rgb(d / f"f_{i:05d}.png", np.full((90, 160, 3), 40 * (k + 1), np.uint8))
+        dirs.append(str(d))
+    out = tmp_path / "wall"
+    save_rgb(out / "frames" / "w_00007.png", np.zeros((90, 160, 3), np.uint8))   # tail of an older, longer run
+    assert wall_main(["--tiles", *dirs, "--out", str(out), "--size", "320x180"]) == 0
+    assert sorted(p.name for p in (out / "frames").glob("w_*.png")) == ["w_00000.png", "w_00001.png", "w_00002.png"]
+    assert len(list(decode_video(out / "wall.mp4", 320, 180))) == 3
