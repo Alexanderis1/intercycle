@@ -65,23 +65,32 @@ def windows(scn: Scenario, machine_id: str, seed: int, t0: float = 0.0, t1: floa
             ie = (idx[i + 1][0] + m.offset_s) if i + 1 < len(idx) else ti + length + m.offset_s
             out.append(Window(bs, bs + act, ie, kind))
         return out
-    return _cell_windows(m, seed, t0, t1)
+    return _cell_windows(m, seed, t0, t1, scn.line_stops())
 
 
-def _cell_windows(m: Machine, seed: int, t0: float, t1: float) -> list[Window]:
+def _cell_windows(m: Machine, seed: int, t0: float, t1: float, stops: list[tuple[float, float, str]]) -> list[Window]:
+    """Manually loaded cells: own clock and micro-stops; they also stop for breaks and shift changes."""
     rng = np.random.default_rng([seed, 2, sum(map(ord, m.id))])
     T, j = float(m.period_s), float(m.jitter or 0.0)
     stop_p = (m.stops_per_h or 0.0) * T / 3600
     out, t = [], t0 + float(rng.uniform(0, T))
     while t < t1:
+        hit = _in_planned_stop(t, stops)
+        if hit is not None:
+            t = hit[0]
+            continue
         b = m.busy * T * (1 + j * rng.standard_normal())
         i = (1 - m.busy) * T * (1 + j * rng.standard_normal())
         kind = "cycle"
         if rng.random() < stop_p:
             i += float(rng.uniform(*(m.stop_s or (5, 30))))
             kind = "andon"
-        out.append(Window(t, t + b, t + b + i, kind))
-        t += b + i
+        end = t + b + i
+        hit = _in_planned_stop(end, stops)
+        if hit is not None:
+            end, kind = hit[0], hit[1]
+        out.append(Window(t, t + b, end, kind))
+        t = end
     return out
 
 
