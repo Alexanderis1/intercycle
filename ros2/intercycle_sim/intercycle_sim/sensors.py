@@ -3,7 +3,9 @@
 All of them take the simulator's TRUE state as input and return only noisy sensor outputs; the true state never
 leaves the simulator process (it is logged to disk for evaluation only).
 
-Lidar (`/scan`): 2D, 360 deg, on a gravity-levelled frame (IMU-stabilised mount), mounted on base_link.
+Lidar (`/scan`): 2D, 360 deg, mounted on base_link. R-W5: the scan plane is fixed to the body and tilts with the TRUE body
+  roll / pitch (a legged base pitches and rolls while it walks), so tilted rays hit the floor or pass over low bodies;
+  `levelled=True` restores the old gravity-levelled frame. A level body (the kinematic double) gives the same rays as before.
   ranges = min( static hit, moving-body hit ) per ray, then range limits, Gaussian noise, random dropouts.
   * static hit: Warp ray-cast against the ONE static L0 triangle mesh (`WarpMeshCaster`, Isaac Lab's Warp); the numpy
     fallback (`BoxCaster`) intersects the same upright boxes analytically (identical for horizontal rays).
@@ -73,6 +75,71 @@ def ray_circles(ox: float, oy: float, ux: np.ndarray, uy: np.ndarray, circles: n
     return np.minimum(r, t.min(axis=1))
 
 
+# ------------------------------------------------------------------------------------------- analytic ray casts (3D)
+# R-W5: a scan plane fixed to the body tilts with its roll / pitch, so its rays are not horizontal. Primitives are upright
+# solids from zmin (optional last column, default 0 = the floor) to zmax: circles (cx, cy, r, zmax[, zmin]), boxes
+# (cx, cy, hw, hd, yaw, zmax[, zmin]).
+def _z_slab(oz: float, uz: np.ndarray, zmin: np.ndarray, zmax: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(N, M) range interval along each ray where its height is inside [zmin, zmax] of each primitive."""
+    uz = uz[:, None]
+    flat = np.abs(uz) < 1e-12
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z1 = (zmin[None, :] - oz) / np.where(flat, 1.0, uz)
+        z2 = (zmax[None, :] - oz) / np.where(flat, 1.0, uz)
+    inside = ((oz >= zmin) & (oz <= zmax))[None, :]
+    lo = np.where(flat, np.where(inside, -np.inf, np.inf), np.minimum(z1, z2))
+    hi = np.where(flat, np.where(inside, np.inf, -np.inf), np.maximum(z1, z2))
+    return lo, hi
+
+
+def ray_boxes_3d(o: np.ndarray, d: np.ndarray, boxes: np.ndarray | None, rmax: float) -> np.ndarray:
+    """Range along each unit 3D ray (origin o (3,), directions d (N, 3)) to the nearest upright box."""
+    r = np.full(d.shape[0], rmax)
+    if boxes is None or len(boxes) == 0:
+        return r
+    b = np.asarray(boxes, float)
+    zmin = b[:, 6] if b.shape[1] > 6 else np.zeros(len(b))
+    c, s = np.cos(b[:, 4]), np.sin(b[:, 4])
+    dx, dy = float(o[0]) - b[:, 0], float(o[1]) - b[:, 1]
+    lox, loy = dx * c + dy * s, -dx * s + dy * c
+    ldx = d[:, 0:1] * c[None, :] + d[:, 1:2] * s[None, :]
+    ldy = -d[:, 0:1] * s[None, :] + d[:, 1:2] * c[None, :]
+    eps = 1e-12
+    ldx = np.where(np.abs(ldx) < eps, eps, ldx)
+    ldy = np.where(np.abs(ldy) < eps, eps, ldy)
+    t1x, t2x = (-b[:, 2][None, :] - lox[None, :]) / ldx, (b[:, 2][None, :] - lox[None, :]) / ldx
+    t1y, t2y = (-b[:, 3][None, :] - loy[None, :]) / ldy, (b[:, 3][None, :] - loy[None, :]) / ldy
+    zlo, zhi = _z_slab(float(o[2]), d[:, 2], zmin, b[:, 5])
+    tmin = np.maximum(np.maximum(np.minimum(t1x, t2x), np.minimum(t1y, t2y)), zlo)
+    tmax = np.minimum(np.minimum(np.maximum(t1x, t2x), np.maximum(t1y, t2y)), zhi)
+    hit = tmax >= np.maximum(tmin, 0.0)
+    t = np.where(hit, np.maximum(tmin, 0.0), np.inf)
+    return np.minimum(r, t.min(axis=1))
+
+
+def ray_circles_3d(o: np.ndarray, d: np.ndarray, circles: np.ndarray | None, rmax: float) -> np.ndarray:
+    """Range along each unit 3D ray to the nearest upright cylinder."""
+    r = np.full(d.shape[0], rmax)
+    if circles is None or len(circles) == 0:
+        return r
+    cc = np.asarray(circles, float)
+    zmin = cc[:, 4] if cc.shape[1] > 4 else np.zeros(len(cc))
+    h = np.hypot(d[:, 0], d[:, 1])
+    ok = h > 1e-9
+    hs = np.where(ok, h, 1.0)
+    ux, uy = d[:, 0] / hs, d[:, 1] / hs
+    cx, cy, rr = cc[:, 0] - float(o[0]), cc[:, 1] - float(o[1]), cc[:, 2]
+    bproj = ux[:, None] * cx[None, :] + uy[:, None] * cy[None, :]
+    disc = bproj * bproj - (cx * cx + cy * cy - rr * rr)[None, :]
+    sq = np.sqrt(np.maximum(disc, 0.0))
+    t_in, t_out = (bproj - sq) / hs[:, None], (bproj + sq) / hs[:, None]       # horizontal distance -> 3D range
+    zlo, zhi = _z_slab(float(o[2]), d[:, 2], zmin, cc[:, 3])
+    tmin, tmax = np.maximum(t_in, zlo), np.minimum(t_out, zhi)
+    hit = ok[:, None] & (disc >= 0.0) & (tmax >= np.maximum(tmin, 0.0))
+    t = np.where(hit, np.maximum(tmin, 0.0), np.inf)
+    return np.minimum(r, t.min(axis=1))
+
+
 # ------------------------------------------------------------------------------------------- static casters
 class BoxCaster:
     """numpy fallback for the static mesh: analytic rays against the same upright boxes (exact for level rays)."""
@@ -85,6 +152,10 @@ class BoxCaster:
 
     def cast(self, origin: np.ndarray, dirs: np.ndarray, rmax: float) -> np.ndarray:
         return ray_boxes(float(origin[0]), float(origin[1]), dirs[:, 0], dirs[:, 1], self.b, float(origin[2]), rmax)
+
+    def cast3d(self, origin: np.ndarray, dirs: np.ndarray, rmax: float) -> np.ndarray:
+        """Exact for non-horizontal rays too (the tilted lidar, R-W5); `cast` keeps its horizontal-ray behaviour."""
+        return ray_boxes_3d(np.asarray(origin, float), np.asarray(dirs, float), self.b, rmax)
 
 
 try:  # Warp ships with Isaac Lab (python 3.11); the ROS-side python does not need it
@@ -150,15 +221,26 @@ def make_static_caster(boxes: list[dict], vertices=None, faces=None, prefer_warp
 class LidarModel:
     def __init__(self, static, n: int = 360, rmin: float = 0.10, rmax: float = 25.0, sigma: float = 0.015,
                  dropout: float = 0.005, mount: tuple[float, float, float] = (0.30, 0.0, 0.20), rate_hz: float = 10.0,
-                 rng: np.random.Generator | None = None):
+                 rng: np.random.Generator | None = None, levelled: bool = False, floor_z: float = 0.0):
         self.static, self.n, self.rmin, self.rmax = static, n, rmin, rmax
         self.sigma, self.dropout, self.mount, self.rate_hz = sigma, dropout, mount, rate_hz
         self.rng = rng or np.random.default_rng(0)
         self.inc = 2 * math.pi / n
         self.angles = -math.pi + np.arange(n) * self.inc          # laser frame, counter-clockwise from -pi
+        self.levelled = bool(levelled)                             # True: the old gravity-levelled mount (pre R-W5)
+        self.floor_z = float(floor_z)
 
-    def true_ranges(self, x: float, y: float, z: float, psi: float, prims: dict | None) -> np.ndarray:
-        """Noise-free merged ranges (levelled frame at the mount point), rmax = no return."""
+    def true_ranges(self, x: float, y: float, z: float, psi: float, prims: dict | None,
+                    R_wb: np.ndarray | None = None) -> np.ndarray:
+        """Noise-free merged ranges, rmax = no return. R_wb (body -> world rotation, the TRUE attitude): the scan plane is
+        fixed to the body and tilts with its roll / pitch (R-W5), rays can hit the floor and pass over low bodies.
+        Without R_wb (or levelled=True, or a level body) the plane is horizontal at the mount point, as before."""
+        if R_wb is not None and not self.levelled:
+            Rm = np.asarray(R_wb, float)
+            local = np.stack((np.cos(self.angles), np.sin(self.angles), np.zeros_like(self.angles)), axis=1)
+            dirs = local @ Rm.T
+            if float(np.abs(dirs[:, 2]).max()) > 1e-12:
+                return self._tilted_ranges(np.array((x, y, z)) + Rm @ np.asarray(self.mount, float), dirs, prims)
         c, s = math.cos(psi), math.sin(psi)
         mx, my, mz = self.mount
         ox, oy, oz = x + c * mx - s * my, y + s * mx + c * my, z + mz
@@ -166,12 +248,30 @@ class LidarModel:
         dirs = np.stack((np.cos(a), np.sin(a), np.zeros_like(a)), axis=1)
         r = self.static.cast(np.array((ox, oy, oz)), dirs, self.rmax)
         if prims:
-            r = np.minimum(r, ray_circles(ox, oy, dirs[:, 0], dirs[:, 1], prims.get("circles"), oz, self.rmax))
-            r = np.minimum(r, ray_boxes(ox, oy, dirs[:, 0], dirs[:, 1], prims.get("boxes"), oz, self.rmax))
+            circ, box = prims.get("circles"), prims.get("boxes")
+            # an elevated primitive (optional zmin column, R-W5) whose bottom is above the plane is passed under
+            if circ is not None and len(circ) and circ.shape[1] > 4:
+                circ = circ[circ[:, 4] <= oz]
+            if box is not None and len(box) and box.shape[1] > 6:
+                box = box[box[:, 6] <= oz]
+            r = np.minimum(r, ray_circles(ox, oy, dirs[:, 0], dirs[:, 1], circ, oz, self.rmax))
+            r = np.minimum(r, ray_boxes(ox, oy, dirs[:, 0], dirs[:, 1], box, oz, self.rmax))
         return r
 
-    def scan(self, x: float, y: float, z: float, psi: float, prims: dict | None) -> list[float]:
-        r = self.true_ranges(x, y, z, psi, prims)
+    def _tilted_ranges(self, o: np.ndarray, dirs: np.ndarray, prims: dict | None) -> np.ndarray:
+        cast3d = getattr(self.static, "cast3d", None)               # the Warp mesh cast is 3D already
+        r = (cast3d or self.static.cast)(o, dirs, self.rmax)
+        down = dirs[:, 2] < -1e-12
+        if down.any() and o[2] > self.floor_z:                       # the floor (not part of the static mesh)
+            r = np.where(down, np.minimum(r, (self.floor_z - o[2]) / np.where(down, dirs[:, 2], -1.0)), r)
+        if prims:
+            r = np.minimum(r, ray_circles_3d(o, dirs, prims.get("circles"), self.rmax))
+            r = np.minimum(r, ray_boxes_3d(o, dirs, prims.get("boxes"), self.rmax))
+        return np.minimum(r, self.rmax)
+
+    def scan(self, x: float, y: float, z: float, psi: float, prims: dict | None,
+             R_wb: np.ndarray | None = None) -> list[float]:
+        r = self.true_ranges(x, y, z, psi, prims, R_wb)
         hit = r < self.rmax
         noisy = r + self.rng.normal(0.0, self.sigma, r.shape)
         drop = self.rng.random(r.shape) < self.dropout
@@ -181,7 +281,7 @@ class LidarModel:
     def msg_meta(self) -> dict:
         return {"angle_min": -math.pi, "angle_max": -math.pi + (self.n - 1) * self.inc, "angle_increment": self.inc,
                 "range_min": self.rmin, "range_max": self.rmax, "scan_time": 1.0 / self.rate_hz,
-                "mount": list(self.mount)}
+                "mount": list(self.mount), "levelled": self.levelled}
 
 
 # ------------------------------------------------------------------------------------------- IMU
@@ -355,6 +455,6 @@ class SensorSuite:
         if self.k % self.scan_every == 0:
             psi = yaw_of(quat_wxyz)
             fr["scan"] = dict(self.lidar.msg_meta(), ranges=self.lidar.scan(float(pos_w[0]), float(pos_w[1]),
-                                                                            float(pos_w[2]), psi, prims))
+                                                                            float(pos_w[2]), psi, prims, R_wb=R))
         self.k += 1
         return fr
