@@ -1,5 +1,102 @@
 # InterCycle — status at clean stop (17 Oct 2026, ~13:50 CEST)
 
+## >>> HAND-OFF for lead session 3 (written by lead session 2, Sat 17 Oct ~19:20 CEST) <<<
+Read in this order: this section → `docs/DIRECTION.md` (still the plan of record) → `docs/AUDIT.md` + `docs/PRODUCTION_BRIEF.md`
+(both adopted by the user, with owners and a cut order; see "Audit" / "Production-readiness brief" below) → `docs/BRIEF.md`.
+Everything below is committed and pushed. The robot held-out batch has NOT been launched. Nothing of ours runs on Modal.
+
+### User decisions since DIRECTION (all confirmed by the user directly)
+- Scope added: the fused cross-camera tracker (V), the camera placement planner (C) and workstream **T** (trigger discovery, FULL; rule-4 waiver for its overlay + truth hook only).
+- Audit Tier 1/2/3 (`docs/AUDIT.md`) and production brief A1–A9 (`docs/PRODUCTION_BRIEF.md`) adopted.
+  **Cut order if hours run short:** A10/A1-stretch → V fused tracker → C placement planner → T DINOv2 + broadcast field → A8 reduced to 6 injections.
+  A1, A2, A3, A4, A6, A9 always stay.
+- Rule-4 waivers: (a) shim at the measured perception error + one map rebuild; (b) noisy own-camera in the event sim; (c) ±5 % robot speed/dwell jitter; (d) planned stops pinned to the wall clock.
+- Robot batch: 10-min (600 s) episodes, held-out seeds 1000–1009 × 4 conditions, **Isaac budget up to $25 total for the full batch** (≈ $19–20 expected), ask before anything beyond.
+  Primary inspection pass = **DORI Inspect (1000 px/m) with entry**; Identify-from-boundary is a secondary row (pre-registration Amendment 1, e06ac35).
+- Only the first Token Factory key is used (the second key was removed from `.env`).
+- Slot order for new agents: **R4 → V → T → C** (T after the batch launch, hard stop 08:00).
+
+### State per workstream (what is final, what is left)
+| WS | State | Left (in order) |
+|---|---|---|
+| Lead / event sim | Learned observer replaces ShimObserver (1671f9e). Audit #3 + waivers b/c/d done (4660155): noisy own camera, shared walkway rule, jitter, wall-clock breaks, a "long" fault, and the safety test asserts line time. Seed-10 smoke: B 1 trip (walkway), A 8 trips / 837 s, B-long 7 / 663 s. | **Run the full suite once (never done after 4660155) + `python -m intercycle.eval.run_seeds --seeds 0 19`** under the heavy lock; update numbers. Freeze docs A9 (safety / compliance / deployment wording in PRODUCTION_BRIEF §A9). Held-out seeds 1000–1199 once after the freeze. |
+| M map | Calendar removed (line_state default), measured shim (M.MEASURED_SHIM), splits days 0–4 / cal 5–6 / test 7 + seeds 1–2. **Rebuild running at hand-off** → `out/timeline/map_1w.npz` (robot) + `map_5d`. Clean pre-audit 1 w numbers exist (stale now). New-machine run done (detect 5.8 s, 0 unsafe-free in transition, 2.4 % post-convergence). | See M's hand-off below: A2 conformal margin, held-out seeds 1–2, week1 replay (stream for D), MAP_RESULTS, A8 change-detection calibration. |
+| P phases | Seed-2 one-shot re-score is the headline (welders F1 0.85, boundary 0.57 s; 947a878 frozen, 6a592c2). A7 done (neutral "State A.." + operator naming). | Re-score seed 2 under the MEASURED shim (~15 min, commands in P's report below) and headline it; state what the clusters separate under measured noise (likely stopped vs running). |
+| R1/R2/R3 robot (final map: `out/timeline/map_1w.npz`, copied to `out/r3/maps/map_1w_37b6d78.npz`, sha256 4b01346dba3824da…; seed 0 days 0–6, measured shim, discovered line state, code 37b6d78; out/ is local, so rebuild with M's commands if it is lost) | Isaac + Nav2 + bridge + timing planner + plant + camera gate + broadcasters + detached batch + stats + pre-registration (954d030, 20df131, c5b5c68, e06ac35). Truth leak in the gate aim removed. | 1) implement the Inspect-level target points (fixed site-plan points + normals) and check the oracle can pass each; commit as an Amendment-1 follow-up. 2) dev seed 22, one episode per condition (~$1.3; R3's dev budget goes to ~$3.3, so **ask the user**). 3) relay M's new map. 4) launch detached (command below). 5) metrics → stats → ROBOT_RESULTS. |
+| G Gemma (AMD) | G1 headline 10/10 cameras (centre-zone IoU 0.30, weak but honest), G2 0.75 vs chance 0.27 / majority 0.50 (family given), G3 real events 2/3, oracle-framed 20/24. Privacy filter + VLM_MODE (6dbc153, 051d4fc). | 7 hinted G1 calls, G2 re-ask of 17 bins with G1's family, score, then **write docs/GEMMA_RESULTS.md** with disclosures 1 (GT masks vs RF-DETR recall 0.68) and 2 (family source). Commands in G's report below. Provider is slow/unstable (60–230 s per commission call); quota is not the limit. |
+| D dashboard | Wired to week1 + newmachine + P phases + Gemma names (fixture until G's file). Runs export into `dashboard/data/` (force-added; root .gitignore ignores data/). | After M's final week1: `dashboard/export_static.py publish --run week1`, re-publish newmachine, `export_static.py gemma`, record scene 2 (record_frames.mjs), rebuild the bundle + artifact; the lead publishes it as an artifact. Per-track export guard (A9 compliance). |
+| X + A1 (desktop session `alexanderis-buzzing-planet`, separate, keeps running) | Real assets, guns, fixtures, CCTV look, extras, cctv_1 sequence, wall/film code, wording audit. A1: trace seed 3 10:00–10:45 with sim kinematics, OpenCV extractor + tests, shim baseline S30 F1 0.975. | A1 clip (EEVEE too slow, so Workbench) → extract → score → docs/PIXELS.md; cctv_4; wall; 3 cinematic shots (24 fps). Status lives at the top of docs/RENDER.md §0 and in docs/PIXELS.md. **Tell it the new lead session's name.** |
+| V / T / C / R4 | Not started. | V: SmartSpaces shim calibration (handed to M already as MEASURED_SHIM), fusion radius 0.8 → 1.5 m, PERCEPTION.md, fused tracker (cut-order #2). T: brief in STATUS "Proposed/approved" (no latent-tag truth as the appearance cluster; triggers.py in test_no_truth_import). C: Zenoh + BLE demo, A5 broadcast hardening, placement planner (cut-order #3). R4: RunPod RTX validation + robot shots (cap $10), after batch episodes exist. |
+
+### Robot batch launch (only when every go condition holds)
+`PYTHONIOENCODING=utf-8 PYTHONUTF8=1 .venv/Scripts/python.exe ros2/intercycle_eval/intercycle_eval/batch.py --name heldout1 --seeds 1000-1009 --backend l4 --seconds 600 --map out/r3/maps/map_1w_37b6d78.npz --detach`
+then `--collect` (same args) if the client died, then `metrics.py out/robot/heldout1` and `stats.py out/robot/heldout1`.
+
+### Budget at hand-off
+Modal general ≈ $1.5. Isaac ≈ $4.6 ($1.5 monitor + ≈ $0.8 R1 + ≈ $0.35 R2 + ≈ $2.0 R3) of $25. RunPod ≈ $0.18 of $10. Token Factory: $0.006 today (cap $1/day, resets 18:00 CEST).
+
+### Laptop rules that worked
+One heavy job at a time via `mkdir out/.heavy_lock` (owner file inside; every agent including M must take it). Agents commit only their own paths with
+`git commit -- <paths>` and never push; the lead merges `origin/main` (desktop pushes) with `git pull --no-rebase`, runs a secret scan, and pushes.
+
+### Folder clean-up for the next session (not done; nothing here is needed)
+- `out/`: dbg2–5.py, dbg_phys.py, patch3–7.py, smoke_phys.py, prof.out (old physics-sim debugging; 811 MB in out/ overall).
+- `docs/STATUS.md` has grown into a log: the next lead should rewrite it as a short current-state page and move this log to `docs/archive/STATUS_log_17oct.md`.
+- `docs/GEMMA.md` vs `docs/GEMMA_RESULTS.md` (to write); `docs/archive/PLAN-v2.md` is stale.
+- `intercycle/sim/physics.py`, `sim/movers.py` and `sim/observer_shim.py` are retired (kept only because the old physics sim imports them); mark them or move them under `intercycle/sim/legacy/`.
+- `render/isaac/` is legacy (Isaac rendering moved to RunPod/R4).
+- The root `.gitignore` ignores every `data/` dir; `dashboard/data` needs `git add -f` (or rename it to `dashboard/runs/`).
+- `C:\AMD\_archive\` (outside the repo) holds the Isaac recipes; keep it.
+
+### Resume commands from the agents' hand-offs (Git Bash, from `C:/AMD/intercycle`)
+**G (Gemma):** checkpoints skip finished items, and `.env` is read automatically.
+```
+.venv/Scripts/python.exe scripts/gemma_tasks.py run g1 --retry-errors        # 7 hinted (variant B) G1 calls left, 1-4 min each
+.venv/Scripts/python.exe scripts/gemma_tasks.py run g2 --family-source g1    # re-ask the 17 S80/HEM1 bins with G1's family
+.venv/Scripts/python.exe scripts/gemma_tasks.py score                        # out/gemma/results_g.json + phase_names.json
+INTERCYCLE_LLM_MODE=replay .venv/Scripts/python.exe scripts/gemma_tasks.py run g3   # offline replay check
+```
+Logs: `out/llm_calls.jsonl`, `out/llm_cache` (135 entries), `out/gemma/{usage_log,request_log,batches_g}.jsonl`. GEMMA_RESULTS.md must say "Gemma inference via AMD Token Factory"
+and "provider retention per AMD terms", carry the A6 privacy sentence plus disclosures 1 and 2, and note that G1 sends the full masked camera view and light-curtain posts remain as a cue.
+
+**P (phases, measured shim):**
+```
+.venv/Scripts/python.exe scripts/phase_discovery.py sim --name s2m_train --seed 2 --t0 4 --t1 10 --shim measured
+.venv/Scripts/python.exe scripts/phase_discovery.py sim --name s2m_test --seed 2 --t0 13.5 --t1 20 --shim measured
+.venv/Scripts/python.exe scripts/phase_discovery.py eval --train s2m_train --test s2m_test --engine stumpy
+.venv/Scripts/python.exe scripts/phase_discovery.py table out/phases/results_s2m_train__s2m_test.json
+```
+Then headline it in PHASES.md §0, with the ideal-shim run alongside, and use `line_catalogue()` + a 2-state (stopped vs running) purity/ARI. M should key the map on `line_cluster`, not the names.
+
+**R3 (robot):** the dev map copy is `out/r3/maps/dev_layered_map.npz` (old map, dev only). Dev check: `batch.py --name dev22 --seeds 22 --backend l4 --seconds 600 --map out/r3/maps/dev_layered_map.npz`.
+Key files: `ros2/intercycle_eval/intercycle_eval/{plant,camera,social,broadcaster,batch,metrics,stats,phasecheck}.py`, `docs/ROBOT_RESULTS.md` (§0 pre-registration + Amendment 1).
+ROBOT_RESULTS still needs:
+- the results block from `tables.md`;
+- every invalid or timed-out episode;
+- impassive-walker contacts broken out;
+- the 0-collision bounds (0.31 per episode, ~2.2/h);
+- the phase-check table on the final map;
+- RTF and cost;
+- the final map's name and training days;
+- the stand-mode disclosure.
+
+**M (map), final state at hand-off.** Commits 85f2de1, a0aa595, 37b6d78, 78b2254. The heavy lock is released.
+- Final files:
+  - `out/timeline/map_1w.npz` (robot, days 0–6) and `map_5d.npz` (days 0–4, conformal calibration);
+  - `out/timeline/phases/pm_measured.pkl`;
+  - `out/timeline/heldout/` (cal days 5–6, test day 7 on seeds 0/1/2, `splits.json`).
+- **Every number reported today is STALE:** it came from the old assumed shim and the calendar input; old outputs are kept in `out/timeline_shim015/`. The current `out/stream/week1` and `out/newmachine` are also old-shim.
+- Under measured noise the discovered line state calls the 09:00 break "andon" (conservative). test_mapping.py was not re-run after 37b6d78; its fast suites pass.
+- Remaining steps, each under the heavy lock:
+  1. `scripts/map_timeline.py replay --run week1` (~25–30 min): curves, milestones, rewrites week1 for D.
+  2. `scripts/map_timeline.py report` (~20–30 min): A2 conformal margin, α 0.01 headline (0.005 too), tables.md + conformal.json.
+  3. `scripts/new_machine.py --hours 8` on the measured shim (~15 min); watch false alarms/h.
+  4. `docs/MAP_RESULTS.md` (~45 min): strict-overlap unsafe-free with the conformal margin, its CI and α, false-occupied as the price, Brier skill vs climatology, the new machine's post-convergence figure, discovered bins rerun via `map_timeline.py phases --step build|heldout|score`.
+  5. A8 (~2.5 h): the injection harness doesn't exist yet; disclose if short.
+- Caveat: S80's per-bin IoU is weak (one bin has an empty envelope).
+
+---------------------------------------------------------------------------------------------------
+
 ## Lead session 2 (started 17 Oct 16:20 CEST): live log
 **Sat 17:30 checkpoint: met at 16:40.**
 - The 5 failing tests had stale expectations: S50/S60 at x 47.5/57.5 with 7 m zones, AGV dock `DOCK_DX` east, and the tugger loop's 2.8 m corner shorter than the 6.5 m train offset the test probes. Test-only fix. **Full suite: 195 passed, 1 skipped** (6d59ccf, pushed).
