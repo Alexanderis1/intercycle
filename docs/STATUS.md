@@ -1,5 +1,7 @@
 # InterCycle — status at clean stop (17 Oct 2026, ~13:50 CEST)
 
+> **17 Oct 14:40:** the plan is now `docs/DIRECTION.md`. The restart plan that stood here was removed because it conflicted with the user's direction. The facts below (what's solid, failed, test status, resume commands) are still valid.
+
 Deadline: 18 Oct 16:00 CEST (code freeze 12:30). Repo: `C:\AMD\intercycle` (git, MIT, not yet pushed).
 Secrets: Token Factory key in `.env` (gitignored, never commit). Modal token in `%USERPROFILE%\.modal.toml`.
 Nothing is running on Modal. All subagents were told to stop.
@@ -29,18 +31,15 @@ Nothing is running on Modal. All subagents were told to stop.
 - Gemma evaluation on sim-rendered frames: see agent report below.
 
 ## Failed / blocked
-- **Isaac Sim 5.1 on Modal L40S**: segfault in the RTX renderer ("nvidia kernel module not loaded", driver 610 in Modal's sandbox). Gate was 17:00 → treat as **no-go**.
+- **Isaac on Modal L40S (re-tested 17 Oct 16:30 by the monitor):** the RTX renderer segfaults even with the known-good precedent recipe (Modal driver 610). **Physics-only works:** pretrained ANYmal-D walked 7.36 m in 10 s at RTF 1.11. See DIRECTION §5.2. Monitor test spend ≈ $1.5.
+- **Isaac rendering on RunPod RTX 4090 works** (17 Oct 16:00, monitor test, pod terminated, ≈ $0.18): ANYmal-D RTX camera image rendered. See DIRECTION §5.2 / §8.
 - **Blender on Modal**: `Failed to create OptiX denoiser` → fix by switching the denoiser to OIDN/CPU or off. Local Blender worked earlier (render agent).
 
 ## Where we drifted (honest)
 The plan was: learner + signed broadcast + SIPP + A/B/C evaluation, with the event-based sim as the metrics engine and a 3D replay for the video. Since 11:30 the scope grew three times on request — body shop + BLE (fine), a layered dynamic map (done, strong), and a full collision-checked physics sim. The physics sim then absorbed ~1.5 h of traffic-deadlock debugging (lanes, yielding, local-planner minima, keep-out margins, corridor widths). It is close but not yet trustworthy for robot A, and it is slow.
 
-## Recommended restart plan (decide before resuming)
-1. **Freeze scope.** No new layers, entities or renderers.
-2. **Headline numbers from what is solid:** event-sim A/B/C (20 dev seeds now, held-out 1000–1199 after freeze), learner + map accuracy, Gemma verify accuracy and latency on AMD, perception throughput if available.
-3. **Physics sim = credibility demo, not the metrics engine:** fix robot A (re-run after the 3 m walkway change), run ~20 seeds × 4 robots × 2 h on Modal via `cloud/modal_sim.py` as a cross-check table ("collision-checked: 0 collisions, trips/holds agree with the event sim").
-4. **Video:** Blender with denoiser fixed, or the Three.js replay (build log / dashboard) if Blender is not fixed in ≤1 h.
-5. Day 2 as planned: AMD MI300X perception run (when access arrives), dashboard on Modal, held-out seeds, README, video, deck, submit by 15:30.
+## Plan
+See `docs/DIRECTION.md` (single source of truth). Modal spend so far: about $1.5 (17 Oct).
 
 ## Test status at stop: 190 passed, 1 skipped, 5 failed
 All 5 failures come from geometry tweaks made in the last hour (not logic regressions); update the tests' expectations or revert the tweak:
@@ -55,7 +54,7 @@ All 5 failures come from geometry tweaks made in the last hour (not logic regres
 - `scripts/gemma_run_eval.py` written, never run. Not started: `scripts/gemma_ops_demo.py`, `docs/GEMMA_RESULTS.md`.
 - Resume: `python scripts/gemma_frames.py --n 160 --composites 8`, then `set -a; . ./.env; set +a; INTERCYCLE_LLM_MODE=record python scripts/gemma_run_eval.py` (≤15 req/min).
 
-## Perception at stop (real video, NVIDIA PhysicalAI-SmartSpaces, CC-BY-4.0)
+## Perception at stop (NVIDIA PhysicalAI-SmartSpaces, CC-BY-4.0: photorealistic SYNTHETIC video rendered in Omniverse, not real footage)
 - Dataset is public (not gated). Ingested 19 cameras of `MTMC_Tracking_2026/train/Warehouse_000` into Modal Volume `intercycle-data`.
 - RF-DETR Medium (Apache-2.0) at 800x1408 + ByteTrack, 5 min of video at 5 fps on Modal L4:
   detection precision 0.89, recall 0.68 (persons, IoU 0.5); MOTA 0.59; IDF1 0.34; zone occupancy error 1.47 persons/zone-minute

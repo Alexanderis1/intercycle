@@ -1,3 +1,5 @@
+> **ARCHIVED (17 Oct 14:40).** Superseded by `docs/DIRECTION.md`. Kept for history only; do not plan from it.
+
 # InterCycle — 2-day build plan (AMD Developer Hackathon ACT III)
 
 *Working name. Plan v1, written 2026-10-17 11:00 CEST. Supersedes `CONSOLIDATED-v2-DELTA.md` where they disagree (see §2).*

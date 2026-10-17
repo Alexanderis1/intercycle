@@ -1,3 +1,5 @@
+> **Partly outdated (17 Oct 14:40).** Isaac Sim is a **no-go** (it segfaults on Modal and needs NVIDIA RTX). Ignore §1 recommendation, §3 gate and every Isaac-only step. The Kenney low-poly car is dropped. **Still valid:** the asset and licence research (§4), the trace contract (§5), cost (§7) and the shot list (§8). The current plan is `docs/DIRECTION.md` §7 X.
+
 # Photoreal render tier: decision, research, shot list
 
 *Written 2026-10-17 12:40 CEST for the 18 Oct 16:00 submission. Owner: render pipeline. Everything here is

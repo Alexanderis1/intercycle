@@ -1,3 +1,5 @@
+> **Update (17 Oct 14:40).** The Token Factory key is live (in `.env`, gitignored). The "Confirmed vs unknown (no key yet)" and "Switching on live mode" sections are history. Model `Gemma-4-31B-IT`, limits and the task list (G1–G5) are in `docs/DIRECTION.md` §6.
+
 # Gemma 4 in InterCycle
 
 Gemma 4 runs behind one OpenAI-compatible client (`intercycle/llm/`). It does three jobs. **None of them can authorise a robot to enter a zone.**
