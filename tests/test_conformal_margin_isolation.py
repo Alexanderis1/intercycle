@@ -3,8 +3,8 @@ never be reachable from the live chain: twin/observer_live.py, the robot policy 
 frozen JSON margin it writes.
 
 The check walks the static import graph (every `import` / `from ... import`, including ones nested in functions, plus
-the parent packages' __init__ files) from each live entry point through repo-local modules, and also rejects any string
-literal naming the module (a dynamic `importlib.import_module(...)`)."""
+the parent packages' __init__ files) from each live entry point through repo-local modules, and also rejects a string
+literal naming the module inside an import-capable call (a dynamic `importlib.import_module(...)`)."""
 from __future__ import annotations
 
 import ast
@@ -60,6 +60,14 @@ def _with_parents(mod: str) -> list[str]:
     return [".".join(parts[: i + 1]) for i in range(len(parts))]
 
 
+_DYNAMIC_IMPORTERS = {"import_module", "__import__", "find_spec", "spec_from_file_location", "run_module",
+                      "import_string", "load_module", "exec", "eval", "getattr"}
+
+
+def _call_name(func: ast.expr) -> str:
+    return func.attr if isinstance(func, ast.Attribute) else func.id if isinstance(func, ast.Name) else ""
+
+
 def _edges(path: Path) -> tuple[set[str], list[str]]:
     """(imported module names, string literals) of one file."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -78,8 +86,10 @@ def _edges(path: Path) -> tuple[set[str], list[str]]:
                 src = node.module or ""
             mods.add(src)
             mods.update(f"{src}.{a.name}" for a in node.names)  # `from pkg import submodule`
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            strings.append(node.value)
+        elif isinstance(node, ast.Call) and _call_name(node.func) in _DYNAMIC_IMPORTERS:
+            # a dynamic import names its module in a string argument; a deny-list of module names (as in
+            # masks.assert_no_truth) is not an import, so only arguments of import-capable calls count
+            strings.extend(a.value for a in ast.walk(node) if isinstance(a, ast.Constant) and isinstance(a.value, str))
     return mods, strings
 
 
