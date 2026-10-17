@@ -15,5 +15,6 @@ setup(
         "timing_planner = intercycle_nav.timing_planner:main",
         "camera_stub = intercycle_nav.camera_stub:main",
         "devfeed = intercycle_nav.devfeed:main",
+        "nav_probe = intercycle_nav.nav_probe:main",
     ]},
 )

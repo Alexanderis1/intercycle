@@ -1,7 +1,7 @@
 """timing_planner: SIPP timing layer that sends Nav2 goals with nav2_simple_commander (DIRECTION 5.3; see timing.py).
 
     python3 -m intercycle_nav.timing_planner --ros-args -p use_sim_time:=true -p condition:=learned \
-        -p plant_t0:=36000.0 -p init:="4,32,0" -p targets:="HEM1,S80" -p out:=$IC_WORK/goal.json
+        -p plant_t0:=36000.0 -p init:=[4.0,32.0,0.0] -p targets:=HEM1,S80 -p out:=$IC_WORK/goal.json
 
 Inputs:  /intercycle/observer/state (observer_bridge: verified idle windows), /intercycle/camera/observations
          (std_msgs/String JSON {"stamp": ros_s, "targets": [{"id", "visible", "motion_seen"}]}, the robot camera's
@@ -40,16 +40,19 @@ class Planner:
         dp = nav.declare_parameter
         self.condition = dp("condition", "learned").value
         self.plant_t0 = float(dp("plant_t0", 0.0).value)
-        self.init = [float(v) for v in str(dp("init", "4,32,0").value).split(",")]
+        self.init = [float(v) for v in dp("init", [4.0, 32.0, 0.0]).value]       # dock pose x, y, psi (map frame)
         tl = str(dp("targets", "").value)
         self.mission_timeout = float(dp("mission_timeout_s", 900.0).value)
         self.max_wait = float(dp("max_wait_s", 180.0).value)
         self.goal_timeout = float(dp("goal_timeout_s", 240.0).value)
         self.out = str(dp("out", os.path.join(os.environ.get("IC_WORK", "/tmp"), "goal.json")).value)
         self.require_camera = bool(dp("require_camera", True).value)
+        self.backup_speed = float(dp("backup_speed", 0.3).value)        # exit speed (m/s); 0 = exit with a NavigateToPose goal
         sp = dp("scenario", "").value
         scn = S.load(sp) if sp else S.load()
         self.core = TimingCore.from_scenario(scn, speed=float(dp("speed_mps", 0.5).value),
+                                             enter_s=float(dp("enter_s", 4.5).value), exit_s=float(dp("exit_s", 6.5).value),
+                                             wait_offset_m=float(dp("wait_offset_m", 0.95).value),
                                              dwell_s=float(dp("dwell_s", scn.inspection.dwell_s).value),
                                              margin_s=float(dp("margin_s", scn.inspection.safety_margin_s).value))
         self.cam = CameraGate(confirm_n=int(dp("camera_confirm_n", 2).value),
@@ -133,6 +136,39 @@ class Planner:
                 return "TIMEOUT"
         return RESULT.get(self.nav.getResult(), str(self.nav.getResult()))
 
+    def wait_task(self, timeout: float) -> str:
+        t0 = self.ros_t()
+        while not self.nav.isTaskComplete():
+            if self.ros_t() - t0 > timeout:
+                self.nav.cancelTask()
+                return "TIMEOUT"
+        return RESULT.get(self.nav.getResult(), str(self.nav.getResult()))
+
+    def exit_zone(self, tp) -> str:
+        """Leave the zone straight back along the entry line with Nav2's stock BackUp behaviour (behavior_server, local
+        costmap collision checking, through the collision monitor); fall back to a NavigateToPose goal."""
+        d = math.hypot(tp.inside_xy[0] - tp.wait_xy[0], tp.inside_xy[1] - tp.wait_xy[1])
+        r = "REJECTED"
+        if self.backup_speed > 0 and self.nav.backup(backup_dist=d, backup_speed=self.backup_speed,
+                                                     time_allowance=int(d / self.backup_speed * 3 + 5)):
+            r = self.wait_task(d / self.backup_speed * 3 + 10)
+        if r != "SUCCEEDED":
+            r = "backup_" + r + "+" + self.go(*tp.wait_xy, tp.face_psi)
+        return r
+
+    def dwell(self, tg, inside: bool) -> dict:
+        """Hold still for dwell_s; inside a hazard zone (learned / oracle) cut it short when the predicted window no
+        longer leaves exit + margin."""
+        t0 = self.ros_t()
+        cut = False
+        while self.ros_t() - t0 < self.core.dwell_s:
+            rclpy.spin_once(self.nav, timeout_sec=0.05)
+            if inside and self.condition in ("learned", "oracle"):
+                if window_open(self.windows().get(tg.machine), self.plant_t(), self.core.exit_time(tg) + self.core.margin_s) is None:
+                    cut = True
+                    break
+        return {"dwell_s": round(self.ros_t() - t0, 2), "dwell_cut": cut}
+
     # ---------------------------------------------------------------- mission
     def wait_for_entry(self, tg) -> dict | None:
         """Wait at the boundary until the entry rule holds; None on timeout."""
@@ -200,17 +236,22 @@ class Planner:
                 rec["t_enter"] = round(self.plant_t(), 3)
                 r = self.go(*tp.inside_xy, tp.face_psi)
                 rec["to_inside"] = r
+                rec["t_inside"] = round(self.plant_t(), 3)
                 if r != "SUCCEEDED":
                     rec["outcome"] = "nav_failed_inside"
-                    self.go(*tp.wait_xy, tp.face_psi)
+                    rec["to_exit"] = self.exit_zone(tp)
+                    rec["t_exit"] = round(self.plant_t(), 3)
                     out["targets"].append(self.event("target_done", **rec))
                     continue
             self.event("dwell_start", target=tg.id, machine=tg.machine, inside=tp.inside_xy is not None)
-            self.spin_for(self.core.dwell_s)
-            self.event("dwell_end", target=tg.id, machine=tg.machine)
+            rec.update(self.dwell(tg, tp.inside_xy is not None))
+            self.event("dwell_end", target=tg.id, machine=tg.machine, cut=rec["dwell_cut"])
             if tp.inside_xy is not None:
-                rec["to_exit"] = self.go(*tp.wait_xy, tp.face_psi)
+                rec["to_exit"] = self.exit_zone(tp)
                 rec["t_exit"] = round(self.plant_t(), 3)
+                w = (rec.get("entry") or {}).get("window")
+                if w:
+                    rec["overstay_s"] = round(max(0.0, rec["t_exit"] - float(w[1])), 3)   # self-report; holds are R3's truth metric
             rec["outcome"] = "inspected" if tp.inside_xy is not None else "inspected_from_boundary"
             out["targets"].append(self.event("target_done", **rec))
         done = [t for t in out["targets"] if str(t.get("outcome", "")).startswith("inspected")]

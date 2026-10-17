@@ -5,7 +5,8 @@
 
 Same nodes as nav2_bringup (Humble) bringup_launch.py with use_composition False, except the velocity chain:
   controller_server --cmd_vel_nav--> velocity_smoother --cmd_vel_smoothed--> collision_monitor --cmd_vel--> robot
-(nav2_bringup wires velocity_smoother straight to cmd_vel, leaving no place for the protective stop).
+(nav2_bringup wires velocity_smoother straight to cmd_vel, leaving no place for the protective stop). The behavior
+server (spin / backup / drive_on_heading) also publishes into cmd_vel_smoothed, so the protective stop covers it too.
 collision_monitor:=False routes velocity_smoother straight to cmd_vel (debug only).
 localization:=slam_toolbox is the documented fallback (needs ros-humble-slam-toolbox in the image; not installed now).
 Paths resolve relative to this file: the ros2/ tree is mounted, not colcon-installed.
@@ -48,7 +49,7 @@ def _nodes(context):
     nav = [("nav2_controller", "controller_server", [("cmd_vel", "cmd_vel_nav")]),
            ("nav2_smoother", "smoother_server", []),
            ("nav2_planner", "planner_server", []),
-           ("nav2_behaviors", "behavior_server", []),
+           ("nav2_behaviors", "behavior_server", [("cmd_vel", "cmd_vel_smoothed" if cm else "cmd_vel")]),
            ("nav2_bt_navigator", "bt_navigator", []),
            ("nav2_waypoint_follower", "waypoint_follower", []),
            ("nav2_velocity_smoother", "velocity_smoother",

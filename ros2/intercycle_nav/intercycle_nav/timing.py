@@ -41,6 +41,9 @@ class TimingCore:
     dwell_s: float = 4.0
     margin_s: float = 1.0
     horizon_s: float = 900.0
+    wait_offset_m: float = 0.95            # wait pose: robot centre this far outside the boundary (1.0 m long body)
+    enter_s: float | None = 4.5            # measured wait -> inside (Nav2, test double r2_fake1: 3.9 s for 1.7 m)
+    exit_s: float | None = 6.5             # measured inside -> wait (Nav2 BackUp at 0.3 m/s); None = distance / speed
     inside: dict = field(default_factory=dict)
 
     @classmethod
@@ -55,6 +58,11 @@ class TimingCore:
             if tg.kind != "machine":
                 continue
             ix, iz = g.inspect_pose(tg)
+            wx, wz = g.pos[tg.node]
+            m = g.scn.machine(tg.machine)
+            if abs(iz - wz) > 1e-6:                      # push the wait pose out along the entry line
+                edge = m.rect[1] if iz > wz else m.rect[3]
+                g.pos[tg.node] = (wx, edge - math.copysign(self.wait_offset_m, iz - wz))
             n = f"IN_{tg.machine}"
             g.pos[n] = (ix, iz)
             g.adj.setdefault(n, {})
@@ -63,18 +71,28 @@ class TimingCore:
             g.adj[tg.node][n] = d
             g.adj[n][tg.node] = d
             self.inside[tg.machine] = n
-        # re-time every edge at the nominal speed (the site graph is built at the scenario's 1 m/s)
+        # re-time every edge at the nominal speed (the site graph is built at the scenario's 1 m/s); the wait -> inside
+        # edge takes the measured entry time
         for a, nb in g.adj.items():
             for b in nb:
                 (xa, za), (xb, zb) = g.pos[a], g.pos[b]
                 nb[b] = math.hypot(xa - xb, za - zb) / self.speed
+                if b.startswith("IN_") and self.enter_s is not None:
+                    nb[b] = self.enter_s
 
     def inside_travel_s(self, tg: Target) -> float:
         n = self.inside.get(tg.machine)
         return 0.0 if n is None else self.graph.adj[tg.node][n]
 
+    def enter_time(self, tg: Target) -> float:
+        return self.enter_s if self.enter_s is not None else self.inside_travel_s(tg)
+
+    def exit_time(self, tg: Target) -> float:
+        return self.exit_s if self.exit_s is not None else self.inside_travel_s(tg)
+
     def need_s(self, tg: Target) -> float:
-        return 2 * self.inside_travel_s(tg) + self.dwell_s + self.margin_s
+        """Idle time needed from the moment the robot leaves the wait pose: enter + dwell + exit + margin."""
+        return self.enter_time(tg) + self.dwell_s + self.exit_time(tg) + self.margin_s
 
     def nearest_node(self, x: float, y: float) -> str:
         return min((n for n in self.graph.pos if not n.startswith("IN_")),
@@ -96,7 +114,7 @@ class TimingCore:
         t_start = t0 + math.hypot(g.pos[start][0] - xy[0], g.pos[start][1] - xy[1]) / self.speed
         hazard = tg.kind == "machine" and condition != "static"
         goal = self.inside[tg.machine] if hazard else tg.node
-        need = self.need_s(tg) - self.inside_travel_s(tg) if hazard else self.dwell_s
+        need = self.need_s(tg) - self.enter_time(tg) if hazard else self.dwell_s
 
         def safe(n: str):
             if not n.startswith("IN_"):

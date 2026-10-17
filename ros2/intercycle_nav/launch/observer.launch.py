@@ -1,7 +1,7 @@
 """observer_bridge (+ optional dev tools) for one episode condition.
 
     ros2 launch /root/ros2/intercycle_nav/launch/observer.launch.py condition:=learned feed:=unix://$IC_WORK/observer.sock \
-        plant_t0:=36000.0 [camera_stub:=False] [devfeed:=False map_npz:=...]
+        plant_t0:=36000.0 [camera_stub:=False] [devfeed:=False map_npz:=...] [probe:=True]
 
 condition: none (no observer map) | static (static keep-out of all hazard zones) | learned (InterCycle) |
            oracle (map from truth, upper bound: the ORACLE FEED is produced by the episode runner, never by this package)
@@ -34,6 +34,8 @@ def _nodes(context):
                 "horizon_s": float(g("horizon_s"))})]
     if g("camera_stub").lower() in ("true", "1"):
         out.append(_py("intercycle_nav.camera_stub", "camera_stub", {"use_sim_time": True, "mode": g("camera_mode")}))
+    if g("probe").lower() in ("true", "1"):
+        out.append(_py("intercycle_nav.nav_probe", "nav_probe", {"use_sim_time": True}))
     if g("devfeed").lower() in ("true", "1"):
         out.append(_py("intercycle_nav.devfeed", "devfeed",
                        {"use_sim_time": True, "feed": feed, "plant_t0": t0, "map_npz": g("map_npz"),
@@ -50,6 +52,7 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_stub", default_value="False"),
         DeclareLaunchArgument("camera_mode", default_value="always_clear"),
         DeclareLaunchArgument("devfeed", default_value="False"),
+        DeclareLaunchArgument("probe", default_value="True"),       # nav_probe: read-only evidence logger
         DeclareLaunchArgument("map_npz", default_value=""),
         DeclareLaunchArgument("forge_every_s", default_value="0.0"),
         DeclareLaunchArgument("stop_fast_after_s", default_value="0.0"),

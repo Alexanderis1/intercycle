@@ -207,7 +207,9 @@ class ObserverState:
         return None if man is None or not self.map_rx.done else int(man.version)
 
     def snapshot(self, t: float, horizon_s: float = 600.0, robot_xy: tuple[float, float] | None = None,
-                 k_sigma: float = 2.0) -> Snapshot:
+                 k_sigma: float = 2.0, held_pad_m: float = 0.5) -> Snapshot:
+        """held_pad_m: the robot holds a machine while its body (half-length 0.5 m) reaches into the zone, as a light
+        curtain / area scanner would see it, not only while its centre is inside."""
         d = self.rx.latest(t)
         slow, fast = (d.slow, d.fast) if d.ok else (None, None)
         fast_age = None if fast is None else DAY0_UNIX + t - fast.issue_time
@@ -216,7 +218,7 @@ class ObserverState:
         models = {m.index: m for m in slow.machines} if slow else {}
         nows = {m.index: m for m in fast.machines} if fast else {}
         view = self.map_view(t)
-        held_id = self.site.zone_of(*robot_xy) if robot_xy is not None else None
+        held_id = self.site.zone_of(*robot_xy, pad=held_pad_m) if robot_xy is not None else None
         out = []
         n_stopped = 0
         for i, mid in enumerate(self.site.ids):
