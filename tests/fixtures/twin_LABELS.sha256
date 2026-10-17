@@ -1,0 +1,8 @@
+# twin.sealed/1 LABELS
+cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd  test.labels.json
+efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef  test.samples.json
+#ids 0_fx1,3_fx2,3_fx3
+#count camera=9 class=0 n=1
+#count camera=14 class=3 n=2
+#sample_list 1212121212121212121212121212121212121212121212121212121212121212
+#aggregate 499a151d6b48d5b80838f83d27147a8cd4fcd5b58db2c9aa6a06f4771f5523fa

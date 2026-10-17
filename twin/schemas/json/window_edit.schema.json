@@ -1,0 +1,75 @@
+{
+  "additionalProperties": false,
+  "description": "One line of llm/window_edits.jsonl: Gemma may only shorten an inspection window, never move or widen it.",
+  "properties": {
+    "clip_id": {
+      "minLength": 1,
+      "title": "Clip Id",
+      "type": "string"
+    },
+    "press": {
+      "minLength": 1,
+      "title": "Press",
+      "type": "string"
+    },
+    "window_id": {
+      "minLength": 1,
+      "title": "Window Id",
+      "type": "string"
+    },
+    "t0": {
+      "title": "T0",
+      "type": "number"
+    },
+    "t1": {
+      "title": "T1",
+      "type": "number"
+    },
+    "t0_new": {
+      "title": "T0 New",
+      "type": "number"
+    },
+    "t1_new": {
+      "title": "T1 New",
+      "type": "number"
+    },
+    "mode": {
+      "enum": [
+        "record",
+        "replay"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "model": {
+      "minLength": 1,
+      "title": "Model",
+      "type": "string"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    }
+  },
+  "required": [
+    "clip_id",
+    "press",
+    "window_id",
+    "t0",
+    "t1",
+    "t0_new",
+    "t1_new",
+    "mode",
+    "model"
+  ],
+  "title": "WindowEdit",
+  "type": "object"
+}

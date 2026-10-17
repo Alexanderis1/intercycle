@@ -194,7 +194,49 @@ def parquet() -> None:
                    HERE / "twin_log.parquet")
 
 
+def labels() -> None:
+    from twin.schemas.labels import SampleItem, sample_items_sha256
+
+    raw = [
+        {"sample_id": "f0001", "kind": "frame", "clip_id": "c9_dev_0003", "group_id": "g02", "camera": 9, "split": "dev",
+         "t_pts": 2.0},
+        {"sample_id": "f0002", "kind": "frame", "clip_id": "c9_dev_0003", "group_id": "g02", "camera": 9, "split": "dev",
+         "t_pts": 4.0},
+        {"sample_id": "w0001", "kind": "stroke_window", "clip_id": "c9_dev_0003", "group_id": "g02", "camera": 9,
+         "split": "dev", "press": "P9a", "t0": 0.4, "t1": 4.8},
+    ]
+    items = [SampleItem.model_validate(r) for r in raw]
+    sha = sample_items_sha256(items)
+    dump_json("twin_label_samples.json", {
+        "contract": "twin.label_samples/1", "split": "dev", "seed": 20261017,
+        "rule": "frames: seeded RNG over (group, clip), 1 frame every 2 s, stratified by camera; stroke windows: "
+                "seeded-random start per press clip, whole clip up to 10 s",
+        "items": [i.model_dump(mode="json") for i in items], "items_sha256": sha})
+    dump_json("twin_labels.json", {
+        "contract": "twin.labels/1", "split": "dev", "labeller_id": "agent:dev-labeller-a",
+        "labeller_kind": "claude_agent", "blind": True, "proposals_shown": False, "rules_sha256": SHA,
+        "sample_list_sha256": sha,
+        "frames": [
+            {"sample_id": "f0001", "clip_id": "c9_dev_0003", "t_pts": 2.0, "boxes": [
+                {"cls": "person", "x0": 800.0, "y0": 400.0, "x1": 860.0, "y1": 600.0, "foot_u": 830.0, "foot_v": 598.0},
+                {"cls": "forklift", "x0": 1300.0, "y0": 200.0, "x1": 1600.0, "y1": 420.0, "occluded": True}]},
+            {"sample_id": "f0002", "clip_id": "c9_dev_0003", "t_pts": 4.0, "boxes": [], "note": "empty frame"}],
+        "stroke_windows": [{"sample_id": "w0001", "clip_id": "c9_dev_0003", "press": "P9a", "t0": 0.4, "t1": 4.8,
+                            "strokes": [0.9167, 2.9167, 4.75]}]})
+
+
+def sealed() -> None:
+    from twin.schemas.prereg import make_sealed, render_sealed
+
+    ids = ["0_fx1", "3_fx2", "3_fx3"]
+    man = make_sealed("MANIFEST", [(f"{k:02x}" * 32, f"clips/{c}.mp4") for k, c in enumerate(ids)], ids)
+    (HERE / "twin_MANIFEST.sha256").write_text(render_sealed(man), encoding="utf-8", newline="\n")
+    lab = make_sealed("LABELS", [("cd" * 32, "test.labels.json"), ("ef" * 32, "test.samples.json")], ids,
+                      sample_list_sha256="12" * 32)
+    (HERE / "twin_LABELS.sha256").write_text(render_sealed(lab), encoding="utf-8", newline="\n")
+
+
 if __name__ == "__main__":
-    for fn in (site, tasks, safety, dynamics, day_script, realised, summary, primary_metric, parquet):
+    for fn in (site, tasks, safety, dynamics, day_script, realised, summary, primary_metric, parquet, labels, sealed):
         fn()
     print("fixtures written to", HERE)

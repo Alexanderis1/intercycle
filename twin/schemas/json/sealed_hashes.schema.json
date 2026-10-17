@@ -1,0 +1,119 @@
+{
+  "$defs": {
+    "ClassCount": {
+      "additionalProperties": false,
+      "properties": {
+        "camera": {
+          "enum": [
+            9,
+            14
+          ],
+          "title": "Camera",
+          "type": "integer"
+        },
+        "class": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Class",
+          "type": "integer"
+        },
+        "n": {
+          "exclusiveMinimum": 0,
+          "title": "N",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "camera",
+        "class",
+        "n"
+      ],
+      "title": "ClassCount",
+      "type": "object"
+    },
+    "FileHash": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "pattern": "^[^\\s#][^\\t\\n]*$",
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "path"
+      ],
+      "title": "FileHash",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "MANIFEST",
+        "LABELS"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/FileHash"
+      },
+      "minItems": 1,
+      "title": "Files",
+      "type": "array"
+    },
+    "ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Ids",
+      "type": "array"
+    },
+    "counts": {
+      "items": {
+        "$ref": "#/$defs/ClassCount"
+      },
+      "minItems": 1,
+      "title": "Counts",
+      "type": "array"
+    },
+    "sample_list_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sample List Sha256"
+    },
+    "aggregate": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Aggregate",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "files",
+    "ids",
+    "counts",
+    "aggregate"
+  ],
+  "title": "SealedHashes",
+  "type": "object"
+}

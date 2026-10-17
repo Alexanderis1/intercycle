@@ -16,6 +16,11 @@ export and the models differ).
 | runs/<id>/log.parquet                  | tables.LogRow                           | S5a   |
 | runs/<id>/summary.json                 | runs.Summary                            | S5a   |
 | primary-metric json                    | runs.PrimaryMetric                      | S1b   |
+| labels/dev/*.samples.json (+ test)     | labels.SampleList                       | labellers (U14) |
+| labels/dev/*.labels.json (+ test)      | labels.LabelSet                         | labellers (U14) |
+| prereg/split.csv, split_a1.csv, ACTIVE_SPLIT | prereg.SplitRow, prereg.parse_split | S3a |
+| sealed/MANIFEST.sha256, LABELS.sha256  | prereg.SealedHashes (text format)       | custodian |
+| llm/window_edits.jsonl                 | prereg.WindowEdit                       | S3b   |
 
 Observation v2 is owned by lane S4 (`intercycle/observer/mapping.py`) and is not defined here.
 """
@@ -30,6 +35,8 @@ from pydantic import BaseModel
 
 from twin.schemas.dayscript import DayScript
 from twin.schemas.dynamics import Dynamics
+from twin.schemas.labels import LabelSet, SampleList, check_complete
+from twin.schemas.prereg import SealedHashes, SplitRow, WindowEdit, parse_sealed, parse_split, render_sealed
 from twin.schemas.runs import PrimaryMetric, RealisedHeader, RealisedTick, Summary, parse_realised
 from twin.schemas.safety import Safety
 from twin.schemas.site import Site
@@ -42,12 +49,14 @@ MODELS: dict[str, type[BaseModel]] = {
     "site": Site, "tasks": Tasks, "safety": Safety, "dynamics": Dynamics, "day_script": DayScript,
     "realised_state_header": RealisedHeader, "realised_state_tick": RealisedTick, "summary": Summary,
     "primary_metric": PrimaryMetric, "inventory_row": InventoryRow, "tracks_row": TrackRow,
-    "machines_row": MachineRow, "log_row": LogRow,
+    "machines_row": MachineRow, "log_row": LogRow, "labels": LabelSet, "label_samples": SampleList,
+    "split_row": SplitRow, "sealed_hashes": SealedHashes, "window_edit": WindowEdit,
 }
 
-__all__ = ["MODELS", "DayScript", "Dynamics", "InventoryRow", "LogRow", "MachineRow", "PrimaryMetric",
-           "RealisedHeader", "RealisedTick", "Safety", "Site", "Summary", "Tasks", "TrackRow", "export_json",
-           "json_schema", "load", "parse_realised", "validate_table"]
+__all__ = ["MODELS", "DayScript", "Dynamics", "InventoryRow", "LabelSet", "LogRow", "MachineRow", "PrimaryMetric",
+           "RealisedHeader", "RealisedTick", "Safety", "SampleList", "SealedHashes", "Site", "SplitRow", "Summary",
+           "Tasks", "TrackRow", "WindowEdit", "check_complete", "export_json", "json_schema", "load",
+           "parse_realised", "parse_sealed", "parse_split", "render_sealed", "validate_table"]
 
 
 def json_schema(name: str) -> dict[str, Any]:
