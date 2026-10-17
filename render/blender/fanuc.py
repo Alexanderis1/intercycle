@@ -15,6 +15,7 @@ CLI (inside Blender, via bl_run.py):
     -- fanuc.py --ik                     # re-solve the weld waypoints (prints degrees)
 Pure-python parts (FK / IK / waypoints) need only numpy.
 """
+import bisect
 import math
 import os
 import sys
@@ -114,20 +115,52 @@ WELD_Q_DEG = (
     (24.89, -34.59, -28.43, 26.54, -48.92, -33.73),
 )
 WELD_Q = [[math.radians(v) for v in q] for q in WELD_Q_DEG]
-_KW = [HOME, WELD_Q[0], WELD_Q[1], WELD_Q[2], WELD_Q[0], HOME]
+# tip-dresser spots (base frame, +Y side; odd k or a flip mirrors to -Y) and the pose with the electrode tips pointing down
+# onto the cutter, solved with ik(target, tool_frame((0, 0, -1), (1, 0, 0)), HOME); scene_real takes the first spot
+# that fits the cell (corner robots have a neighbour beside them, so they dress beside and behind the base)
+DRESS = (((0.8, 1.1, 1.1), [math.radians(v) for v in (53.97, -12.31, -11.65, 0.0, -90.66, -53.97)]),
+         ((-0.2, 1.1, 1.1), [math.radians(v) for v in (100.3, -25.02, -20.92, 0.0, -94.1, -100.3)]))
+DRESS_Q = DRESS[0][1]          # the dress keys of CYCLE; weld_q swaps in the arm's own spot
+# one weld-station cycle on the sim's active fraction (intercycle/truth/kinematics: T_WELD_END 0.80, T_DRESS_END 0.92,
+# swing / dress split 0.86): weld = approach + a hold on each of the 3 spots + back to the first; swing_out to the
+# dresser; dress; return home. (fraction, pose) keys, smooth-stepped in between.
+CYCLE = ((0.00, HOME), (0.12, WELD_Q[0]), (0.24, WELD_Q[0]), (0.32, WELD_Q[1]), (0.44, WELD_Q[1]), (0.52, WELD_Q[2]),
+         (0.64, WELD_Q[2]), (0.72, WELD_Q[0]), (0.80, WELD_Q[0]), (0.86, DRESS_Q), (0.92, DRESS_Q), (1.00, HOME))
+SPOT_HOLDS = ((0.12, 0.24), (0.32, 0.44), (0.52, 0.64), (0.72, 0.80))   # gun closed on a spot: current flows, sparks
+_CF = [f for f, _ in CYCLE]
 
 
-def weld_q(phase: float, k: int):
-    """Smooth-step through HOME -> 3 weld spots -> HOME over phase 0..1; odd k mirrors the pose (J1/J4/J6)."""
-    n = len(_KW) - 1
-    u = min(max(phase, 0.0), 1.0) * n
-    i = min(int(u), n - 1)
-    a = u - i
-    a = a * a * (3 - 2 * a)
-    q = [_KW[i][j] + a * (_KW[i + 1][j] - _KW[i][j]) for j in range(6)]
-    if k % 2:
-        q[0], q[3], q[5] = -q[0], -q[3], -q[5]
+def mirror_q(q):
+    """The pose reflected in the base XZ plane (J1, J4, J6 negated): the same move on the other side (-Y <-> +Y)."""
+    q = list(q)
+    q[0], q[3], q[5] = -q[0], -q[3], -q[5]
     return q
+
+
+# CYCLE per dress choice (DRESS index, flipped to the other side of the base)
+_CYCLES = {(i, fl): tuple((f, (mirror_q(dq) if fl else dq) if q is DRESS_Q else q) for f, q in CYCLE)
+           for i, (_, dq) in enumerate(DRESS) for fl in (False, True)}
+
+
+def weld_q(phase: float, k: int, dress: tuple[int, bool] = (0, False)):
+    """Pose at active fraction `phase` of CYCLE (phase < 0: HOME, the idle pose); odd k mirrors the pose (J1/J4/J6);
+    dress = (DRESS index, flip): where this arm's tip dresser is (scene_real._tip_dresser)."""
+    if phase < 0:
+        q = list(HOME)
+    else:
+        keys = _CYCLES[dress]
+        f = min(phase, 1.0)
+        i = min(bisect.bisect_right(_CF, f) - 1, len(keys) - 2)
+        (f0, q0), (f1, q1) = keys[i], keys[i + 1]
+        a = (f - f0) / (f1 - f0)
+        a = a * a * (3 - 2 * a)
+        q = [q0[j] + a * (q1[j] - q0[j]) for j in range(6)]
+    return mirror_q(q) if k % 2 else q
+
+
+def spot_welding(phase: float) -> bool:
+    """True while the gun holds on a weld spot (SPOT_HOLDS): weld current, spatter."""
+    return any(a <= phase < b for a, b in SPOT_HOLDS)
 
 
 # ---------------------------------------------------------------------------------------- materials

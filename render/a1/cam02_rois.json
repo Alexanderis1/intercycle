@@ -1,0 +1,9 @@
+{
+ "camera": "cctv_1 (CAM02), render/cctv/cctv_post output 640x360, overscan 0.055",
+ "note": "commissioning: one box per machine zone, placed from the scenario layout projected through the camera and checked on a frame (scripts/pixel_phases.py docs/PIXELS.md)",
+ "size": [640, 360],
+ "rois": {
+  "S30": [68, 122, 212, 215],
+  "S40": [210, 106, 312, 180]
+ }
+}

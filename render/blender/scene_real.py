@@ -56,9 +56,11 @@ def _near(a: float, prev: float) -> float:
 class RealScene(rb.BScene):
     def build(self):
         self.rng = random.Random(5)
+        self.blur = not self.args.no_blur
         self.worker_names: list[str] = []
         self.extras: dict[str, tuple[extras.Extra, object]] = {}   # extra_<n> -> (schedule, worker root)
         self.shown_extras: set[str] = set()                       # the extras of the current view
+        self.kin = load_kin(self.args.kin) if self.args.kin else {}  # mid -> (t, state, pose_f): the sim's kinematics
         self._render_settings()
         self._world()
         plant.build(self, self.args.light_e)
@@ -75,6 +77,13 @@ class RealScene(rb.BScene):
         self.cam_obj.data.sensor_width = 36.0
         self.cam_obj.data.clip_end = 1000.0
         self.scene.camera = self.cam_obj
+        if self.args.engine == "eevee":                         # fast long clips (A1 pixels -> phases); Cycles otherwise
+            self.scene.render.engine = "BLENDER_EEVEE"
+            self.scene.eevee.taa_render_samples = self.args.samples
+        if self.args.no_shadows:                                # EEVEE's shadow buffer overflows with 136 area lights here:
+            for o in self.scene.objects:                        # 14 s/frame with shadows missing anyway; off -> ~1.7 s
+                if o.type == "LIGHT":
+                    o.data.use_shadow = False
 
     # ----- world: daylight through skylights and wall bands only -----
     def _world(self):
@@ -145,7 +154,7 @@ class RealScene(rb.BScene):
                 places += self._end_robots(mid, cx, cy, w)
             for name, x, y, yaw, k, cabinet in places:
                 joints, tip = fanuc.build_fanuc(name, (x, y, 0.0), yaw, collection=self.col_real)
-                self.arms[mid].append((joints, k, tip))
+                self.arms[mid].append((joints, k, tip, (0, False)))
                 self.box(name + "_riser", (1.0, 1.0, 0.05), (x, y, 0.025), dark)
                 if cabinet and m.get("on_line"):                 # robot controller + weld timer behind each corner robot
                     sg = 1 if y > cy else -1
@@ -155,29 +164,39 @@ class RealScene(rb.BScene):
                     self.box(name + "_valve", (0.5, 0.25, 0.35), (x + 0.65, yc, 1.2), self.rounded(plant.mat(self, "steel_grey")))
             if m.get("on_line") and kind in ("weld_station", "respot", "framing"):
                 bases = [(x, y) for _, x, y, _, _, _ in places]
-                for name, x, y, yaw, _, _ in places:
-                    self._tip_dresser(name, x, y, yaw, m, bases)
+                dress = [self._tip_dresser(name, x, y, yaw, k, m, bases) for name, x, y, yaw, k, _ in places]
+                self.arms[mid] = [(j, k, tip, dr) for (j, k, tip, _), dr in zip(self.arms[mid], dress)]
                 self._cell_frame(m, places)
 
-    def _tip_dresser(self, name, x, y, yaw, m, bases):
-        """Electrode tip dresser on a pedestal beside the robot, on whichever side stays inside the cell rect and
-        farthest from the other robot bases and the skid tooling (|y - line| > 1.6 m)."""
+    def _tip_dresser(self, name, x, y, yaw, k, m, bases) -> tuple[int, bool]:
+        """Electrode tip dresser on a pedestal where the gun tip is in the dress pose, at the first fanuc.DRESS spot
+        (mirrored for odd k; as posed, then flipped to the other side of the base) that is inside the cell rect, off
+        the skid tooling (|y - line| > 1.6 m) and 0.7 m from the other robot bases. Returns that (DRESS index, flip)
+        for fanuc.weld_q; with no free spot there is no dresser (logged) and the robot dresses in the air."""
         cx, cy, (w, d) = m["x"], m["z"], m["size"]
         hx, hy = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
-        best = None
-        for sd in (1, -1):                                      # beside the base and 0.3 m behind it, out of the gun's path
-            px, py = x - sd * 0.85 * hy - 0.3 * hx, y + sd * 0.85 * hx - 0.3 * hy
-            if abs(px - cx) > w / 2 - 0.3 or abs(py - cy) > d / 2 - 0.3 or abs(py - cy) < 1.6:
+        fails = []
+        for i, ((tx, ty0, tz), _) in enumerate(fanuc.DRESS):
+            for flip in (False, True):
+                ty = -ty0 if (k % 2) != flip else ty0
+                px, py = x + tx * hx - ty * hy, y + tx * hy + ty * hx
+                clear = min((math.hypot(px - bx, py - by) for bx, by in bases if (bx, by) != (x, y)),   # other robots only
+                            default=math.inf)
+                why = [r for r, bad in (("outside the cell", abs(px - cx) > w / 2 - 0.3 or abs(py - cy) > d / 2 - 0.3),
+                                        ("on the skid tooling", abs(py - cy) < 1.6), (f"{clear:.2f} m from a robot", clear < 0.7)) if bad]
+                if not why:
+                    break
+                fails.append(f"({px:.2f}, {py:.2f}) is {', '.join(why)}")
+            else:
                 continue
-            clear = min(math.hypot(px - bx, py - by) for bx, by in bases if (bx, by) != (x, y))   # other robots only
-            if best is None or clear > best[0]:
-                best = (clear, px, py)
-        if best is None or best[0] < 0.7:
-            return
-        _, px, py = best
-        self.box(name + "_td_post", (0.14, 0.14, 1.0), (px, py, 0.5), self.rounded(plant.mat(self, "steel_grey")))
-        self.box(name + "_td_head", (0.3, 0.22, 0.16), (px, py, 1.08), self.rounded(plant.mat(self, "ral7035")))
-        self.cyl(name + "_td_motor", 0.06, 0.22, (px, py, 1.27), plant.mat(self, "dark_steel"))
+            break
+        else:
+            rb.log(f"no tip dresser for {name}: dress spots {'; '.join(fails)}")
+            return 0, False
+        self.box(name + "_td_post", (0.14, 0.14, tz - 0.08), (px, py, (tz - 0.08) / 2), self.rounded(plant.mat(self, "steel_grey")))
+        self.box(name + "_td_head", (0.3, 0.22, 0.16), (px, py, tz), self.rounded(plant.mat(self, "ral7035")))   # cutter at the tips
+        self.cyl(name + "_td_motor", 0.06, 0.22, (px - 0.22 * hx, py - 0.22 * hy, tz - 0.05), plant.mat(self, "dark_steel"))
+        return i, flip
 
     def _cell_frame(self, m, places):
         """Overhead steel frame inside the cell rect: four corner posts, edge and end beams at FRAME_Z, a cable
@@ -536,20 +555,26 @@ class RealScene(rb.BScene):
             lit = STACK.get(st, "g")
             for col, (mm, rgb) in self.stack[mid].items():
                 self.set_emit(mm, rgb, 25.0 if col == lit else 0.0)
-            active = tr.intervals("ACTIVE") if tr else []
-            on, ph = core.phase_of(active, t) if active else (False, 0.0)
-            for joints, k, _tip in self.arms.get(mid, []):
-                fanuc.set_q(joints, fanuc.weld_q(ph, k) if on else fanuc.HOME)
+            if mid in self.kin:                      # the sim's kinematic timeline: pose fraction held through HOLD / TRIP
+                kst, ph = kin_at(self.kin[mid], t)
+                weld = kst == "ACTIVE" and fanuc.spot_welding(ph)
+            else:                                    # takt trace: fraction of the current ACTIVE span, -1 = idle (home)
+                active = tr.intervals("ACTIVE") if tr else []
+                on, f = core.phase_of(active, t) if active else (False, 0.0)
+                ph = f if on else -1.0
+                weld = on and fanuc.spot_welding(ph)
+            for joints, k, _tip, dress in self.arms.get(mid, []):
+                fanuc.set_q(joints, fanuc.weld_q(ph, k, dress))
             if mid in self.sparks:
-                self._sparks(mid, t, on, ph)
+                self._sparks(mid, t, weld)
         if shot is not None and shot.thermal:        # data-hall thermal pass (SYNTHETIC temperatures)
             for mp, row, idx, zf in self.skins:
                 self.set_emit(mp, core.thermal_lut((core.rack_temp_c(row, idx, zf, t) - 20.0) / 22.0), 1.3)
 
-    def _sparks(self, mid, t, on, ph):
+    def _sparks(self, mid, t, welding):
         pool, flash, _ = self.sparks[mid]
         fi = int(t * 30)
-        weld = on and 0.2 < ph < 0.85 and ((fi * 2654435761 + sum(map(ord, mid))) % 5 < 2) and self.arms.get(mid)
+        weld = welding and ((fi * 2654435761 + sum(map(ord, mid))) % 5 < 2) and self.arms.get(mid)   # spatter bursts
         for o in pool:
             o.location = (0, 0, -50)
         flash.location = (0, 0, -50)
@@ -557,7 +582,7 @@ class RealScene(rb.BScene):
         if not weld:
             return
         self.bpy.context.view_layer.update()
-        joints, _, tip = self.arms[mid][fi % len(self.arms[mid])]
+        joints, _, tip, _ = self.arms[mid][fi % len(self.arms[mid])]
         p = tip.matrix_world.translation.copy()
         mu = self.mu
         out = joints["a1"].matrix_world.translation - p      # spatter leaves the electrode gap on the robot's (open) side,
@@ -577,6 +602,26 @@ class RealScene(rb.BScene):
 # =====================================================================================
 # stills
 # =====================================================================================
+def load_kin(path) -> dict:
+    """render/synth_trace.py --machines sim sidecar -> {mid: (t, state, pose_f)} numpy arrays, sorted by t."""
+    import numpy as np
+    import pandas as pd
+    df = pd.read_parquet(path)
+    out = {}
+    for mid, g in df.groupby("entity_id", observed=True):
+        g = g.sort_values("t")
+        out[str(mid)] = (g.t.to_numpy(np.float64), g.state.astype(str).to_numpy(), g.pose_f.to_numpy(np.float64))
+    return out
+
+
+def kin_at(k, t: float) -> tuple[str, float]:
+    """(state, pose_f) of the latest kinematics sample at or before t."""
+    import numpy as np
+    ts, st, pf = k
+    i = max(int(np.searchsorted(ts, t, side="right")) - 1, 0)
+    return str(st[i]), float(pf[i])
+
+
 def still_cam(name: str, scn: dict) -> "core.Cam":
     if name == "wide":                                         # high corner view down the whole line
         return core.Cam((1.2, 46.5, 8.4), (50.0, 19.0, 0.0), 19.0)
@@ -646,7 +691,7 @@ def assign_ids(bs) -> dict[str, dict]:
     nxt = 1
     groups = [(eid, bs.ctx.tracks[eid].cls, root) for eid, root in bs.prims.items() if eid in bs.ctx.tracks]
     for mid, arms in bs.arms.items():
-        for k, (joints, _, _) in enumerate(arms):
+        for k, (joints, *_) in enumerate(arms):
             root = joints["a1"]
             while root.parent is not None:
                 root = root.parent
@@ -743,7 +788,7 @@ def _key_pose(bs, frame: int) -> None:
         o.keyframe_insert("location", frame=frame)
         o.keyframe_insert("rotation_euler", frame=frame)
     for arms in bs.arms.values():
-        for joints, _, _ in arms:
+        for joints, *_ in arms:
             for j in joints.values():
                 j.keyframe_insert("rotation_euler", frame=frame)
 
@@ -751,15 +796,31 @@ def _key_pose(bs, frame: int) -> None:
 def _render_clip(bs, t0: float, n: int, dt: float, frames: Path, after, tag: str, cam_at=None) -> None:
     """Render frames/f_00000.. at t0 + k dt with motion blur over a dt/2 shutter that ends on the frame (like a sensor
     exposing the frame interval). Entity roots, arm joints and, when cam_at(t) moves it, the camera are keyed per
-    frame so Cycles blurs them; after(png) runs on each written frame."""
+    frame so Cycles blurs them; after(png) runs on each written frame. frames.csv next to frames/ gives each frame's
+    sim time. --no-blur (long clips): no keys, no blur, the scene is just posed at t."""
     bpy, sc, cam = bs.bpy, bs.scene, bs.cam_obj
     bpy.context.preferences.edit.keyframe_new_interpolation_type = "LINEAR"
-    sc.render.use_motion_blur = True
+    sc.render.use_motion_blur = bs.blur
     sc.render.motion_blur_shutter = 0.5
     sc.render.motion_blur_position = "END"
     frames.mkdir(parents=True, exist_ok=True)
     for old in frames.glob("f_*.png"):    # a shorter re-run must not leave the old tail for the mp4 / cctv_post
         old.unlink()
+    (frames.parent / "frames.csv").write_text("frame,file,t\n" + "".join(
+        f"{i},f_{i:05d}.png,{t0 + i * dt:.6f}\n" for i in range(n)), encoding="utf-8")
+    if not bs.blur:
+        for i in range(n):
+            t = t0 + i * dt
+            bs.apply(t)
+            if cam_at is not None:
+                bs.point_camera(cam_at(t))
+            dst = frames / f"f_{i:05d}.png"
+            sc.render.filepath = str(dst)
+            bpy.ops.render.render(write_still=True)
+            after(dst)
+            if i % 250 == 0:
+                rb.log(f"[{tag}] frame {i + 1}/{n} t={t:.2f}s")
+        return
 
     def pose(i: int, t: float) -> None:
         bs.apply(t)
@@ -843,6 +904,10 @@ def main(argv=None) -> int:
     ap.add_argument("--gt", action="store_true", help="also write instance/depth ground truth for cctv_* stills (<out>/gt)")
     ap.add_argument("--extras", type=int, default=2,
                     help="cap of line-side extras per view (never more than the trace persons in it); 0 = none")
+    ap.add_argument("--engine", choices=("cycles", "eevee"), default="cycles", help="eevee: fast long clips (A1)")
+    ap.add_argument("--no-blur", action="store_true", help="no motion blur / per-frame keys (long clips)")
+    ap.add_argument("--no-shadows", action="store_true", help="lights cast no shadows (fast EEVEE long clips)")
+    ap.add_argument("--kin", default="", help="machine kinematics sidecar (render/synth_trace.py --machines sim): arms follow it")
     ap.add_argument("--haze", type=float, default=0.0, help="world volume scatter density (1/m), e.g. 0.002; 0 = off")
     ap.set_defaults(hdri_id="kloofendal_overcast_puresky", cache=r"D:\icdata\assets\ph_cache")
     args = ap.parse_args(argv)

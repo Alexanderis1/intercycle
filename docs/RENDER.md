@@ -2,6 +2,26 @@
 
 ## 0. Workstream X: realistic renders on the user's desktop (current, 17 Oct evening)
 
+> **Status for the lead (17 Oct 18:50).**
+> - **Done (pushed):**
+>   - line-side extras;
+>   - cctv_1 sequence + post (no extras):
+>     - frames `D:\icdata\renders\seq_sim1\cctv_1\frames`, GT `...\cctv_1\gt`;
+>     - CCTV frames + COCO + mp4 `...\cctv_1\cctv`;
+>     - preview `render/stills/seq_sim1/cam02_preview.mp4`;
+>   - film / wall code;
+>   - wording audit;
+>   - A1 code (36d1d2c): arms follow the sim's kinematics, tip dressers at the dress tip, fast EEVEE clip mode, pixel features + scoring.
+> - **In flight:** the A1 clip.
+>   - Settings: cctv_1, seed 3, 10:00-10:45, 640x360, **2 fps** (user's choice: 6-10 fps would take ~8 h of GPU), EEVEE, 4 samples, no shadows (EEVEE's shadow buffer overflows with 136 lights).
+>   - Output: `D:\icdata\renders\a1`, ETA ~21:20. A1 status: `docs/PIXELS.md`.
+> - **Next:**
+>   1. A1: post, extract, score, PIXELS.md;
+>   2. cctv_4 sequence + post;
+>   3. wall tiles + wall;
+>   4. the 3 cinematic shots.
+>   - GPU window for V around 00:00-02:00 when asked.
+
 Machine: user's desktop, standalone Blender 5.1 (Python 3.13), Cycles + **OptiX** on the RTX 4060 Ti 8 GB. No Modal spend.
 Large files never go to git: assets in `D:\icdata\assets\`, renders in `D:\icdata\renders\`, extra Python packages in `D:\icdata\pylib\`.
 
