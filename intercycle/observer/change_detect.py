@@ -1,0 +1,237 @@
+"""M-W4: in-zone change detection and count forgetting per OBSERVED tick (never imports ground truth; numpy only).
+
+The defect (docs/WEAKNESSES.md M-W4, safety direction). The map's occupancy is p = hits / visits per cell and slice, and
+a cell with p < p_min is broadcast FREE. `observer/change.py` only watches static space outside every known zone + 1 m,
+so a new arm 0.5-1 m from a zone, a robot program change or a newly always-occupied cell inside a zone is absorbed into
+the counts. The counts never decay, so against a week of visits such a cell needs about 9 h (a 30 %-swept cell about
+30 h) to reach p_min, and until then it is broadcast FREE.
+
+The fix, as one small object per grid (`ChangeLayer`):
+
+1. Counts with forgetting per observed tick. Per (slice, cell) the layer keeps decayed visits n, hits k and entries e
+   (a hit whose previous observed tick of the same cell was not a hit). On a tick where the cell is OBSERVED, n, k and e
+   of the current slice are multiplied by lam = 2 ** (-1 / half_life_ticks) and then incremented. Cells that are not
+   observed (camera down, occluded, outside the frustum) and the other slices are not touched: forgetting runs on
+   coverage, never on wall time, so a camera outage or an unvisited slice does not erase what the map knows.
+   p = k / n is the map's occupancy with forgetting (`p()`); the caller may broadcast it instead of undecayed counts.
+
+2. CUSUM on in-zone hits in cells with p < p_min. A cell is MONITORED in the current slice when n >= min_visits and
+   p < p_min there (the map would broadcast it FREE). Per monitored, observed cell a one-sided CUSUM
+   S = clip(S + llr, 0, cap) runs on its hit sequence. Camera hits come in runs (one arm pass covers a cell for several
+   ticks, a rare excursion is one burst), so the log-likelihood ratio is the one of a two-state Markov chain, not of iid
+   Bernoulli draws: llr depends on the cell's previous observed state (miss/hit) and its current one,
+       miss->hit  log(b1 / b0)        miss->miss  log((1 - b1) / (1 - b0))
+       hit->hit   log(a1 / a0)        hit->miss   log((1 - a1) / (1 - a0))
+   with the null entry and stay probabilities b0 = P(hit | miss before), a0 = P(hit | hit before) estimated from the
+   cell's own decayed counts in this slice (weak priors, b0 clipped to >= b_floor), and the change alternative "entries
+   at least m times as frequent (and at least b_alt per tick), stays m times as long": b1 = max(m * b0, b_alt),
+   1 - a1 = (1 - a0) / m. A short burst that the cell already shows at its learned rate (a rare tool change, a gross
+   detection error) adds one entry term and is drained by the miss->miss terms; a new arm (frequent entries, long stays)
+   or a newly always-occupied cell (long stays) climbs at a bounded rate.
+   S >= h  ->  the cell is UNKNOWN at once (that very tick).
+
+3. Lifting UNKNOWN. An UNKNOWN cell is lifted after `clear_ticks` OBSERVED ticks without an unexplained hit (a hit on the
+   cell while it is monitored). This covers both ends: the change went away (no hits), or the decayed counts absorbed it
+   (p >= p_min in every slice where it now shows hits, so the map itself broadcasts it occupied). An unobserved cell is
+   never lifted, and its S is frozen.
+
+What the caller decides (and is documented by the caller, e.g. twin/observer_live.py):
+- the grid (a machine's 0.25 m L1 envelope grid, the twin's floor grid) and the slices (phase bins, time-of-day bins;
+  1 slice if unsliced); `half_life_ticks` counts the observed ticks of ONE (slice, cell), so with S slices visited
+  evenly and full coverage the wall-clock half-life is S * half_life_ticks / hz. The default is 24 h of wall clock at
+  2 Hz spread over the slices: 172800 / n_slices observed ticks (the 24 h half-life of WEAKNESSES M-W4);
+- which detections are hits ("in-zone hits": e.g. machine parts inside the zone + margin; people are not machine
+  changes);
+- that an untrusted slice (n < min_visits) is shown conservatively by the map (it is not monitored here).
+
+API (all arrays flat over the grid, length n_cells):
+    layer = ChangeLayer(n_cells, n_slices=1, cfg=ChangeConfig(), shape=None)
+    res = layer.step(slice_idx, hits, observed)       # StepResult(alarmed=idx, lifted=idx)
+    layer.unknown_mask()                              # bool[n_cells], dilated by cfg.dilate cells when shape is given
+    layer.p(slice_idx)                                # decayed occupancy of a slice (NaN where never observed)
+    layer.visits(slice_idx), layer.S, layer.unknown, layer.monitored(slice_idx)
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import numpy as np
+
+HZ = 2.0
+DAY_TICKS = 24 * 3600 * HZ          # 172800 observed ticks = 24 h at 2 Hz
+
+
+@dataclass(frozen=True)
+class ChangeConfig:
+    """Constants of the in-zone detector. Defaults are set from the model, not tuned on the test streams (see
+    tests/test_change_detect.py for the numbers they give)."""
+    p_min: float = 0.05             # the map's FREE threshold (L1 envelope / hot-cell threshold): monitored below it
+    min_visits: float = 60.0        # (decayed) observed ticks of a (slice, cell) before its null is trusted
+    h: float = 20.0                 # alarm threshold (log-likelihood units); cap = cap_mult * h
+    cap_mult: float = 1.5
+    m: float = 4.0                  # change alternative: entries m x as frequent, stays m x as long
+    b_alt: float = 0.05             # ... and at least one entry per 1 / b_alt observed ticks
+    b_floor: float = 1e-3           # lower clip of the null entry probability (bounds one entry's evidence)
+    b_prior: tuple = (0.5, 50.0)    # (pseudo entries, pseudo empty ticks) for b0
+    a_prior: tuple = (1.0, 2.0)     # (pseudo stays, pseudo hits) for a0: prior mean 0.5
+    hold: int = 2                   # run state = a hit within the last hold + 1 observed ticks (bridges detection gaps)
+    clear_ticks: int = 1800         # observed ticks without an unexplained hit before UNKNOWN is lifted (15 min at 2 Hz)
+    half_life_ticks: float | None = None   # None: DAY_TICKS / n_slices (24 h wall clock with even slice coverage)
+    dilate: int = 0                 # cells added around UNKNOWN cells by unknown_mask() (needs `shape`)
+
+
+@dataclass
+class StepResult:
+    alarmed: np.ndarray             # flat cell indices that became UNKNOWN this tick
+    lifted: np.ndarray              # flat cell indices whose UNKNOWN was lifted this tick
+
+
+class ChangeLayer:
+    """Decayed occupancy counts + in-zone Markov CUSUM for one grid. See the module docstring."""
+
+    def __init__(self, n_cells: int, n_slices: int = 1, cfg: ChangeConfig | None = None, shape: tuple | None = None):
+        self.cfg = cfg = cfg or ChangeConfig()
+        if shape is not None and int(np.prod(shape)) != n_cells:
+            raise ValueError(f"shape {shape} does not hold {n_cells} cells")
+        self.n_cells, self.n_slices, self.shape = int(n_cells), int(n_slices), shape
+        hl = cfg.half_life_ticks if cfg.half_life_ticks is not None else DAY_TICKS / self.n_slices
+        if not hl > 0:
+            raise ValueError("half_life_ticks must be > 0")
+        self.half_life_ticks = float(hl)
+        self.lam = 2.0 ** (-1.0 / self.half_life_ticks)
+        z = (self.n_slices, self.n_cells)
+        self.n = np.zeros(z)            # decayed observed ticks
+        self.k = np.zeros(z)            # decayed hit ticks (the map's occupancy p = k / n)
+        self.kx = np.zeros(z)           # decayed run-state ticks (x = 1)
+        self.e = np.zeros(z)            # decayed run entries (x: 0 -> 1)
+        self.prev = np.zeros(self.n_cells, bool)       # run state x at the cell's last observed tick
+        self.since = np.full(self.n_cells, 1 << 30, np.int64)      # observed ticks since the cell's last hit
+        self.S = np.zeros(self.n_cells)
+        self.unknown = np.zeros(self.n_cells, bool)
+        self.obs_ticks = np.zeros(self.n_cells, np.int64)          # observed ticks per cell (any slice)
+        self.last_unexpl = np.full(self.n_cells, -(1 << 40), np.int64)
+        self.cap = cfg.cap_mult * cfg.h
+        self.n_alarms = 0
+
+    # ------------------------------------------------------------------ queries
+    def p(self, slice_idx: int = 0) -> np.ndarray:
+        n = self.n[slice_idx]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(n > 0, self.k[slice_idx] / np.where(n > 0, n, 1.0), np.nan)
+
+    def visits(self, slice_idx: int = 0) -> np.ndarray:
+        return self.n[slice_idx].copy()
+
+    def monitored(self, slice_idx: int = 0) -> np.ndarray:
+        """Cells the map would broadcast FREE in this slice and whose null is trusted."""
+        n, k = self.n[slice_idx], self.k[slice_idx]
+        return (n >= self.cfg.min_visits) & (k < self.cfg.p_min * n)
+
+    def unknown_mask(self) -> np.ndarray:
+        U = self.unknown.copy()
+        d = self.cfg.dilate
+        if d > 0 and self.shape is not None and U.any():
+            U = _dilate(U.reshape(self.shape), d).reshape(-1)
+        return U
+
+    # ------------------------------------------------------------------ step
+    def null_params(self, slice_idx: int, cells: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+        """(a0, b0): null stay and entry probabilities in this slice (all cells, or the given flat indices)."""
+        c = self.cfg
+        sel = slice(None) if cells is None else cells
+        n, k, e = self.n[slice_idx, sel], self.kx[slice_idx, sel], self.e[slice_idx, sel]
+        b0 = (e + c.b_prior[0]) / (np.maximum(n - k, 0.0) + c.b_prior[1])
+        a0 = (np.maximum(k - e, 0.0) + c.a_prior[0]) / (k + c.a_prior[1])
+        return np.clip(a0, 0.02, 0.995), np.clip(b0, c.b_floor, 0.5)
+
+    def llr(self, slice_idx: int, cells: np.ndarray, prev: np.ndarray, hit: np.ndarray) -> np.ndarray:
+        """Markov log-likelihood ratio (change vs null) of the transition prev -> hit on the given cells."""
+        c = self.cfg
+        a0, b0 = self.null_params(slice_idx, cells)
+        b1 = np.maximum(np.minimum(np.maximum(c.m * b0, c.b_alt), 0.95), b0)
+        a1 = 1.0 - (1.0 - a0) / c.m
+        return np.where(prev,
+                        np.where(hit, np.log(a1 / a0), np.log((1.0 - a1) / (1.0 - a0))),
+                        np.where(hit, np.log(b1 / b0), np.log((1.0 - b1) / (1.0 - b0))))
+
+    def step(self, slice_idx: int, hits: np.ndarray, observed: np.ndarray) -> StepResult:
+        """One tick. hits / observed: bool[n_cells]. A cell that is not observed is left exactly as it was."""
+        if not 0 <= slice_idx < self.n_slices:
+            raise IndexError(f"slice {slice_idx} outside 0..{self.n_slices - 1}")
+        hits = np.asarray(hits, bool).reshape(-1)
+        obs = np.asarray(observed, bool).reshape(-1)
+        if hits.shape[0] != self.n_cells or obs.shape[0] != self.n_cells:
+            raise ValueError("hits / observed must have n_cells entries")
+        hits = hits & obs
+        idx = np.flatnonzero(obs)
+        empty = np.zeros(0, np.int64)
+        if not len(idx):
+            return StepResult(empty, empty)
+        s = slice_idx
+        h = hits[idx]
+        pv = self.prev[idx]
+        self.since[idx] = np.where(h, 0, self.since[idx] + 1)
+        x = self.since[idx] <= self.cfg.hold                        # run state (gap-filled hits)
+        # ---- CUSUM on monitored cells (null from the counts BEFORE this tick)
+        mon = self.monitored(s)[idx]
+        alarmed, lifted = empty, empty
+        self.obs_ticks[idx] += 1
+        if mon.any():
+            im = idx[mon]
+            r = self.llr(s, im, pv[mon], x[mon])
+            self.S[im] = np.clip(self.S[im] + r, 0.0, self.cap)
+            unexpl = im[h[mon]]
+            self.last_unexpl[unexpl] = self.obs_ticks[unexpl]
+            new = im[(self.S[im] >= self.cfg.h) & ~self.unknown[im]]
+            if len(new):
+                self.unknown[new] = True
+                self.n_alarms += len(new)
+                alarmed = new
+        # ---- lift UNKNOWN after clear_ticks observed ticks without an unexplained hit
+        iu = idx[self.unknown[idx]]
+        if len(iu):
+            done = iu[self.obs_ticks[iu] - self.last_unexpl[iu] >= self.cfg.clear_ticks]
+            if len(done):
+                self.unknown[done] = False
+                self.S[done] = 0.0
+                lifted = done
+        # ---- counts with forgetting on observed cells of this slice only
+        lam = self.lam
+        self.n[s, idx] = self.n[s, idx] * lam + 1.0
+        self.k[s, idx] = self.k[s, idx] * lam + h
+        self.kx[s, idx] = self.kx[s, idx] * lam + x
+        self.e[s, idx] = self.e[s, idx] * lam + (x & ~pv)
+        self.prev[idx] = x
+        return StepResult(alarmed, lifted)
+
+
+def _dilate(mask: np.ndarray, cells: int) -> np.ndarray:
+    """Chebyshev dilation of a 2-D bool grid by `cells` (square structuring element)."""
+    out = mask.copy()
+    nx, nz = mask.shape
+    for dx in range(-cells, cells + 1):
+        for dz in range(-cells, cells + 1):
+            if dx == 0 and dz == 0:
+                continue
+            src = mask[max(0, -dx):nx - max(0, dx), max(0, -dz):nz - max(0, dz)]
+            out[max(0, dx):max(0, dx) + src.shape[0], max(0, dz):max(0, dz) + src.shape[1]] |= src
+    return out
+
+
+def half_life_for(wall_hours: float, n_slices: int, hz: float = HZ) -> float:
+    """Observed ticks per (slice, cell) that give a wall-clock half-life of `wall_hours` when the slices are visited
+    evenly and the cell is always observed."""
+    return wall_hours * 3600.0 * hz / max(int(n_slices), 1)
+
+
+def drift_per_tick(cfg: ChangeConfig, a0: float, b0: float, p_hit_after_miss: float, p_hit_after_hit: float) -> float:
+    """Expected llr per observed tick of a monitored cell whose null is (a0, b0) when its hits actually follow a Markov
+    chain with entry probability p_hit_after_miss and stay probability p_hit_after_hit (positive = the CUSUM climbs).
+    Used to state detection delays analytically next to the simulated ones."""
+    b1 = max(min(max(cfg.m * b0, cfg.b_alt), 0.95), b0)
+    a1 = 1.0 - (1.0 - a0) / cfg.m
+    q, r = p_hit_after_miss, p_hit_after_hit
+    pi = q / (1.0 - r + q) if (1.0 - r + q) > 0 else 1.0           # stationary hit share
+    return (pi * (r * math.log(a1 / a0) + (1 - r) * math.log((1 - a1) / (1 - a0)))
+            + (1 - pi) * (q * math.log(b1 / b0) + (1 - q) * math.log((1 - b1) / (1 - b0))))
