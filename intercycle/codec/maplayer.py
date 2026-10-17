@@ -51,7 +51,8 @@ CHUNK_DATA = ble.ADV_MAX - 11          # 240 B of payload per frame
 P_LO, P_RANGE = 0.02, 50.0             # code 1 = 2 %, code 15 = 100 %
 CLASSES = (VEHICLE, PERSON)            # order of the L2 / L3 sections
 MAGIC_PAYLOAD = b"ICMP"
-PAYLOAD_VERSION = 2                    # 2 = v1 + UNKNOWN section (run-length mask over the site grid); v1 still decodes
+PAYLOAD_VERSION = 3                    # 2 = v1 + UNKNOWN section (run-length mask over the site grid); 3 = v2 + per-slice
+                                       # UNKNOWN (M-W10: cells of cameras under-observed in a slice); v1 and v2 still decode
 
 
 # ------------------------------------------------------------------------------------------------ small helpers
@@ -202,7 +203,26 @@ def encode_payload(m: LayeredMap, p_min: float = 0.05, max_boxes: int = 12, cove
     for r_ in runs:
         unk += _varint(int(r_))
     sizes["UNKNOWN"] = len(unk)
-    payload = MAGIC_PAYLOAD + bytes([PAYLOAD_VERSION]) + struct.pack(">HH", len(meta), len(l1)) + meta + l1 + bytes(out) + bytes(unk)
+    # ---- SLICE_UNKNOWN (v3, M-W10): per observed slice, the cells of cameras with too few visits in it (run lengths)
+    su = bytearray()
+    ents = []
+    if hasattr(m, "_slice_unknown"):
+        for s_ in range(N_TOD * N_PROD):
+            tod_, prod_ = divmod(s_, N_PROD)
+            if m._observed(tod_, prod_):
+                b_ = m._slice_unknown(tod_, prod_)
+                if b_ is not None and b_.any():
+                    ents.append((s_, b_))
+    su += _varint(len(ents))
+    for s_, b_ in ents:
+        su += _varint(s_)
+        runs_ = _runs(b_)
+        su += _varint(len(runs_))
+        for r_ in runs_:
+            su += _varint(int(r_))
+    sizes["SLICE_UNKNOWN"] = len(su)
+    payload = (MAGIC_PAYLOAD + bytes([PAYLOAD_VERSION]) + struct.pack(">HH", len(meta), len(l1)) + meta + l1 + bytes(out)
+               + bytes(unk) + bytes(su))
     return payload, sizes
 
 
@@ -212,16 +232,23 @@ class DecodedMap(MapView):
     """Robot-side view of a decoded map. Same read API as LayeredMap (box covers instead of count grids)."""
 
     def __init__(self, spec: dict, period: np.ndarray, jitter: np.ndarray, boxes: dict, codes: dict, heads: dict, observed: dict,
-                 unknown: np.ndarray | None = None):
+                 unknown: np.ndarray | None = None, slice_unknown: dict | None = None):
         self.spec, self.period, self.jitter = spec, period, jitter
         self._boxes, self._codes, self._heads, self._obs = boxes, codes, heads, observed
         self.nx, self.nz = spec["site"]["nx"], spec["site"]["nz"]
         self._ids = [d["id"] for d in spec["machines"]]
         self._unknown = np.zeros((self.nx, self.nz), bool) if unknown is None else unknown
         self.cam_offline = set()            # offline cameras are already folded into the broadcast UNKNOWN mask
+        self._slice_unk = slice_unknown     # {slice: [nx, nz] bool} (payload v3), None on older payloads
 
     def _unknown_static(self) -> np.ndarray:
         return self._unknown
+
+    def _slice_unknown(self, tod: int, prod: int) -> np.ndarray | None:
+        if self._slice_unk is None:
+            return None
+        u = self._slice_unk.get(tod * N_PROD + prod)
+        return np.zeros((self.nx, self.nz), bool) if u is None else u
 
     def _observed(self, tod: int, prod: int, cls: int | None = None) -> bool:
         return bool(self._obs[VEHICLE if cls is None else cls][tod * N_PROD + prod])
@@ -245,7 +272,7 @@ class DecodedMap(MapView):
 
 
 def decode_payload(payload: bytes) -> DecodedMap:
-    if payload[:4] != MAGIC_PAYLOAD or payload[4] not in (1, 2):
+    if payload[:4] != MAGIC_PAYLOAD or payload[4] not in (1, 2, 3):
         raise CodecError("bad map payload")
     ver = payload[4]
     lm, ll = struct.unpack_from(">HH", payload, 5)
@@ -318,7 +345,23 @@ def decode_payload(payload: bytes) -> DecodedMap:
                 unknown[at:at + r_] = True
             at += r_
             val = not val
-    return DecodedMap(spec, period, jitter, boxes, codes, heads, observed, unknown.reshape(nx, nz))
+    slice_unknown = None
+    if ver >= 3:
+        slice_unknown = {}
+        n_ent, pos = _read_varint(body, pos)
+        for _ in range(n_ent):
+            s_, pos = _read_varint(body, pos)
+            n_runs, pos = _read_varint(body, pos)
+            u = np.zeros(unknown.shape, bool)              # the site grid, flat (as the UNKNOWN section)
+            at, val = 0, False
+            for _ in range(n_runs):
+                r_, pos = _read_varint(body, pos)
+                if val:
+                    u[at:at + r_] = True
+                at += r_
+                val = not val
+            slice_unknown[s_] = u.reshape(codes[VEHICLE].shape[1:])      # [nx, nz], as the L2 / L3 grids
+    return DecodedMap(spec, period, jitter, boxes, codes, heads, observed, unknown.reshape(nx, nz), slice_unknown)
 
 
 # ------------------------------------------------------------------------------------------------ manifest

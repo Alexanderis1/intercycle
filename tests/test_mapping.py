@@ -517,19 +517,22 @@ def test_condition_tracker_on_synthetic_motion():
     tr = M.ConditionTracker(SCN, use_learner=False)
     mi = MIDS.index("HEM1")
     P, t0 = 45.0, 7 * H
-    got, want, stopped_bins = [], [], []
+    got, want, stopped_bins, blind_bins = [], [], [], []
     for k in range(int(1500 * 2)):
         t = t0 + k * 0.5
         u = (t - t0) % P
         stop = 900 <= t - t0 < 1020                                   # no motion for 2 minutes
         moving = (u < 30) and not stop
         ok = np.ones(10, bool)
-        if 495 <= t - t0 < 505:                                       # blackout covering the cycle start at 495 s
+        blind = 495 <= t - t0 < 505                                   # blackout covering the cycle start at 495 s
+        if blind:
             ok[tr.cam_of_machine[mi]] = False
         obs = M.Observation(t + 0.2, t, np.array([M.PART], np.int8), np.array([21.0]), np.array([41.0]), np.array([0.5]),
                             np.array([np.nan]), np.array([moving]), np.array([mi], np.int16), ok)
         c = tr.step(obs)
-        if t - t0 > 300 and not stop and not (1020 <= t - t0 < 1080):
+        if blind:                                                     # M-W10: unseen -> unknown, never guessed or stopped
+            blind_bins.append(c.phase_bin[mi])
+        elif t - t0 > 300 and not stop and not (1020 <= t - t0 < 1080):
             got.append(c.phase_bin[mi])
             want.append(min(int(u / P * M.N_PHASE), M.N_PHASE - 1))
         if 960 < t - t0 < 1020:
@@ -540,6 +543,7 @@ def test_condition_tracker_on_synthetic_motion():
     assert abs(tr.period[mi] - P) < 0.6
     assert (got >= 0).all() and (d <= 1).mean() >= 0.95
     assert set(stopped_bins) == {M.STOP_BIN}                          # overdue -> stopped bin
+    assert set(blind_bins) == {-1}                                    # the rise after the blackout is still placed (got)
     first = M.ConditionTracker(SCN, use_learner=False)
     assert (first._cond(t0).phase_bin == -1).all()                    # nothing known yet -> unknown, never guessed
 

@@ -301,11 +301,15 @@ class Observation:
 #                              (cam_ok); the M-W10 watchdog (`intercycle/observer/watchdog.py`: frozen / black /
 #                              obstructed / blurred image) sets it False on its own (`ObsV2Converter(obs, floor_ok=)`).
 #   M-W10 consumers (`floor_ok_of`): a camera with cam_floor_ok False is not evidence. ConditionTracker does not debounce
-#                              its machines (no motion seen through it is MISSING, not a stop); LayeredMap drops its
-#                              detections, gives it no visit (its cells are not pushed towards p = 0) and marks every
+#                              its machines (no motion seen through it is MISSING, not a stop) and gives them phase
+#                              bin -1 / phase NaN (never STOP_BIN, no line-stopped vote) while it is invalid; LayeredMap
+#                              drops its detections, gives it no visit (its cells are not pushed towards p = 0), gives
+#                              no L1 tick to any machine whose L1 grid it touches (`l1_cams_ok`), and marks every
 #                              cell of its floor region UNKNOWN while it is unhealthy (`cam_unhealthy`, lifted on the
 #                              first healthy tick; the watchdog's recover_s holds it before that); a camera with fewer
-#                              than min_ticks visits in a slice is UNKNOWN in that slice (`unknown_mask(tod, prod)`).
+#                              than min_ticks visits in a slice is UNKNOWN in that slice (`unknown_mask(tod, prod)`,
+#                              carried to the robot by the codec's payload v3 SLICE_UNKNOWN section). change.py
+#                              (CUSUM, spawned-machine L1) and phases.py (features) mask with `floor_ok_of` too.
 # Zones are indexed like `Observation.machine` (scenario / site machine order); cameras like `cam_ok`.
 OBS_V1_FIELDS = ("t", "t_cap", "cls", "x", "z", "r", "heading", "moving", "machine", "cam_ok")
 OBS_V2_FIELDS = ("zone_motion", "zone_vis", "cam_floor_ok")
@@ -802,8 +806,9 @@ class ConditionTracker:
       * machine m: "a machine part inside zone m is moving" (frame differencing);
       * the LINE row: "a skid is moving", i.e. the line is indexing (all bodies hop to the next station together).
     A rise is confirmed after `rise_confirm` consecutive moving ticks, a fall after `fall_confirm` still ticks;
-    camera blackouts (cam_ok False) pause the debouncing, and a rise that only surfaces after a blackout is put at
-    the time predicted from the learned period. Period / busy fraction / jitter come from rise-to-rise intervals
+    camera blackouts (cam_ok False, or cam_floor_ok False on v2: `floor_ok_of`) pause the debouncing and make the
+    machine's phase unknown for that tick (bin -1, never STOP_BIN), and a rise that only surfaces after a blackout is put
+    at the time predicted from the learned period. Period / busy fraction / jitter come from rise-to-rise intervals
     (intervals that are not about one period, i.e. stops, are excluded).
     Phase = time since the last start / period, where the start is the line index for line stations (so every station
     is indexed by the same line phase; dwell pauses inside a station cycle cannot fool it) and the machine's own rise
@@ -837,6 +842,7 @@ class ConditionTracker:
         self.opp_t0 = np.zeros(R)
         self.opp_lo = np.full(R, np.nan)
         self.last_valid = np.full(R, np.nan)
+        self.valid_now = np.ones(R, bool)                  # row's camera view valid at the last step (M-W10)
         self.last_rise = np.full(R, np.nan)
         self.period = np.full(R, np.nan)
         self.busy = np.full(R, np.nan)
@@ -950,6 +956,7 @@ class ConditionTracker:
             self.opp[m] = 0
             (self._on_rise if rising else self._on_fall)(int(m), te)
         self.last_valid = np.where(valid, t, self.last_valid)
+        self.valid_now = valid
         if self.use_learner:
             self._lt.append(t)
             self._ly.append(np.where(valid, y, self.cur == 1))
@@ -978,7 +985,12 @@ class ConditionTracker:
         over = known & (phase > 1.0 + tol)
         bins = np.where(known, np.minimum(np.floor(np.nan_to_num(phase) * N_PHASE), N_PHASE - 1), -1)
         bins = np.where(over, STOP_BIN, np.maximum(bins, -1)).astype(np.int16)
-        kl = known & self.on_line
+        # M-W10: a machine whose own camera view is invalid now (frozen / blind image, heartbeat lost) is UNKNOWN: phase
+        # NaN, bin -1, never STOP_BIN (its "no motion" is not evidence), and it does not vote the line stopped.
+        blind = ~self.valid_now[:M]
+        phase = np.where(blind, np.nan, phase)
+        bins = np.where(blind, -1, bins).astype(np.int16)
+        kl = known & self.on_line & ~blind
         line_stopped = bool(kl.sum() >= 3 and (over & kl).sum() >= 0.5 * kl.sum())
         if self.line_state is not None:
             ls = self.line_state(t)
@@ -1212,6 +1224,7 @@ class LayeredMap(MapView):
         self.cam_of_cell = np.hypot(gx[:, None, None] - cams[None, None, :, 0], gz[None, :, None] - cams[None, None, :, 1]).argmin(2)
         self.cam_of_machine = np.hypot(np.array([(m["rect"][0] + m["rect"][2]) / 2 for m in mm])[:, None] - cams[None, :, 0],
                                        np.array([(m["rect"][1] + m["rect"][3]) / 2 for m in mm])[:, None] - cams[None, :, 1]).argmin(1)
+        self.l1_cams = np.array([self._l1_cams_of(i) for i in range(M)], bool).reshape(M, len(cams))
         S = N_TOD * N_PROD
         self.hits = {c: np.zeros((S, self.nx, self.nz), np.float32) for c in (PERSON, VEHICLE)}
         self.head = {c: np.zeros((S, N_HEAD, self.nx, self.nz), np.float32) for c in (PERSON, VEHICLE)}
@@ -1240,12 +1253,18 @@ class LayeredMap(MapView):
         self.cam_unhealthy = set(np.flatnonzero(~fok).tolist())      # M-W10 live state: replaced every tick
         if self.cam_offline or self.cam_unhealthy:   # an offline / bumped / unhealthy camera's detections are not evidence
             obs = self._drop_offline(obs)
+        fok = floor_ok_of(obs)                              # after _drop_offline: offline / unhealthy cameras are False
+        # A machine's L1 tick (hits and visit) counts only when every camera whose floor region meets its L1 grid is
+        # healthy: the detections in an unhealthy camera's cells were dropped, so a visit there would read "observed
+        # empty" and push the envelope towards p = 0 (audit blocker, M-W10). Spawned machines: change.py, same rule.
+        n_ph = len(cond.phase_bin)
+        okm = (cond.phase_bin >= 0) & self.l1_cams_ok(fok)[:n_ph]
         # ---- L1: machine parts and skids inside a zone, binned by the machine's phase
         sel = ((obs.cls == PART) | (obs.cls == SKID)) & (obs.machine >= 0)
         if sel.any():
             mi = obs.machine[sel].astype(np.int64)
             b = cond.phase_bin[mi].astype(np.int64)
-            ok = b >= 0
+            ok = okm[mi]
             if ok.any():
                 mi, b = mi[ok], b[ok]
                 ci, ix, iz = raster(obs.x[sel][ok], obs.z[sel][ok], np.maximum(obs.r[sel][ok] - self.shrink_m, 0.05), self.l1_x0[mi], self.l1_z0[mi],
@@ -1256,8 +1275,6 @@ class LayeredMap(MapView):
                     pos = np.arange(len(flat), dtype=np.int32)
                     self._scratch[flat] = pos
                     self.l1_hits[flat[self._scratch[flat] == pos]] += 1.0
-        fok = floor_ok_of(obs)                              # after _drop_offline: offline / unhealthy cameras are False
-        okm = (cond.phase_bin >= 0) & fok[self.cam_of_machine[:len(cond.phase_bin)]]   # spawned machines: change.py
         k = np.flatnonzero(okm)
         self.l1_visits[k, cond.phase_bin[k]] += 1.0
         # ---- L2 / L3
@@ -1292,6 +1309,29 @@ class LayeredMap(MapView):
         floor_ok = None if obs.cam_floor_ok is None else obs.cam_floor_ok & ok     # v2 fields kept (cam_floor_ok implies cam_ok)
         return replace(obs, cls=obs.cls[keep], x=obs.x[keep], z=obs.z[keep], r=obs.r[keep], heading=obs.heading[keep],
                        moving=obs.moving[keep], machine=obs.machine[keep], cam_ok=ok, cam_floor_ok=floor_ok)
+
+    def _l1_cams_of(self, i: int) -> np.ndarray:
+        """(n_cam,) bool: the cameras whose floor region (Voronoi cells on the site grid, `cam_of_cell`) meets machine
+        i's L1 grid (zone + margin), plus the camera of its centre. Detections are dropped by site cell, so this is
+        every camera whose loss can remove evidence from that grid."""
+        res = self.spec["env_res"]
+        x0, z0 = float(self.l1_x0[i]), float(self.l1_z0[i])
+        out = np.zeros(len(self.spec["cameras"]), bool)
+        cells = self.rect_cells((x0, z0, x0 + int(self.l1_nx[i]) * res, z0 + int(self.l1_nz[i]) * res))
+        out[np.unique(self.cam_of_cell[cells])] = True
+        out[int(self.cam_of_machine[i])] = True
+        return out
+
+    def l1_cams_ok(self, floor_ok) -> np.ndarray:
+        """(M,) bool: machine i's L1 grid is fully observed this tick, i.e. every camera in `l1_cams[i]` has a valid floor
+        view (`floor_ok`, from `floor_ok_of`) and is not offline. Fails closed: one lost camera stops the L1 learning of
+        every machine whose grid it touches (no visit, no hit) until it is healthy again."""
+        ok = np.asarray(floor_ok, bool).reshape(-1).copy()
+        if ok.shape != (self.l1_cams.shape[1],):
+            raise ValueError(f"floor_ok has {ok.shape[0]} cameras, the map {self.l1_cams.shape[1]}")
+        if self.cam_offline:
+            ok[sorted(int(c) for c in self.cam_offline)] = False
+        return ~(self.l1_cams & ~ok[None, :]).any(1)
 
     def merge(self, other: LayeredMap) -> None:
         """Add another map's counts (maps built on separate windows / processes combine exactly)."""
@@ -1375,6 +1415,7 @@ class LayeredMap(MapView):
         cams = np.array(sp["cameras"], float)
         cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
         self.cam_of_machine = np.r_[self.cam_of_machine, int(np.hypot(cams[:, 0] - cx, cams[:, 1] - cz).argmin())]
+        self.l1_cams = np.vstack([self.l1_cams, self._l1_cams_of(self.M)[None, :]])
         for a in ("period", "busy", "jitter"):
             setattr(self, a, np.r_[getattr(self, a), np.nan])
         self.M += 1
@@ -1499,6 +1540,7 @@ class MapBuilder:
                 k = int(self.pm.phase_bin(mid, obs.t_cap))
                 n = int(self.pm.n_bins(mid))
                 b[i] = -1 if k < 0 else (STOP_BIN if k == n - 1 else min(k, N_PHASE - 1))
+            b[~self.tracker.valid_now[:len(b)]] = -1         # M-W10: behind an invalid camera view the bin is unknown
             cond.phase_bin = b
         return cond
 
