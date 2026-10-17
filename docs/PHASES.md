@@ -5,6 +5,73 @@ calendar. Code: `intercycle/observer/phases.py`, which never imports truth (`tes
 `tests/test_phases.py` also checks it never reads the calendar). Scoring: `scripts/phase_discovery.py` is the only place
 truth is read.
 
+## 0. Audit status (#2, A7). Read this first
+
+**The seed-1 numbers in §3 are tainted.** After the 17:36 run on `final_test`, three things were changed and re-scored on
+that same window:
+* the line-state naming was patched and the ARI re-scored (17:44–17:49);
+* the eval was re-run (17:54);
+* the onset metric was redefined (f86093c).
+
+**Headline instead = seed 2, scored once** with the code frozen at 947a878. That run is the ideal shim (σ 0.15 m, 5 %
+drop), train 04:00–10:00, test 13:30–20:00 (14:00 shift change, breaks at 17:00 and 19:30, andons).
+`out/phases/results_s2_train__s2_test.json`.
+
+Welders, online causal HMM, labels weld / tip_dress / return / idle:
+
+| Machine | Seg F1 | Boundary err, median (s) | Onset err (s), resting→working | Onset err (s), v1: active start → bin 0 |
+|---|---|---|---|---|
+| S10 | 0.99 | 0.5 | 0.5 | 0.5 |
+| S20 | 0.97 | 0.5 | 0.5 | 0.5 |
+| S30 | 0.84 | 0.5 | 0.5 | 0.5 |
+| S40 | 0.98 | 0.5 | 0.5 | 0.5 |
+| S50 | 0.74 | 1.0 | 1.0 | 1.0 |
+| S60 | 0.67 | 0.5 | 0.5 | 0.5 |
+| S70 | 0.78 | 0.5 | 0.5 | 0.5 |
+| **Mean** | **0.85** | **0.57** | | |
+
+Offline DTW mean for the welders is 0.87.
+
+Other machines:
+
+| Machine | Seg F1 | Boundary err, median (s) | Onset err (s), resting→working | Onset err (s), v1 |
+|---|---|---|---|---|
+| HEM1 | 0.78 | 0.5 | 0.5 | 0.5 |
+| SEAL1 | 0.61 | 2.0 | 1.5 | 72 |
+
+S80 is left out of the headline. Its 1.00 is tautological: the shim draws the carriage only below H_CLEAR, which is
+exactly the on_floor label.
+
+Line states: ARI 0.35, purity 0.967, named accuracy 0.973 (k = 6; running splits into 4 clusters).
+
+| State | Recall |
+|---|---|
+| running | 0.99 |
+| andon | 0.90 |
+| break | 0.94 |
+| shift_change | 0.70 |
+
+**Not yet scored: seed 2 under `M.MEASURED_SHIM`.** The lead wants it as the headline (measured perception error).
+M's refit under measured noise found the 09:00 break named andon on 100 % of ticks: the break crowd is not separable
+under that noise. "Stopped vs running" may be the honest level there. Commands are in the hand-off below.
+
+Disclosures:
+* **The line-state naming rules encode the simulator.**
+  * The andon rule is the simulator's design: the line is overdue while the off-line cells keep working.
+  * "break = gathering" holds only because the simulator spawns a break crowd.
+  * Chosen and stated: we do **not** merge break and shift_change into planned_stop, because M's map indexes 4 named
+    states. The names are therefore *suggestions*.
+  * Since A7 the identity is the cluster id (`line_cluster(t)`), and a name never changes the clustering. Each cluster is
+    shown as "State A..", with an auto description, until an operator names it (`set_line_label`). Labels persist and
+    carry over on refit by Hungarian matching of centroids. Model (Gemma) suggestions are stored as unverified and never
+    applied.
+* **Scoring maps the discovered bins to truth names using the test truth** (many-to-one majority).
+* **K = 8 for every machine.** The elbow never stopped earlier, so every machine has 9 bins.
+* **Boundary error is recall-only and capped at 30 s.** It is measured from each true boundary to the nearest predicted
+  boundary; extra predicted boundaries count only in the boundary F1.
+* **Choices made on dev seed 0:** the energy weight, the gathering thresholds and the variance floor. The S80
+  floor-level scoring and the onset v2 metric were added after seeing seed-1 results; both onset definitions are reported.
+
 ## 1. Which machines expose named sub-phases in truth
 
 `Kinematics.phase(mid, t)` returns only `("active"|"idle"|"hold"|"trip", frac)`. The scoring script rebuilds named
@@ -83,7 +150,7 @@ Scoring sets:
 * **The calendar is never an input.** The truth line state (calendar for break / shift_change, overdue line index for
   andon) is used only in the scoring script.
 
-## 3. Results (held-out)
+## 3. Results on seed 1 (TAINTED, see §0; kept for the record)
 
 Setup:
 * Train: seed 1, 04:00–10:00. It contains 19 andons, the 06:00 shift change and the 09:00 break.

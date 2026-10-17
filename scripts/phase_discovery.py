@@ -75,7 +75,7 @@ def truth_line_states(scn, seed, t, t0, t1) -> np.ndarray:
 
 # ================================================================================================ simulation
 
-def simulate(seed: int, t0: float, t1: float, subframes: int = 3, progress: bool = True) -> dict:
+def simulate(seed: int, t0: float, t1: float, subframes: int = 3, progress: bool = True, shim_kw: dict | None = None) -> dict:
     """Floor at 2 Hz (as scripts/build_map.run_window) -> camera observations -> phases.Features; plus truth labels."""
     import build_map as B
     scn = load()
@@ -88,7 +88,7 @@ def simulate(seed: int, t0: float, t1: float, subframes: int = 3, progress: bool
         b = [s.brk[1] for s in kin.arm_specs if s.mid == mid]
         appr[mid] = float(np.mean(b)) if b else 0.0
     movers = B.MoverBank(scn, seed)
-    shim = M.CameraShim(scn, seed=seed * 1000 + int(t0 // 3600), subframes=subframes)
+    shim = M.CameraShim(scn, seed=seed * 1000 + int(t0 // 3600), subframes=subframes, **(shim_kw or {}))
     fe = P.Features(P.Layout.from_scenario(scn))
     n = int(round((t1 - t0) * HZ))
     T = np.zeros(n)
@@ -129,7 +129,7 @@ def simulate(seed: int, t0: float, t1: float, subframes: int = 3, progress: bool
 def cmd_sim(a):
     OUT.mkdir(parents=True, exist_ok=True)
     tic = time.time()
-    d = simulate(a.seed, a.t0 * H, a.t1 * H)
+    d = simulate(a.seed, a.t0 * H, a.t1 * H, shim_kw=M.MEASURED_SHIM if a.shim == "measured" else None)
     np.savez_compressed(OUT / f"{a.name}.npz", **d)
     print(f"wrote {OUT / (a.name + '.npz')} ({len(d['T'])} ticks, {time.time() - tic:.0f} s)")
 
@@ -142,6 +142,7 @@ def main():
     s.add_argument("--t0", type=float, required=True, help="hours since 00:00 of day 0")
     s.add_argument("--t1", type=float, required=True)
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--shim", default="ideal", choices=("ideal", "measured"), help="camera error model (measured = M.MEASURED_SHIM)")
     e = sub.add_parser("eval")
     e.add_argument("--train", required=True)
     e.add_argument("--test", required=True)
