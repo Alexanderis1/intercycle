@@ -211,10 +211,25 @@ def test_tables_reject_bad_rows_and_types(tmp_path):
         S.validate_table(t.select([1, 0, 2, 3, 4, 5, 6, 7]), TB.InventoryRow)
     tests_only = t.set_column(7, "split", pa.array(["test"] * 4))
     with pytest.raises(ValueError, match="test split"):
-        S.validate_table(tests_only, TB.InventoryRow, allow_test=False)
+        S.validate_table(tests_only, TB.InventoryRow)                         # the default refuses test rows
+    assert S.validate_table(tests_only, TB.InventoryRow, allow_test=True) == 4
     m = pq.read_table(FIX / "twin_machines.parquet")
     with pytest.raises(ValidationError, match="missing frame"):
         S.validate_table(m.set_column(8, "missing", pa.array([True] * 4)), TB.MachineRow)
+
+
+@pytest.mark.parametrize("row,match", [
+    ({"missing": False, "flow_v": float("nan"), "roi_energy": float("nan"), "stroke": True}, "not missing"),
+    ({"missing": False, "flow_v": 1.0, "roi_energy": None, "stroke": False}, "not missing"),
+    ({"missing": False, "flow_v": float("inf"), "roi_energy": 0.5, "stroke": False}, "not missing"),
+    ({"missing": True, "flow_v": float("nan"), "roi_energy": float("nan"), "stroke": True}, "missing frame"),
+])
+def test_machine_row_nan_means_missing(row, match):
+    base = {"split": "train", "clip_id": "c9_train_0001", "press": "P9a", "framing": "cam9_f0", "t": 0.0}
+    with pytest.raises(ValidationError, match=match):
+        TB.MachineRow.model_validate({**base, **row})
+    TB.MachineRow.model_validate({**base, "missing": False, "flow_v": 3.0, "roi_energy": 0.2, "stroke": True})
+    TB.MachineRow.model_validate({**base, "missing": True, "flow_v": None, "roi_energy": None, "stroke": False})
 
 
 # ------------------------------------------------------------------------------------------------ v0 stubs

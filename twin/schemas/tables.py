@@ -33,6 +33,10 @@ def _nan_ok(v: float | None) -> bool:
     return v is None or math.isnan(v)
 
 
+def _finite(v: float | None) -> bool:
+    return v is not None and math.isfinite(v)
+
+
 class InventoryRow(Strict):
     clip_id: str = col("string", min_length=1)
     camera: Camera = col("int64")
@@ -76,8 +80,13 @@ class MachineRow(Strict):
 
     @model_validator(mode="after")
     def _missing(self):
+        # NaN always means MISSING (T-W6): a missing frame has NaN flow and no stroke, a present frame finite values.
         if self.missing and (not _nan_ok(self.flow_v) or not _nan_ok(self.roi_energy) or self.stroke):
             raise ValueError("a missing frame has NaN flow_v / roi_energy and no stroke")
+        if not self.missing and not (_finite(self.flow_v) and _finite(self.roi_energy)):
+            raise ValueError("a frame that is not missing needs finite flow_v and roi_energy (NaN means missing=True)")
+        if self.stroke and not _finite(self.flow_v):
+            raise ValueError("a stroke needs a finite flow_v on its frame")
         return self
 
 
@@ -112,9 +121,11 @@ def columns(model: type[BaseModel]) -> list[tuple[str, str]]:
     return out
 
 
-def validate_table(table: Any, model: type[BaseModel], *, allow_test: bool = True, max_rows: int | None = None) -> int:
+def validate_table(table: Any, model: type[BaseModel], *, allow_test: bool = False, max_rows: int | None = None) -> int:
     """Check a pyarrow Table (or a parquet path) against a row model: exact column names and order, Arrow types,
-    then every row (or the first `max_rows`). Raises ValueError; returns the number of rows checked."""
+    then every row (or the first `max_rows`). Test-split rows are refused unless `allow_test=True` (only the sealed
+    run passes it; tracks and machines are train and dev only until then). Raises ValueError; returns the number of
+    rows checked."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
