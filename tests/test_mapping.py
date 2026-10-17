@@ -321,8 +321,10 @@ def test_predict_obstacles(sim, bundle):
         assert all(s.boxes.shape[1] == 4 and len(s.box_machine) == len(s.boxes) for s in steps)
         area = lambda s: float(((s.boxes[:, 2] - s.boxes[:, 0]) * (s.boxes[:, 3] - s.boxes[:, 1])).sum())
         assert len({round(area(s), 1) for s in steps}) > 3          # the envelopes move with the predicted phase
-        stopped = mp.predict_obstacles(9 * H + 600, 3.0, phase0, M.BREAK, step_s=1.0)
-        assert area(stopped[0]) < area(steps[0])                    # stopped machines: only the parked pose
+        stopped = mp.predict_obstacles(9 * H + 600, 3.0, {mid: None for mid in MIDS}, M.BREAK, step_s=1.0)
+        assert area(stopped[0]) < area(steps[0])                    # stopped machines in a break: only the parked pose
+        still = mp.predict_obstacles(9 * H + 600, 3.0, phase0, M.BREAK, step_s=1.0)
+        assert area(still[0]) == area(steps[0])                     # a machine seen mid-cycle keeps cycling (finishes it)
         unknown = mp.predict_obstacles(9 * H + 600, 3.0, {}, M.RUNNING, step_s=1.0)
         assert area(unknown[0]) > area(steps[0])                     # unknown phase = union of everything (conservative)
         assert len(steps[0].circles) == len(steps[0].circle_p)

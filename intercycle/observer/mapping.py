@@ -39,6 +39,8 @@ PROD_NAMES = ("running", "andon", "break", "shift_change")
 N_PHASE = 16                       # cycle-phase bins
 STOP_BIN = 16                      # machine overdue / stopped (andon, break, shift change)
 N_BINS = N_PHASE + 1
+ALL_BINS = tuple(range(N_BINS))
+UNKNOWN_ID = "UNKNOWN"             # owner of the UNKNOWN boxes in PredStep.box_machine
 TOD_BIN_S = 1800.0
 N_TOD = 48
 N_PROD = 4
@@ -150,6 +152,85 @@ def box_cover(mask: np.ndarray, max_boxes: int = 16, cover_frac: float = 0.985) 
     return np.array(boxes, np.int64).reshape(-1, 4)
 
 
+def safe_box_cover(mask: np.ndarray, max_boxes: int = 12) -> np.ndarray:
+    """Conservative (outer) rectangle cover: the union of the boxes contains EVERY cell of the mask, at the price of some
+    false area. Greedy exact cover first (boxes inside the mask, `box_cover`, aiming at 100 %); whatever is left
+    uncovered is added as the bounding boxes of its 8-connected components, and while there are more than `max_boxes`
+    boxes the pair whose bounding-box union adds the least new area is merged. Used for the broadcast, where an
+    uncovered cell would be a truly-occupied cell sent as free (unsafe-free)."""
+    G = np.asarray(mask, bool)
+    if not G.any():
+        return np.zeros((0, 4), np.int64)
+    boxes = [tuple(b) for b in box_cover(G, max_boxes, 1.0)]
+    cov = np.zeros_like(G)
+    for i0, j0, i1, j1 in boxes:
+        cov[i0:i1, j0:j1] = True
+    left = G & ~cov
+    if left.any():
+        lab, n = _label8(left)
+        for k in range(1, n + 1):
+            ii, jj = np.nonzero(lab == k)
+            boxes.append((int(ii.min()), int(jj.min()), int(ii.max()) + 1, int(jj.max()) + 1))
+    B = np.array(boxes, np.int64).reshape(-1, 4)
+    while len(B) > max_boxes:
+        a = (B[:, 2] - B[:, 0]) * (B[:, 3] - B[:, 1])
+        u0 = np.minimum(B[:, None, :2], B[None, :, :2])
+        u1 = np.maximum(B[:, None, 2:], B[None, :, 2:])
+        ua = (u1[..., 0] - u0[..., 0]) * (u1[..., 1] - u0[..., 1])
+        cost = ua - a[:, None] - a[None, :]                   # new area added by merging (negative when they overlap)
+        np.fill_diagonal(cost, np.iinfo(np.int64).max)
+        i, j = np.unravel_index(int(cost.argmin()), cost.shape)
+        merged = np.r_[u0[i, j], u1[i, j]]
+        B = np.vstack([np.delete(B, [i, j], 0), merged[None]])
+    return B
+
+
+def _label8(G: np.ndarray) -> tuple[np.ndarray, int]:
+    """8-connected component labels of a small boolean grid (no scipy dependency)."""
+    lab = np.zeros(G.shape, np.int32)
+    n = 0
+    nx, nz = G.shape
+    for i0, j0 in zip(*np.nonzero(G)):
+        if lab[i0, j0]:
+            continue
+        n += 1
+        stack = [(i0, j0)]
+        lab[i0, j0] = n
+        while stack:
+            i, j = stack.pop()
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    a, b = i + di, j + dj
+                    if 0 <= a < nx and 0 <= b < nz and G[a, b] and not lab[a, b]:
+                        lab[a, b] = n
+                        stack.append((a, b))
+    return lab, n
+
+
+def dilate(mask: np.ndarray, cells: int) -> np.ndarray:
+    """Binary dilation by a disc of `cells` cells radius (inflation margin on a grid)."""
+    G = np.asarray(mask, bool)
+    if cells <= 0 or not G.any():
+        return G.copy()
+    out = G.copy()
+    nx, nz = G.shape
+    for di in range(-cells, cells + 1):
+        for dj in range(-cells, cells + 1):
+            if di * di + dj * dj > cells * cells + cells:      # disc (rounded outward)
+                continue
+            a0, a1 = max(0, di), min(nx, nx + di)
+            b0, b1 = max(0, dj), min(nz, nz + dj)
+            out[a0:a1, b0:b1] |= G[a0 - di:a1 - di, b0 - dj:b1 - dj]
+    return out
+
+
+def iso13855_margin(K: float, T: float, C: float) -> float:
+    """Inflation margin S = K * T + C (ISO 13855 style): K = approach speed of the hazard (m/s, here the fastest
+    machine part or the robot), T = total delay between what the map says and reality (camera latency + broadcast
+    + robot reaction, s), C = position uncertainty (floor-projection noise, cell quantisation, m)."""
+    return float(K) * float(T) + float(C)
+
+
 # ------------------------------------------------------------------------------------------------ observations
 
 @dataclass
@@ -191,11 +272,26 @@ class CameraShim:
     latency_s      capture-to-delivery delay
     subframes      machine parts / skids are integrated over the last `exposure_s` seconds (motion blur of the
                    frame differencing), so a fast arm leaves a continuous swept footprint, not dots
+    Optional stress terms (all off by default, so map builds are unchanged; used by the change-detection runs):
+    clutter_per_h  spurious "unexplained motion" blobs (glare, reflections, swinging cables) anywhere on the floor,
+                   Poisson per hour site-wide, each lasting U(clutter_dur_s) seconds, reported as class PART
+    persistent     [(x, z, r, t0, t1, duty)]: a fixed spot that flickers (moving detections in a fraction `duty` of the
+                   frames) between t0 and t1 - an aperiodic false source a change detector must not turn into a machine
+    bumps          [(camera index, dx, dz, t_from)]: from t_from on, every detection in that camera's region is
+                   projected (dx, dz) metres off (the camera was knocked; its homography is stale)
     """
 
     def __init__(self, scn: Scenario, seed: int = 0, sigma_m: float = 0.15, p_drop: float = 0.05, blackout_s: float = 10.0,
                  blackouts_per_h: float = 4.0, latency_s: float = LATENCY_S, subframes: int = 3, exposure_s: float = 0.5,
-                 zone_margin_m: float = 1.0, hz: float = FRAME_HZ):
+                 zone_margin_m: float = 1.0, hz: float = FRAME_HZ, clutter_per_h: float = 0.0,
+                 clutter_dur_s: tuple[float, float] = (0.5, 3.0), persistent=(), bumps=()):
+        self.clutter_per_h, self.clutter_dur = clutter_per_h, clutter_dur_s
+        self.persistent, self.bumps = list(persistent), list(bumps)
+        self._clutter: list[tuple[float, float, float, float]] = []      # (x, z, r, t_end)
+        self._crng = np.random.default_rng([seed, 78])
+        self._next_clutter = None
+        hx, hz_ = scn.hall["x"], scn.hall["z"]
+        self._floor = (float(hx[0]), float(hz_[0]), float(scn.data_hall["x"][1]), float(hz_[1]))
         self.rng = np.random.default_rng([seed, 77])
         self.sigma, self.p_drop, self.blackout_s = sigma_m, p_drop, blackout_s
         self.latency, self.subframes, self.exposure, self.margin, self.hz = latency_s, max(1, subframes), exposure_s, zone_margin_m, hz
@@ -237,12 +333,42 @@ class CameraShim:
 
     def _moved(self, key: str, sizes: tuple, c: np.ndarray) -> np.ndarray:
         """Frame-differencing motion flag per circle: displaced > 2 cm since the previous sub-frame. The first frame, or a
-        change in the number of circles of a body group (a carriage appears, a skid is picked), counts as moving."""
+        change in the number of circles of a body group (a carriage appears, a skid is picked), counts as moving - for
+        that group only (`sizes` = circles per group, in order); the other groups are differenced as usual."""
         prev = self._prev_parts.get(key)
         self._prev_parts[key] = (sizes, c)
-        if prev is None or prev[0] != sizes:
+        if prev is None or len(prev[0]) != len(sizes):
             return np.ones(len(c), bool)
-        return np.hypot(c[:, 0] - prev[1][:, 0], c[:, 1] - prev[1][:, 1]) > 0.02
+        if prev[0] == sizes:
+            return np.hypot(c[:, 0] - prev[1][:, 0], c[:, 1] - prev[1][:, 1]) > 0.02
+        out = np.ones(len(c), bool)
+        a = b = 0
+        for n_new, n_old in zip(sizes, prev[0]):
+            if n_new == n_old and n_new:
+                d = c[a:a + n_new] - prev[1][b:b + n_old]
+                out[a:a + n_new] = np.hypot(d[:, 0], d[:, 1]) > 0.02
+            a += n_new
+            b += n_old
+        return out
+
+    def _stress_circles(self, t_cap: float) -> np.ndarray:
+        """Spurious motion detections at t_cap (clutter + persistent flicker sources); empty unless enabled."""
+        out = []
+        if self.clutter_per_h > 0:
+            gap = 3600.0 / self.clutter_per_h
+            if self._next_clutter is None:
+                self._next_clutter = t_cap + self._crng.exponential(gap)
+            while t_cap >= self._next_clutter:
+                x0, z0, x1, z1 = self._floor
+                self._clutter.append((self._crng.uniform(x0, x1), self._crng.uniform(z0, z1), self._crng.uniform(0.3, 0.8),
+                                      self._next_clutter + self._crng.uniform(*self.clutter_dur)))
+                self._next_clutter += self._crng.exponential(gap)
+            self._clutter = [c for c in self._clutter if c[3] > t_cap]
+            out += [(x, z, r) for x, z, r, _ in self._clutter]
+        for x, z, r, t0, t1, duty in self.persistent:
+            if t0 <= t_cap < t1 and self._crng.random() < duty:
+                out.append((x + self._crng.normal(0, 0.3), z + self._crng.normal(0, 0.3), r))
+        return np.array(out, float).reshape(-1, 3)
 
     # -------------------------------------------------------------------------------- observe
     def observe(self, state: SimState | Callable[[float], SimState], t: float | None = None) -> Observation:
@@ -284,10 +410,24 @@ class CameraShim:
                     cls.append(np.full(len(Cc), kind, np.int8)[sel])
                     hd.append(np.full(len(Cc), np.nan)[sel])
                     mv.append(moved[sel])
+        extra = self._stress_circles(t_cap)
+        if len(extra):
+            slot.append(nm + 2 * SLOTS_PARTS + np.arange(len(extra)))
+            cir.append(extra)
+            cls.append(np.full(len(extra), PART, np.int8))
+            hd.append(np.full(len(extra), np.nan))
+            mv.append(np.ones(len(extra), bool))
         C = np.vstack(cir) if cir else np.zeros((0, 3))
         cls_a, hd_a, mv_a = np.concatenate(cls), np.concatenate(hd), np.concatenate(mv)
         ok = self.cam_ok(t_cap)
         cam = self.camera_of(C[:, 0], C[:, 1]) if len(C) else np.zeros(0, int)
+        if self.bumps and len(C):
+            C = C.copy()
+            for ci, dx, dz, t_from in self.bumps:
+                if t_cap >= t_from:
+                    sel_b = cam == ci
+                    C[sel_b, 0] += dx
+                    C[sel_b, 1] += dz
         keep = ok[cam] & (self.rng.random(len(C)) >= self.p_drop) if len(C) else np.zeros(0, bool)
         slot_a = np.concatenate(slot)[keep]
         C, cls_a, hd_a, mv_a = C[keep], cls_a[keep], hd_a[keep], mv_a[keep]
@@ -337,8 +477,14 @@ class ConditionTracker:
     shift_change; otherwise the line being overdue (stopped longer than its learned cycle allows) gives andon."""
 
     def __init__(self, scn: Scenario, hz: float = FRAME_HZ, rise_confirm: int = 2, fall_confirm: int = 4, line_confirm: int = 3,
-                 use_learner: bool = True, learn_window_s: float = 1500.0, learn_every_s: float = 900.0, learn_first_s: float = 480.0):
+                 use_learner: bool = True, learn_window_s: float = 1500.0, learn_every_s: float = 900.0, learn_first_s: float = 480.0,
+                 line_state: Callable | None = None):
+        """line_state(t) -> RUNNING / ANDON / BREAK / SHIFT_CHANGE or None: the single switch for the production state.
+        None (default) = the current rule: public calendar for break / shift change (EXTERNAL INPUT, pending the
+        discovered line states of observer/phases.py), line motion for andon. With a callable (e.g. the discovered
+        `line_state` of workstream P) the calendar is not used at all; a None return falls back to the motion rule."""
         self.scn, self.hz = scn, hz
+        self.line_state = line_state
         M = len(scn.machines)
         self.M, self.L, R = M, M, M + 1
         self.mids = [m.id for m in scn.machines]
@@ -496,8 +642,12 @@ class ConditionTracker:
         bins = np.where(over, STOP_BIN, np.maximum(bins, -1)).astype(np.int16)
         kl = known & self.on_line
         line_stopped = bool(kl.sum() >= 3 and (over & kl).sum() >= 0.5 * kl.sum())
-        cal = calendar_state(self.scn, t)
-        prod = cal if cal is not None else (ANDON if line_stopped else RUNNING)
+        if self.line_state is not None:
+            ls = self.line_state(t)
+            prod = int(ls) if ls is not None else (ANDON if line_stopped else RUNNING)
+        else:
+            cal = calendar_state(self.scn, t)           # external input (public calendar), see __init__
+            prod = cal if cal is not None else (ANDON if line_stopped else RUNNING)
         return Cond(t, tod_bin(t), prod, bins, phase, P, self.busy[:M].copy(), jit, line_stopped)
 
 
@@ -519,6 +669,10 @@ class MapView:
     `spec`, `period`, `jitter` (per machine), `boxes_for(machine_id, bins)` and `traffic(...)`."""
 
     spec: dict
+    cam_offline: set = frozenset()
+
+    def _unknown_static(self) -> np.ndarray:
+        raise NotImplementedError
 
     def machine_ids(self) -> list[str]:
         return [m["id"] for m in self.spec["machines"]]
@@ -547,43 +701,94 @@ class MapView:
 
     def predict_obstacles(self, t_now: float, horizon_s: float, machine_phase_now: dict, prod_state: int, step_s: float = 0.5,
                           k_sigma: float = 2.0, p_hard: float = 0.30, prod_until_s: float = math.inf,
-                          andon_valid_s: float = 3.0, with_traffic: bool = True) -> list[PredStep]:
+                          andon_valid_s: float = 3.0, with_traffic: bool = True, with_unknown: bool = True,
+                          inflate_m: float = 0.0) -> list[PredStep]:
         """Time-indexed obstacles for t_now .. t_now + horizon.
 
         machine_phase_now: {machine_id: phase fraction 0..1 of its cycle now (from the fast layer)}; None / <0 / beyond
         1 + tol means stopped or unknown. Each machine's phase is advanced with its learned period and widened by
         k_sigma * sqrt(base^2 + jitter^2 * cycles) (the envelope is the union of the neighbouring phase bins). A machine
         in a break / shift change keeps its STOP envelope until `prod_until_s`; in andon only `andon_valid_s` (it can
-        restart any moment); after that, and for stopped / unknown machines, the union of all bins is returned."""
+        restart any moment); after that, and for stopped / unknown machines, the union of all bins is returned.
+        UNKNOWN space (`unknown_mask`) is added as boxes owned by "UNKNOWN" (treat as occupied). `inflate_m` grows every
+        machine box by that margin on each side (S = K * T + C, see `iso13855_margin`)."""
         ids = self.machine_ids()
         out: list[PredStep] = []
-        all_bins = tuple(range(N_BINS))
+        unk = self.unknown_boxes(tod_bin(t_now), prod_state) if with_unknown else np.zeros((0, 4))
         for dt in np.arange(0.0, horizon_s + 1e-9, step_s):
             boxes, owner = [], []
             for i, mid in enumerate(ids):
-                ph = machine_phase_now.get(mid)
-                P = float(self.period[i]) if np.isfinite(self.period[i]) else math.nan
-                stopped = prod_state in (BREAK, SHIFT_CHANGE) and dt < prod_until_s or prod_state == ANDON and dt < andon_valid_s
-                if prod_state in (BREAK, SHIFT_CHANGE, ANDON) and stopped:
-                    bins = (STOP_BIN,)
-                elif ph is None or ph < 0 or not np.isfinite(P) or ph > 1.0 + max(0.06, 3.0 / P):
-                    bins = all_bins
-                else:
-                    cyc = dt / P
-                    sig = math.hypot(0.03, float(self.jitter[i]) if np.isfinite(self.jitter[i]) else 0.02) if cyc == 0 else \
-                        math.hypot(0.03, (float(self.jitter[i]) if np.isfinite(self.jitter[i]) else 0.02) * math.sqrt(cyc))
-                    c = int(math.floor(((ph + cyc) % 1.0) * N_PHASE))
-                    hw = int(math.ceil(k_sigma * sig * N_PHASE))
-                    bins = tuple(sorted({(c + d) % N_PHASE for d in range(-hw, hw + 1)}))
+                bins = self.predicted_bins(i, machine_phase_now.get(mid), prod_state, float(dt), k_sigma, prod_until_s, andon_valid_s)
                 b = self.boxes_for(mid, bins)
                 if len(b):
+                    if inflate_m > 0:
+                        b = b + np.array([-inflate_m, -inflate_m, inflate_m, inflate_m])
                     boxes.append(b)
                     owner += [mid] * len(b)
+            if len(unk):                                          # UNKNOWN space is occupied
+                boxes.append(unk)
+                owner += [UNKNOWN_ID] * len(unk)
             circ, cp, cc = np.zeros((0, 3)), np.zeros(0), np.zeros(0, np.int8)
             if with_traffic:
                 tb = tod_bin(t_now + dt)
                 circ, cp, cc = self._hot_cells(tb, prod_state, p_hard)
             out.append(PredStep(t_now + float(dt), np.vstack(boxes) if boxes else np.zeros((0, 4)), owner, circ, cp, cc))
+        return out
+
+    def predicted_bins(self, i: int, ph, prod_state: int, dt: float = 0.0, k_sigma: float = 2.0, prod_until_s: float = math.inf,
+                       andon_valid_s: float = 3.0) -> tuple:
+        """Phase bins machine i may be in `dt` seconds after a fast-layer phase `ph` (fraction of its cycle; None / < 0 /
+        overdue = stopped or unknown).
+
+        The machine's own observed phase comes first: a machine that is mid-cycle keeps cycling whatever the line state
+        says (off-line cells run through line andons and breaks, and the line finishes its last cycle when a break
+        starts), so its phase is advanced and widened by k_sigma * sqrt(base^2 + jitter^2 * cycles). Only a machine
+        that is stopped / overdue gets its STOP bin, and only while the production state says the plant is stopped
+        (break / shift change until prod_until_s, andon for andon_valid_s: it may restart any moment); otherwise, and
+        whenever the phase or period is unknown, the union of all bins."""
+        P = float(self.period[i]) if np.isfinite(self.period[i]) else math.nan
+        cycling = ph is not None and np.isfinite(ph) and ph >= 0 and np.isfinite(P) and ph <= 1.0 + max(0.06, 3.0 / P)
+        if not cycling:
+            stopped = prod_state in (BREAK, SHIFT_CHANGE) and dt < prod_until_s or prod_state == ANDON and dt < andon_valid_s
+            return (STOP_BIN,) if stopped else ALL_BINS
+        cyc = dt / P
+        j = float(self.jitter[i]) if np.isfinite(self.jitter[i]) else 0.02
+        sig = math.hypot(0.03, j) if cyc == 0 else math.hypot(0.03, j * math.sqrt(cyc))
+        c = int(math.floor(((ph + cyc) % 1.0) * N_PHASE))
+        hw = int(math.ceil(k_sigma * sig * N_PHASE))
+        return tuple(sorted({(c + d) % N_PHASE for d in range(-hw, hw + 1)}))
+
+    # ---------------------------------------------------------------- UNKNOWN
+    def unknown_mask(self, tod: int | None = None, prod: int | None = None) -> np.ndarray:
+        """Site grid [nx, nz] of UNKNOWN cells (to be treated as occupied): the static part (`_unknown_static`: never
+        observed, new-machine regions, machines with no learned envelope), every cell of an offline camera, and the
+        whole site when the traffic slice (tod, prod) cannot be resolved for either class (nothing comparable seen)."""
+        U = self._unknown_static().copy()
+        for c in self.cam_offline:
+            U |= self.cam_of_cell == int(c)
+        if tod is not None and prod is not None:
+            if any(self._resolve(int(tod), int(prod), c) is None for c in (VEHICLE, PERSON)):
+                U[:] = True
+        return U
+
+    def unknown_boxes(self, tod: int | None = None, prod: int | None = None, max_boxes: int = 24) -> np.ndarray:
+        """World boxes (x0, z0, x1, z1) conservatively covering `unknown_mask` (safe cover: no unknown cell left out)."""
+        U = self.unknown_mask(tod, prod)
+        if not U.any():
+            return np.zeros((0, 4))
+        s = self.spec["site"]
+        cb = safe_box_cover(U, max_boxes)
+        r = s["res"]
+        return np.stack([s["x0"] + cb[:, 0] * r, s["z0"] + cb[:, 1] * r, s["x0"] + cb[:, 2] * r, s["z0"] + cb[:, 3] * r], 1).astype(float)
+
+    def rect_cells(self, rect) -> np.ndarray:
+        """Site-grid cells [nx, nz] touched by a world rectangle (x0, z0, x1, z1)."""
+        s = self.spec["site"]
+        x0, z0, x1, z1 = rect
+        out = np.zeros((s["nx"], s["nz"]), bool)
+        i0, i1 = max(0, int(math.floor((x0 - s["x0"]) / s["res"]))), min(s["nx"], int(math.ceil((x1 - s["x0"]) / s["res"])))
+        j0, j1 = max(0, int(math.floor((z0 - s["z0"]) / s["res"]))), min(s["nz"], int(math.ceil((z1 - s["z0"]) / s["res"])))
+        out[i0:i1, j0:j1] = True
         return out
 
     def _hot_cells(self, tb: int, prod_state: int, p_hard: float):
@@ -663,6 +868,9 @@ class LayeredMap(MapView):
         self.n_ticks = 0
         self.t_first, self.t_last = math.inf, -math.inf
         self._cover_cache: dict = {}
+        self.cam_offline: set[int] = set()                 # cameras currently offline (live state; their cells are UNKNOWN)
+        self.unknown_rects: list[tuple[float, float, float, float]] = []   # e.g. a new machine still being learned
+        self.min_cam_ticks = min_ticks                      # a camera region seen fewer ticks than this is never-observed
 
     # ---------------------------------------------------------------- update
     def update(self, obs: Observation, t: float, cond: Cond) -> None:
@@ -671,6 +879,8 @@ class LayeredMap(MapView):
         self.n_ticks += 1
         self.t_first, self.t_last = min(self.t_first, t), max(self.t_last, t)
         self._cover_cache.clear()
+        if self.cam_offline:                    # an offline / bumped camera's detections are not evidence (its cells are UNKNOWN)
+            obs = self._drop_offline(obs)
         # ---- L1: machine parts and skids inside a zone, binned by the machine's phase
         sel = ((obs.cls == PART) | (obs.cls == SKID)) & (obs.machine >= 0)
         if sel.any():
@@ -687,7 +897,7 @@ class LayeredMap(MapView):
                     pos = np.arange(len(flat), dtype=np.int32)
                     self._scratch[flat] = pos
                     self.l1_hits[flat[self._scratch[flat] == pos]] += 1.0
-        okm = (cond.phase_bin >= 0) & obs.cam_ok[self.cam_of_machine]
+        okm = (cond.phase_bin >= 0) & obs.cam_ok[self.cam_of_machine[:len(cond.phase_bin)]]   # spawned machines: change.py
         k = np.flatnonzero(okm)
         self.l1_visits[k, cond.phase_bin[k]] += 1.0
         # ---- L2 / L3
@@ -709,7 +919,17 @@ class LayeredMap(MapView):
                 self.head[cid].reshape(-1)[hc] += 1.0
         for src, dst in ((cond.period, self.period), (cond.busy, self.busy), (cond.jitter, self.jitter)):
             f = np.isfinite(src)
-            dst[f] = src[f]
+            dst[:len(src)][f] = src[f]
+
+    def _drop_offline(self, obs: Observation) -> Observation:
+        s = self.spec["site"]
+        ix = np.clip(np.floor((obs.x - s["x0"]) / s["res"]).astype(np.int64), 0, self.nx - 1)
+        iz = np.clip(np.floor((obs.z - s["z0"]) / s["res"]).astype(np.int64), 0, self.nz - 1)
+        keep = ~np.isin(self.cam_of_cell[ix, iz], list(self.cam_offline))
+        ok = obs.cam_ok.copy()
+        ok[list(self.cam_offline)] = False
+        return Observation(obs.t, obs.t_cap, obs.cls[keep], obs.x[keep], obs.z[keep], obs.r[keep], obs.heading[keep],
+                           obs.moving[keep], obs.machine[keep], ok)
 
     def merge(self, other: LayeredMap) -> None:
         """Add another map's counts (maps built on separate windows / processes combine exactly)."""
@@ -725,6 +945,8 @@ class LayeredMap(MapView):
             mine[f] = theirs[f]
         self.n_ticks += other.n_ticks
         self.t_first, self.t_last = min(self.t_first, other.t_first), max(self.t_last, other.t_last)
+        self.cam_offline |= set(other.cam_offline)
+        self.unknown_rects += [r for r in other.unknown_rects if r not in self.unknown_rects]
         self._cover_cache.clear()
 
     # ---------------------------------------------------------------- L1 queries
@@ -748,10 +970,58 @@ class LayeredMap(MapView):
         if self.l1_visits[i, phase_bin] >= self.min_visits:
             return self.envelope_prob(machine_id, phase_bin) >= p_min
         out = np.zeros((self.l1_nx[i], self.l1_nz[i]), bool)
+        seen = False
         for b in range(N_BINS):
             if self.l1_visits[i, b] >= self.min_visits:
                 out |= self.envelope_prob(machine_id, b) >= p_min
+                seen = True
+        if not seen:                                        # nothing learned yet: the whole zone grid (UNKNOWN = occupied)
+            out[:] = True
         return out
+
+    def l1_known(self, machine_id: str) -> bool:
+        """True once at least one phase bin of the machine has enough observed ticks to have an envelope."""
+        return bool((self.l1_visits[self._mi(machine_id)] >= self.min_visits).any())
+
+    def _unknown_static(self) -> np.ndarray:
+        U = self.visits_cam.sum(0)[self.cam_of_cell] < self.min_cam_ticks          # never (or barely) observed
+        for r in self.unknown_rects:
+            U |= self.rect_cells(r)
+        for d in self.spec["machines"]:
+            if not self.l1_known(d["id"]):
+                U |= self.rect_cells(d["rect"])
+        return U
+
+    def add_machine(self, machine_id: str, rect, kind: str = "discovered", period_nominal: float = float("nan")) -> int:
+        """Append a machine discovered on the floor (workstream M, observer/change.py) with an empty L1 model over its
+        zone rect (+ margin). Returns its index. Its counts are filled by the caller (`l1_view`)."""
+        sp = self.spec
+        res, margin = sp["env_res"], sp["margin"]
+        x0, z0, x1, z1 = (float(v) for v in rect)
+        gx0, gz0 = math.floor((x0 - margin) / res) * res, math.floor((z0 - margin) / res) * res
+        d = dict(id=machine_id, kind=kind, rect=[x0, z0, x1, z1], x0=gx0, z0=gz0,
+                 nx=int(math.ceil((x1 + margin - gx0) / res)), nz=int(math.ceil((z1 + margin - gz0) / res)),
+                 on_line=False, period_nominal=period_nominal)
+        sp["machines"] = list(sp["machines"]) + [d]
+        n = N_BINS * d["nx"] * d["nz"]
+        self.l1_base = np.r_[self.l1_base, len(self.l1_hits)].astype(np.int64)
+        self.l1_hits = np.r_[self.l1_hits, np.zeros(n, np.float32)]
+        self._scratch = np.r_[self._scratch, np.zeros(n, np.int32)]
+        self.l1_visits = np.vstack([self.l1_visits, np.zeros((1, N_BINS), np.float32)])
+        self.l1_x0, self.l1_z0 = np.r_[self.l1_x0, gx0], np.r_[self.l1_z0, gz0]
+        self.l1_nx, self.l1_nz = np.r_[self.l1_nx, d["nx"]].astype(np.int64), np.r_[self.l1_nz, d["nz"]].astype(np.int64)
+        cams = np.array(sp["cameras"], float)
+        cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
+        self.cam_of_machine = np.r_[self.cam_of_machine, int(np.hypot(cams[:, 0] - cx, cams[:, 1] - cz).argmin())]
+        for a in ("period", "busy", "jitter"):
+            setattr(self, a, np.r_[getattr(self, a), np.nan])
+        self.M += 1
+        self._cover_cache.clear()
+        return self.M - 1
+
+    def l1_view(self, i: int) -> np.ndarray:
+        """Writable view [N_BINS, nx, nz] of machine i's hit counts (for a spawned model fed by observer/change.py)."""
+        return self._l1(i)
 
     def envelope_union(self, machine_id: str, bins, p_min: float = 0.05) -> np.ndarray:
         out = None
@@ -761,14 +1031,17 @@ class LayeredMap(MapView):
         return out
 
     def box_cover(self, machine_id: str, phase_bin: int | tuple | list, p_min: float = 0.05, max_boxes: int = 16,
-                  cover_frac: float = 0.985, world: bool = True) -> np.ndarray:
-        """Axis-aligned boxes covering the envelope (greedy rectangle cover; no box contains a cell below p_min).
-        world=True -> (n, 4) x0, z0, x1, z1 in metres; world=False -> cell boxes (i0, j0, i1, j1) in the machine's local grid."""
+                  cover_frac: float = 0.985, world: bool = True, safe: bool = True) -> np.ndarray:
+        """Axis-aligned boxes covering the envelope. safe=True (default, what is broadcast): conservative outer cover,
+        every envelope cell is inside a box (`safe_box_cover`). safe=False: greedy inner cover (no box contains a cell
+        below p_min, stops at cover_frac). world=True -> (n, 4) x0, z0, x1, z1 in metres; world=False -> cell boxes
+        (i0, j0, i1, j1) in the machine's local grid."""
         bins = (phase_bin,) if isinstance(phase_bin, (int, np.integer)) else tuple(phase_bin)
-        key = (machine_id, bins, p_min, max_boxes, cover_frac, world)
+        key = (machine_id, bins, p_min, max_boxes, cover_frac, world, safe)
         if key not in self._cover_cache:
             i = self._mi(machine_id)
-            cb = box_cover(self.envelope_union(machine_id, bins, p_min), max_boxes, cover_frac)
+            env = self.envelope_union(machine_id, bins, p_min)
+            cb = safe_box_cover(env, max_boxes) if safe else box_cover(env, max_boxes, cover_frac)
             if world:
                 res = self.spec["env_res"]
                 cb = np.stack([self.l1_x0[i] + cb[:, 0] * res, self.l1_z0[i] + cb[:, 1] * res,
@@ -802,7 +1075,8 @@ class LayeredMap(MapView):
     # ---------------------------------------------------------------- persistence
     def save(self, path: str | Path) -> None:
         meta = json.dumps(dict(spec=self.spec, min_visits=self.min_visits, min_ticks=self.min_ticks, shrink_m=self.shrink_m, n_ticks=self.n_ticks,
-                               t_first=self.t_first, t_last=self.t_last))
+                               t_first=self.t_first, t_last=self.t_last, cam_offline=sorted(int(c) for c in self.cam_offline),
+                               unknown_rects=[list(map(float, r)) for r in self.unknown_rects]))
         np.savez_compressed(path, meta=np.array(meta), l1_hits=self.l1_hits, l1_visits=self.l1_visits, visits_cam=self.visits_cam,
                             hits_person=self.hits[PERSON], hits_vehicle=self.hits[VEHICLE], head_person=self.head[PERSON],
                             head_vehicle=self.head[VEHICLE], period=self.period, busy=self.busy, jitter=self.jitter)
@@ -817,18 +1091,26 @@ class LayeredMap(MapView):
         m.head[PERSON][:], m.head[VEHICLE][:] = z["head_person"], z["head_vehicle"]
         m.period[:], m.busy[:], m.jitter[:] = z["period"], z["busy"], z["jitter"]
         m.n_ticks, m.t_first, m.t_last = meta["n_ticks"], meta["t_first"], meta["t_last"]
+        m.cam_offline = set(meta.get("cam_offline", []))
+        m.unknown_rects = [tuple(r) for r in meta.get("unknown_rects", [])]
         return m
 
 
 class MapBuilder:
     """Convenience driver: observation -> conditioning -> map."""
 
-    def __init__(self, scn: Scenario, map_: LayeredMap | None = None, tracker: ConditionTracker | None = None, **map_kw):
+    def __init__(self, scn: Scenario, map_: LayeredMap | None = None, tracker: ConditionTracker | None = None,
+                 binner: Callable | None = None, **map_kw):
+        """binner(t, cond) -> (M,) int phase bins (0..15, STOP_BIN, -1 unknown), optional: replaces the tracker's
+        equal-slice bins for L1 (e.g. discovered sub-phases, observer/phases.py); the returned Cond carries them."""
         self.scn = scn
         self.map = map_ or LayeredMap(scn, **map_kw)
         self.tracker = tracker or ConditionTracker(scn)
+        self.binner = binner
 
     def feed(self, obs: Observation) -> Cond:
         cond = self.tracker.step(obs)
+        if self.binner is not None:
+            cond.phase_bin = np.asarray(self.binner(obs.t_cap, cond), np.int16)
         self.map.update(obs, obs.t_cap, cond)
         return cond

@@ -10,6 +10,11 @@ What is sent
           byte = 4-bit log-quantised probability (0 = below 0.02, 1..15 = 0.02 * 50^((c-1)/14), i.e. 2 % .. 100 %,
           max relative step 32 %) | 3-bit dominant heading (8 dirs) << 4 | heading-valid << 7.
           Hysteresis in the encoder keeps a cell unchanged when it moves by <= 1 code, so quiet slices cost ~nothing.
+  UNKNOWN (payload v2): the site grid's UNKNOWN cells (never observed, under an offline camera, a new machine still
+          being learned, a machine with no envelope yet) as LEB128 run lengths over the flattened [nx, nz] grid,
+          alternating known / unknown, starting with known. The robot treats UNKNOWN as occupied
+          (`DecodedMap.unknown_mask`, and `predict_obstacles` adds it as boxes owned by "UNKNOWN").
+  L1 box covers are conservative by default (safe=True): every envelope cell lies inside a box (`safe_box_cover`).
 Authentication
   Manifest = common header (layer 3, same 12 B as the other layers) | map version | valid_s | raw/payload length |
   chunk count / size | parity group | SHA-256 of the payload | 4-byte hash of every chunk (data and parity), signed
@@ -37,7 +42,8 @@ from nacl.signing import SigningKey
 from intercycle.codec import ble
 from intercycle.codec.layout import MAGIC, VERSION, BitReader, BitWriter, CodecError, peek_header
 from intercycle.codec.sign import Keyring, sign, verify
-from intercycle.observer.mapping import N_BINS, N_PHASE, N_PROD, N_TOD, PERSON, VEHICLE, LayeredMap, MapView, box_cover
+from intercycle.observer.mapping import (N_BINS, N_PHASE, N_PROD, N_TOD, PERSON, VEHICLE, LayeredMap, MapView, box_cover,
+                                         safe_box_cover)
 from intercycle.types import DAY0_UNIX
 
 LAYER_MAP = 3
@@ -45,6 +51,7 @@ CHUNK_DATA = ble.ADV_MAX - 11          # 240 B of payload per frame
 P_LO, P_RANGE = 0.02, 50.0             # code 1 = 2 %, code 15 = 100 %
 CLASSES = (VEHICLE, PERSON)            # order of the L2 / L3 sections
 MAGIC_PAYLOAD = b"ICMP"
+PAYLOAD_VERSION = 2                    # 2 = v1 + UNKNOWN section (run-length mask over the site grid); v1 still decodes
 
 
 # ------------------------------------------------------------------------------------------------ small helpers
@@ -88,8 +95,17 @@ def _coord_bits(m: LayeredMap) -> int:
     return max(4, int(max(max(mm["nx"], mm["nz"]) for mm in m.spec["machines"])).bit_length())
 
 
+def _runs(mask: np.ndarray) -> list[int]:
+    f = np.asarray(mask, bool).reshape(-1).astype(np.int8)
+    b = np.r_[0, np.flatnonzero(np.diff(f)) + 1, len(f)]
+    runs = np.diff(b).tolist()
+    if f[0]:
+        runs = [0] + runs
+    return runs
+
+
 def encode_payload(m: LayeredMap, p_min: float = 0.05, max_boxes: int = 12, cover_frac: float = 0.985,
-                   p_floor: float = P_LO, hyst_sigma: float = 2.5) -> tuple[bytes, dict]:
+                   p_floor: float = P_LO, hyst_sigma: float = 2.5, safe: bool = True) -> tuple[bytes, dict]:
     """Uncompressed map payload and a size breakdown {section: bytes}."""
     sp = m.spec
     mm = sp["machines"]
@@ -125,7 +141,8 @@ def encode_payload(m: LayeredMap, p_min: float = 0.05, max_boxes: int = 12, cove
     w = BitWriter()
     for d in mm:
         for b in range(N_BINS):
-            cbx = box_cover(m.envelope(d["id"], b, p_min), max_boxes, cover_frac)
+            env = m.envelope(d["id"], b, p_min)
+            cbx = safe_box_cover(env, max_boxes) if safe else box_cover(env, max_boxes, cover_frac)
             w.put(len(cbx), 5)
             for i0, j0, i1, j1 in cbx:
                 for v in (i0, j0, i1, j1):
@@ -178,7 +195,14 @@ def encode_payload(m: LayeredMap, p_min: float = 0.05, max_boxes: int = 12, cove
                 prev_code, prev_head, have_prev = tgt, hgt, True
         cls_sizes["L2_vehicle" if c == VEHICLE else "L3_person"] = len(out) - start
     sizes.update(cls_sizes)
-    payload = MAGIC_PAYLOAD + bytes([1]) + struct.pack(">HH", len(meta), len(l1)) + meta + l1 + bytes(out)
+    # ---- UNKNOWN (static part + offline cameras, as of packing time)
+    unk = bytearray()
+    runs = _runs(m.unknown_mask()) if hasattr(m, "unknown_mask") else [nx * nz]
+    unk += _varint(len(runs))
+    for r_ in runs:
+        unk += _varint(int(r_))
+    sizes["UNKNOWN"] = len(unk)
+    payload = MAGIC_PAYLOAD + bytes([PAYLOAD_VERSION]) + struct.pack(">HH", len(meta), len(l1)) + meta + l1 + bytes(out) + bytes(unk)
     return payload, sizes
 
 
@@ -187,11 +211,17 @@ def encode_payload(m: LayeredMap, p_min: float = 0.05, max_boxes: int = 12, cove
 class DecodedMap(MapView):
     """Robot-side view of a decoded map. Same read API as LayeredMap (box covers instead of count grids)."""
 
-    def __init__(self, spec: dict, period: np.ndarray, jitter: np.ndarray, boxes: dict, codes: dict, heads: dict, observed: dict):
+    def __init__(self, spec: dict, period: np.ndarray, jitter: np.ndarray, boxes: dict, codes: dict, heads: dict, observed: dict,
+                 unknown: np.ndarray | None = None):
         self.spec, self.period, self.jitter = spec, period, jitter
         self._boxes, self._codes, self._heads, self._obs = boxes, codes, heads, observed
         self.nx, self.nz = spec["site"]["nx"], spec["site"]["nz"]
         self._ids = [d["id"] for d in spec["machines"]]
+        self._unknown = np.zeros((self.nx, self.nz), bool) if unknown is None else unknown
+        self.cam_offline = set()            # offline cameras are already folded into the broadcast UNKNOWN mask
+
+    def _unknown_static(self) -> np.ndarray:
+        return self._unknown
 
     def _observed(self, tod: int, prod: int, cls: int | None = None) -> bool:
         return bool(self._obs[VEHICLE if cls is None else cls][tod * N_PROD + prod])
@@ -215,8 +245,9 @@ class DecodedMap(MapView):
 
 
 def decode_payload(payload: bytes) -> DecodedMap:
-    if payload[:4] != MAGIC_PAYLOAD or payload[4] != 1:
+    if payload[:4] != MAGIC_PAYLOAD or payload[4] not in (1, 2):
         raise CodecError("bad map payload")
+    ver = payload[4]
     lm, ll = struct.unpack_from(">HH", payload, 5)
     pos = 9
     r = BitReader(payload[pos:pos + lm])
@@ -277,7 +308,17 @@ def decode_payload(payload: bytes) -> DecodedMap:
                 codes[c][s] = cur_c.reshape(nx, nz)
                 heads[c][s] = cur_h.reshape(nx, nz)
                 observed[c][s] = True
-    return DecodedMap(spec, period, jitter, boxes, codes, heads, observed)
+    unknown = np.zeros(nx * nz, bool)
+    if ver >= 2:
+        n_runs, pos = _read_varint(body, pos)
+        at, val = 0, False
+        for _ in range(n_runs):
+            r_, pos = _read_varint(body, pos)
+            if val:
+                unknown[at:at + r_] = True
+            at += r_
+            val = not val
+    return DecodedMap(spec, period, jitter, boxes, codes, heads, observed, unknown.reshape(nx, nz))
 
 
 # ------------------------------------------------------------------------------------------------ manifest

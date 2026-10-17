@@ -1,0 +1,18 @@
+# InterCycle scenario variant: a new moving machine is installed on day 8 (SYNTHETIC).
+# Overlay on scenario/bodyshop.yaml: everything the observer knows (zones, cameras, calendar) comes from the base file,
+# unchanged. `installs` is read ONLY by the truth hook (intercycle/truth/newmachine.py) and the scoring script
+# (scripts/new_machine.py); the observer is never told. Times are sim seconds since 00:00 of day 0.
+base: bodyshop.yaml
+installs:
+  - id: NEW1
+    kind: pick_place          # single 2-link pick-and-place arm on a pedestal, links 1.6 m (reach 3.2 m)
+    x: 72.0                   # free floor north of the line, east of the closures cells (camera 7 region)
+    z: 41.0
+    t_install_s: 720000       # day 8, 08:00
+    period_s: 50.0
+    busy: 0.70
+    jitter: 0.01
+    commission_s: 1800        # first 30 min: irregular commissioning cycles
+    link_m: 1.6
+    pick: [-2.6, 0.6]
+    place: [2.6, -0.6]

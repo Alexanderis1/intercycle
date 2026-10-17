@@ -113,16 +113,26 @@ class MoverBank:
 # ------------------------------------------------------------------------------------------------ one window
 
 def run_window(seed: int, t0: float, t1: float, scn: Scenario | None = None, shim_seed: int | None = None,
-               subframes: int = 3, progress: bool = False, record: bool = False, **map_kw) -> tuple[M.LayeredMap, M.ConditionTracker, dict]:
+               subframes: int = 3, progress: bool = False, record: bool = False, checkpoints=None, on_checkpoint=None,
+               tick_hook=None, extra_parts=None, shim_kw: dict | None = None, build: bool = True,
+               **map_kw) -> tuple[M.LayeredMap, M.ConditionTracker, dict]:
     """Simulate [t0, t1) at 2 Hz and build a LayeredMap from camera observations only. With record=True the info dict
-    also carries the per-tick conditioning (t_cap, prod_state, phase_bin) and the truth objects (world, kinematics)."""
+    also carries the per-tick conditioning (t_cap, prod_state, phase_bin) and the truth objects (world, kinematics).
+
+    checkpoints / on_checkpoint(t, map): called once the simulated time reaches each checkpoint (absolute sim s), used
+    by the timeline to save partial maps. tick_hook(k, t_cap, states, obs, cond): called every tick with the true
+    sub-frame states (truth, for scoring only) and what the observer saw / computed. extra_parts(t) -> {id: circles}:
+    additional moving bodies (e.g. a newly installed machine) handed to the camera as parts. build=False runs the
+    tracker only (held-out scoring windows)."""
     scn = scn or load()
     world = World(scn, seed, t0, t1)
     kin = Kinematics(scn, world)
     mids = [m.id for m in scn.machines]
     movers = MoverBank(scn, seed)
-    shim = M.CameraShim(scn, seed=seed * 1000 + int(t0 // 3600) if shim_seed is None else shim_seed, subframes=subframes)
+    shim = M.CameraShim(scn, seed=seed * 1000 + int(t0 // 3600) if shim_seed is None else shim_seed, subframes=subframes,
+                        **(shim_kw or {}))
     builder = M.MapBuilder(scn, **map_kw)
+    cps = sorted(float(c) for c in (checkpoints or []) if t0 < c <= t1)
     rec_t, rec_prod, rec_bin = [], [], []
     n = int(round((t1 - t0) * HZ))
     block_n = 1200
@@ -138,11 +148,21 @@ def run_window(seed: int, t0: float, t1: float, scn: Scenario | None = None, shi
                 ts = tc - shim.exposure * (1 - (s + 1) / subframes)
                 bd = kin.bodies(ts)
                 parts = {mid: bd[mid] for mid in mids}
+                if extra_parts is not None:
+                    parts.update(extra_parts(ts))
                 if s == subframes - 1:
                     states.append(movers.state(tc, tuple(a[j] for a in blk), parts, bd["SKIDS"], bd["AGVDOCK"]))
                 else:
                     states.append(M.SimState(ts, parts=parts, skids=bd["SKIDS"]))
-            cond = builder.feed(shim.observe(states))
+            obs = shim.observe(states)
+            if build:
+                cond = builder.feed(obs)
+            else:
+                cond = builder.tracker.step(obs)
+            if tick_hook is not None:
+                tick_hook(int(k), tc, states, obs, cond)
+            while cps and float(t_now[j]) >= cps[0]:
+                on_checkpoint(cps.pop(0), builder.map)
             if record:
                 rec_t.append(tc)
                 rec_prod.append(cond.prod_state)
@@ -156,9 +176,14 @@ def run_window(seed: int, t0: float, t1: float, scn: Scenario | None = None, shi
 
 
 def _worker(args):
-    seed, t0, t1, path = args
+    """(seed, t0, t1, path[, checkpoints]): build one window and save it; with checkpoints also save the partial map
+    at each checkpoint as <path stem>_<t:09d>.npz (the timeline's snapshots)."""
+    seed, t0, t1, path = args[:4]
+    cps = args[4] if len(args) > 4 else None
     t = time.time()
-    m, _, _ = run_window(seed, t0, t1)
+    stem = Path(path).with_suffix("")
+    save = (lambda tc, mp: mp.save(f"{stem}_{int(round(tc)):09d}.npz")) if cps else None
+    m, _, _ = run_window(seed, t0, t1, checkpoints=cps, on_checkpoint=save)
     m.save(path)
     return path, time.time() - t
 

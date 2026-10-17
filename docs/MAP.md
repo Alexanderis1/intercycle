@@ -1,4 +1,4 @@
-# The observer's layered map of dynamics (v3)
+# The observer's layered map of dynamics (v4)
 
 The observer does not only say "busy / idle". Over days it builds layers on top of the static map (L0, from CAD / SLAM).
 Each layer holds **dynamic collision volumes** that depend on **time of day** and on the **production phase** the observer
@@ -10,6 +10,7 @@ phase and the production state in the fast layer, and indexes the layers with th
 | L1 machine envelopes | floor swept by moving parts and skids, per machine | local 0.25 m over zone + 1 m margin | machine, **phase bin** (16 + 1 "stopped") |
 | L2 vehicle flows | occupancy probability + dominant heading (8 dirs): AGVs, tuggers, forklifts, docked AGVs | site 1 m (120 x 48) | **time of day** (48 x 30 min), **production state** (4) |
 | L3 people flows | same, for people (aisle walkers, break crowds, data-hall techs) | site 1 m | same |
+| UNKNOWN | cells never observed, under an offline / bumped camera, a new machine still being learned, a machine with no envelope yet, or a whole slice nothing comparable was seen for. **Treated as occupied** | site 1 m | live state + map version |
 
 Production state = `running | andon | break | shift_change`. Everything below is SYNTHETIC (simulated floor, simulated cameras).
 
@@ -165,3 +166,40 @@ positions, data-hall technicians only 07-19 h) and with the shift (night: three 
 * `demo_key` signing keys in the tests and the script are public (seeded); a deployment uses a provisioned key.
 * Heading bins are only filled for moving bodies (speed > 0.2 m/s), so stationary crowds and docked AGVs have probability but no heading.
 * Safety semantics are unchanged: the map is a prior for planning; light curtains / area scanners remain the final layer.
+
+## 7. v4 additions (workstream M, 17 Oct): UNKNOWN, conservative boxes, margin, held-out metrics, change detection
+
+Held-out results, convergence curves and the new-machine run are in `docs/MAP_RESULTS.md`.
+
+* **UNKNOWN cell state.** `MapView.unknown_mask(tod, prod)` (site grid) = `_unknown_static()` (camera regions with fewer
+  than `min_ticks` observed ticks in total, `unknown_rects` such as a new machine still being learned, the zone of any
+  machine without a single well-observed phase bin) + every cell of a camera in `cam_offline` + the whole site when the
+  traffic slice cannot be resolved for either class. `predict_obstacles` adds UNKNOWN as boxes owned by `"UNKNOWN"`
+  (`with_unknown=True`), so a consumer that treats boxes as occupied treats UNKNOWN as occupied. An unseen machine's
+  `envelope()` is its whole zone grid (it used to be empty, i.e. free). Detections from an offline / bumped camera are
+  no longer counted into the map (`LayeredMap.update`).
+* **Broadcast payload v2** (`codec/maplayer.py`): v1 + an UNKNOWN section, LEB128 run lengths over the flattened [nx, nz]
+  site grid (known / unknown alternating, known first; ~10-80 B). Offline cameras are folded into it at packing time, so
+  a camera going offline means a new map version. v1 payloads still decode (no UNKNOWN). `DecodedMap.unknown_mask` and
+  its `predict_obstacles` behave like the learned map's.
+* **Conservative box covers.** The L1 box cover that is broadcast is now an outer cover (`safe_box_cover`, `safe=True`
+  by default): greedy exact boxes first, the uncovered rest as bounding boxes of its components, then least-area-cost
+  merges down to `max_boxes`. Every envelope cell is inside a box (the old inner cover stopped at 98.5 % of the cells,
+  i.e. sent up to 1.5 % of the envelope as free). Price: about 6 % extra box area on the 3-day map (mean over machines x bins).
+* **Inflation margin** `S = K * T + C` (`iso13855_margin`, `predict_obstacles(inflate_m=S)`, `dilate` on grids). How the
+  terms map here and the measured trade-off curve: `docs/MAP_RESULTS.md` section 3.
+* **`predicted_bins(i, phase, prod, dt)`** is the single place where the robot-facing bin choice (phase advance, jitter
+  widening, STOP in breaks / andon, all bins when unknown) lives; `predict_obstacles` and the metrics both call it.
+* **Camera shim stress terms** (off by default, so map builds are unchanged): transient clutter blobs, persistent
+  flicker sources, camera bumps (a camera's detections projected off by (dx, dz) from a time on).
+* **`LayeredMap.add_machine(id, rect)`** appends a discovered machine (empty L1 over its zone + margin);
+  `observer/change.py` fills it (`l1_view`).
+* **Change detection** (`observer/change.py`, no truth): per-cell one-sided CUSUM on unexplained motion in L0-static
+  space -> candidate region UNKNOWN from the first alarm -> `change_detected` after 30 s -> rise-to-rise intervals of the
+  region's motion -> spawn an L1 model once the last K = 6 intervals agree within 5 % and the period is stable, unless the
+  region's cycle is phase-locked to a known machine next to it (`change_explained`: its displaced image, e.g. a bumped
+  camera) -> UNKNOWN lifted once every phase bin has `min_visits` ticks and 4 more cycles passed (`machine_converged`).
+  Aperiodic persistent motion stays UNKNOWN and is cleared after 10 min without evidence (`change_cleared`). Camera
+  bump: every 30 s the last 3 min of part detections near known machines are matched against their learned envelopes
+  at shifts of +-2 m; a clearly better non-zero shift twice in a row = `camera_bump`: that camera's cells go UNKNOWN and
+  its change candidates are dropped.
