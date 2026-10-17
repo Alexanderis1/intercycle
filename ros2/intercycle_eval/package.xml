@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>intercycle_eval</name>
+  <version>0.1.0</version>
+  <description>InterCycle robot evaluation (R3): reactive plant (movers, machines, light-curtain trip/hold), per-condition observer broadcasters, robot camera checks, batch runner and paired statistics.</description>
+  <maintainer email="noreply@example.com">InterCycle</maintainer>
+  <license>MIT</license>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

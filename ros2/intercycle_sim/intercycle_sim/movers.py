@@ -48,9 +48,19 @@ class Part:
 
 
 def parts_for(spec: list[dict]) -> list[Part]:
+    """cls is a PARTS key, or an explicit shape: "cyl:<radius>:<height>" / "box:<length>:<width>:<height>"
+    (R3 uses explicit cylinders for the pooled machine-part colliders)."""
     out = []
     for m in spec:
         cls = ALIASES.get(m["cls"], m["cls"])
+        if cls.startswith("cyl:"):
+            _, r, h = cls.split(":")
+            out.append(Part(m["id"], cls, "cyl", 0.0, 2 * float(r), 2 * float(r), float(h)))
+            continue
+        if cls.startswith("box:"):
+            _, ln, wd, h = cls.split(":")
+            out.append(Part(m["id"], cls, "box", 0.0, float(ln), float(wd), float(h)))
+            continue
         for shape, fwd, ln, wd, h in PARTS[cls]:
             out.append(Part(m["id"], cls, shape, fwd, ln, wd, h))
     return out

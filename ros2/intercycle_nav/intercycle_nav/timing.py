@@ -180,3 +180,20 @@ class CameraGate:
         run = h[k:]
         return all(ok for _, ok in tail) and t - tail[-1][0] <= self.fresh and len(run) >= self.n \
             and run[-1][0] - run[0][0] >= self.span - 1e-9
+
+
+# ------------------------------------------------------------------------------------------------ result records
+def camera_stub_used(sources) -> bool:
+    """True if any observation that fed the camera gate came from a test double (the cheat guard, DIRECTION 5.1)."""
+    return any("stub" in s.lower() or "test double" in s.lower() for s in sources)
+
+
+def interrupted_result(events: list[dict], camera_sources: dict, require_camera: bool, condition: str,
+                       n_targets: int | None = None) -> dict:
+    """goal.json when the planner is interrupted at the end of a fixed-length episode: the raw events plus the same
+    cheat-guard fields and counts as a completed run (R3's runner checks every evaluation episode from these)."""
+    done = [e for e in events if e.get("event") == "target_done"]
+    n_insp = sum(1 for e in done if str(e.get("outcome", "")).startswith("inspected"))
+    return {"result": "INTERRUPTED", "targets": events, "condition": condition, "n_inspected": n_insp,
+            "n_done": len(done), "n_targets": n_targets, "camera_sources": dict(camera_sources),
+            "camera_stub_used": camera_stub_used(camera_sources), "require_camera": bool(require_camera)}

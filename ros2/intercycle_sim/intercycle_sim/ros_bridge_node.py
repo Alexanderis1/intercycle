@@ -10,7 +10,12 @@ Listens on a Unix socket; the simulator connects and sends one frame per physics
   /scan                     sensor_msgs/LaserScan    frame laser (10 Hz, levelled 2D lidar)
   /tf_static                base_link -> laser, base_link -> imu_link, base_link -> camera_link
   /intercycle/contacts      std_msgs/String (JSON)   collision events reported by the sim (for R3's logger only)
-and replies with the latest /cmd_vel (geometry_msgs/Twist; zero if older than --cmd-timeout s of sim time).
+  /intercycle/camera/observations  std_msgs/String (JSON)  robot-camera no-motion observations (R3 camera model:
+                            {"stamp", "source", "targets": [{"id", "visible", "motion_seen"}]}, already latency-delayed)
+  /intercycle/inspection/capture   std_msgs/String (JSON)  inspection capture checks (R3; logging only)
+and replies with the latest /cmd_vel (geometry_msgs/Twist; zero if older than --cmd-timeout s of sim time) plus the
+/intercycle/inspection messages (timing_planner dwell_start / dwell_end) received since the last frame, so the sim
+side can take the inspection capture.
 Nothing here is ground truth: frames carry only sensor-model outputs.
 """
 from __future__ import annotations
@@ -60,6 +65,10 @@ class Bridge(Node):
         self.tfb = TransformBroadcaster(self)
         self.stfb = StaticTransformBroadcaster(self)
         self.create_subscription(Twist, "cmd_vel", self._on_cmd, 10)
+        self.cam_pub = self.create_publisher(String, "/intercycle/camera/observations", 10)
+        self.cap_pub = self.create_publisher(String, "/intercycle/inspection/capture", 10)
+        self.create_subscription(String, "/intercycle/inspection", self._on_insp, 10)
+        self.events: list = []
         self.lock = threading.Lock()
         self.cmd = (0.0, 0.0, 0.0)
         self.cmd_t = -1e9
@@ -71,6 +80,14 @@ class Bridge(Node):
         with self.lock:
             self.cmd = (float(m.linear.x), float(m.linear.y), float(m.angular.z))
             self.cmd_t = self.sim_t
+
+    def _on_insp(self, m: String) -> None:
+        try:
+            d = json.loads(m.data)
+        except ValueError:
+            return
+        with self.lock:
+            self.events.append(d)
 
     def _statics(self, fr: dict) -> None:
         mounts = fr.get("mounts", {})
@@ -139,13 +156,21 @@ class Bridge(Node):
             self.scan_pub.publish(m)
         if fr.get("contacts"):
             self.contact_pub.publish(String(data=json.dumps({"t": t, "contacts": fr["contacts"]})))
+        for ob in fr.get("camera_obs") or []:
+            self.cam_pub.publish(String(data=json.dumps(ob)))
+        for cp in fr.get("inspection_capture") or []:
+            self.cap_pub.publish(String(data=json.dumps(cp)))
         self.n_frames += 1
 
     def reply(self) -> dict:
         with self.lock:
             age = self.sim_t - self.cmd_t
             vx, vy, wz = self.cmd if age <= self.a.cmd_timeout else (0.0, 0.0, 0.0)
-        return {"type": "cmd", "vx": vx, "vy": vy, "wz": wz, "age": age}
+            ev, self.events = self.events, []
+        out = {"type": "cmd", "vx": vx, "vy": vy, "wz": wz, "age": age}
+        if ev:
+            out["events"] = ev
+        return out
 
 
 def serve(node: Bridge, a) -> None:

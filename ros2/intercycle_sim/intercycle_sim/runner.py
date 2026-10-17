@@ -82,6 +82,9 @@ def main() -> None:
     V, F = load_mesh(os.path.join(wd, "mesh.npz"))
     src = M.load_source(cfg.get("mover_source"), cfg)
     parts = M.parts_for(src.spec())
+    # optional R3 plant hooks (intercycle_eval.plant): attach(caster), sensor_prims(t), after_step(t, state, contacts),
+    # frame_extras(t) -> extra frame keys for the bridge, on_ros(t, events), finish(out_dir, summary) -> dict
+    hook = lambda name: getattr(src, name, None)  # noqa: E731
 
     if sim == "isaac":
         from intercycle_sim.isaac_backend import IsaacBackend
@@ -108,6 +111,8 @@ def main() -> None:
                         else 0.0, "median_range_m": float(np.median(rw[both])) if both.any() else None}
         print(f"[runner] warp vs box lidar check {caster_check}", flush=True)
     print(f"[runner] backend {be.name} ready in {boot_s:.1f}s, lidar static caster {caster.name}", flush=True)
+    if hook("attach"):
+        src.attach(caster=caster, dt=be.dt)
 
     suite = SensorSuite(caster, be.dt, seed=int(cfg.get("seed", 0)), start=tuple(cfg.get("start", (0, 0, 0))))
     mounts = {"laser": list(suite.lidar.mount), "imu": [0.0, 0.0, 0.0], "camera": list(suite.camera.mount)}
@@ -134,7 +139,7 @@ def main() -> None:
             pp = M.part_poses(parts, poses) if parts else np.zeros((0, 3))
             if parts:
                 be.set_movers(pp)
-            prims = M.primitives(parts, pp) if parts else None
+            prims = src.sensor_prims(t) if hook("sensor_prims") else (M.primitives(parts, pp) if parts else None)
             w = time.time()
             st = be.step(cmd)
             step_wall += time.time() - w
@@ -151,6 +156,10 @@ def main() -> None:
                 if gap < min_gap:
                     min_gap, min_gap_t = gap, t
             cs = be.contacts() if t >= 0.5 else []          # ignore the spawn settle (first 0.5 s)
+            if hook("after_step"):
+                src.after_step(t, st, cs)
+                if hook("frame_extras"):
+                    fr.update(src.frame_extras(t))
             if cs:
                 fr["contacts"] = cs
                 ev = {"t": round(t, 3), "contacts": cs, "x": st["pos_w"][0], "y": st["pos_w"][1],
@@ -166,6 +175,8 @@ def main() -> None:
                 contacts.append(ev)
             reply = client.exchange(fr)
             cmd = (reply["vx"], reply["vy"], reply["wz"])
+            if reply.get("events") and hook("on_ros"):
+                src.on_ros(t, reply["events"])
             p = np.array(st["pos_w"][:2])
             path_len += float(np.linalg.norm(p - prev))
             prev = p
@@ -206,6 +217,11 @@ def main() -> None:
         "odom_end": rows[-1] if rows else None,
     }
     summary["truth_log"] = _write_table(rows, os.path.join(out_dir, "truth_log"))
+    if hook("finish"):
+        try:
+            summary["plant"] = src.finish(out_dir, summary)
+        except Exception as e:  # noqa: BLE001 - never lose the sim summary
+            summary["plant_error"] = repr(e)
     with open(os.path.join(out_dir, "contacts.json"), "w") as f:
         json.dump(contacts, f)
     with open(os.path.join(out_dir, "sim_summary.json"), "w") as f:

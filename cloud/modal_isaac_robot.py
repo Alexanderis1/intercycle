@@ -94,6 +94,14 @@ image = (
         "bash -c 'source /opt/ros/humble/setup.bash && /usr/bin/python3 -c \"import numpy, nacl, pydantic, yaml, rclpy;"
         " print(numpy.__version__, nacl.__version__, pydantic.VERSION)\"'",
     )
+    # sim-side (Isaac python 3.11) deps for R3's plant + observer process (intercycle.scenario / truth / observer_learned /
+    # codec): pydantic, pyyaml, pynacl, astropy. numpy and torch stay pinned at what Isaac shipped.
+    .run_commands(
+        "python -m pip install --no-cache-dir 'pydantic>=2,<3' 'pyyaml>=6' 'pynacl==1.5.0' 'astropy>=6,<7'"
+        " \"numpy==$(python -c 'import numpy; print(numpy.__version__)')\" 'torch==2.7.0' --extra-index-url " + CU128,
+        "python -c 'import numpy, pydantic, yaml, nacl, astropy, torch; print(numpy.__version__, pydantic.VERSION,"
+        " astropy.__version__, torch.__version__); assert torch.__version__.startswith(\"2.7.0\")'",
+    )
     .add_local_dir(str(REPO / "ros2"), REMOTE_ROS2, ignore=["**/__pycache__", "**/*.pyc", "**/test/**"])
     .add_local_dir(str(REPO / "intercycle"), f"{REMOTE_REPO}/intercycle", ignore=["**/__pycache__", "**/*.pyc"])
     .add_local_dir(str(REPO / "scenario"), f"{REMOTE_REPO}/scenario")
@@ -129,6 +137,10 @@ def check() -> dict:
         "ros_py_deps": sh("source /opt/ros/humble/setup.bash && cd /tmp && PYTHONPATH=/root/repo:$PYTHONPATH /usr/bin/python3 -c"
                           " 'import numpy, nacl, pydantic, intercycle.scenario as s; print(numpy.__version__,"
                           " pydantic.VERSION, len(s.load(\"/root/repo/scenario/bodyshop.yaml\").machines))'"),
+        "sim_py_deps": sh("cd /tmp && PYTHONPATH=/root/repo:/root/ros2/intercycle_sim:/root/ros2/intercycle_eval:/root/ros2/intercycle_nav"
+                          " python -c 'import sys, numpy, pydantic, nacl, astropy; import intercycle.truth.kinematics,"
+                          " intercycle.sim.observer_learned, intercycle.codec.maplayer, intercycle_eval.plant,"
+                          " intercycle_nav.broadcast; print(sys.executable, numpy.__version__, astropy.__version__)'"),
         "nproc": sh("nproc; free -g | head -2"),
     }
 

@@ -72,6 +72,12 @@ def ros_env(work: str) -> dict:
     env["INTERCYCLE_REPO"] = REPO_ROOT
     # `python3` in the ROS env must be the system 3.10 (rclpy), not Modal's 3.11 in /usr/local/bin
     env["PATH"] = "/opt/ros/humble/bin:/usr/bin:/bin:" + env.get("PATH", "")
+    # the simulator's python (Isaac 3.11) for episode-side helpers launched from extra_launch (R3's observer process);
+    # run it with IC_SIM_PYTHONPATH, never with the ROS PYTHONPATH (3.10 extension modules)
+    import sys
+
+    env["IC_SIM_PY"] = sys.executable
+    env["IC_SIM_PYTHONPATH"] = _pkg_paths() + ":" + REPO_ROOT
     return env
 
 
@@ -79,7 +85,7 @@ def sim_env() -> dict:
     env = {k: v for k, v in os.environ.items()
            if not (k.startswith("ROS_") or k.startswith("AMENT") or k.startswith("COLCON") or k in ("RMW_IMPLEMENTATION",
                                                                                                    "CYCLONEDDS_URI"))}
-    env["PYTHONPATH"] = _pkg_paths()
+    env["PYTHONPATH"] = _pkg_paths() + (":" + REPO_ROOT if os.path.isdir(REPO_ROOT) else "")   # R3's plant imports intercycle.*
     env["PYTHONUNBUFFERED"] = "1"
     return env
 
@@ -146,6 +152,31 @@ def _read_json(path: str):
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+
+
+def eval_check(cfg: dict, res: dict) -> dict:
+    """Cheat guard for evaluation episodes (DIRECTION 5.1): the no-motion gate must have come from the camera model,
+    never from the test-double stub, and the planner must have required it. cfg["eval"] marks an evaluation episode."""
+    g = res.get("goal") or {}
+    reasons = []
+    if cfg.get("eval"):
+        if res.get("error"):
+            reasons.append(f"episode error: {res['error']}")
+        if not g:
+            reasons.append("no goal.json")
+        if g.get("camera_stub_used"):
+            reasons.append("camera_stub_used")
+        if g and g.get("require_camera") is False:
+            reasons.append("require_camera false")
+        srcs = g.get("camera_sources")
+        if g and srcs is None:
+            reasons.append("goal.json has no camera_sources")
+        elif g and not any("camera_model" in k for k in srcs) and g.get("condition") != "static":
+            reasons.append(f"no camera_model observations ({srcs})")
+        if cfg.get("sim") == "fake" and not cfg.get("allow_fake"):
+            reasons.append("fake backend")
+    return {"eval": bool(cfg.get("eval")), "valid": not reasons, "reasons": reasons,
+            "camera_sources": g.get("camera_sources")}
 
 
 def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
@@ -243,6 +274,8 @@ def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
     res["sim"] = _read_json(os.path.join(out_dir, "sim_summary.json"))
     res["goal"] = _read_json(os.path.join(work, "goal.json"))
     res["bridge"] = _read_json(status)
+    res["plant"] = _read_json(os.path.join(out_dir, "plant_summary.json"))
+    res["eval_check"] = eval_check(cfg, res)
     for name in procs.p:
         shutil.copy(os.path.join(logdir, f"{name}.log"), os.path.join(out_dir, f"{name}.log"))
     with open(os.path.join(out_dir, "episode.json"), "w") as f:

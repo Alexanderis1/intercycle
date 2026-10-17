@@ -29,7 +29,7 @@ from tf2_ros import Buffer, TransformListener
 
 from intercycle import scenario as S
 from intercycle_nav.masks import assert_no_truth
-from intercycle_nav.timing import CameraGate, TimingCore, window_open
+from intercycle_nav.timing import CameraGate, TimingCore, camera_stub_used, interrupted_result, window_open
 
 RESULT = {TaskResult.SUCCEEDED: "SUCCEEDED", TaskResult.CANCELED: "CANCELED", TaskResult.FAILED: "FAILED"}
 
@@ -270,7 +270,7 @@ class Planner:
         out["wall_s"] = round(time.time() - w0, 1)
         # cheat guard (DIRECTION 5.1): which camera fed the no-motion gate; R3's runner fails episodes run on the stub
         out["camera_sources"] = dict(self.camera_sources)
-        out["camera_stub_used"] = any("stub" in s.lower() or "test double" in s.lower() for s in self.camera_sources)
+        out["camera_stub_used"] = camera_stub_used(self.camera_sources)
         out["require_camera"] = self.require_camera
         return out
 
@@ -281,7 +281,7 @@ def main() -> None:
     try:
         out = p.run()
     except KeyboardInterrupt:
-        out = {"result": "INTERRUPTED", "targets": p.events}
+        out = interrupted_result(p.events, p.camera_sources, p.require_camera, p.condition, len(p.targets))
     print("GOAL_RESULT " + json.dumps(out), flush=True)
     if p.out:
         os.makedirs(os.path.dirname(p.out) or ".", exist_ok=True)

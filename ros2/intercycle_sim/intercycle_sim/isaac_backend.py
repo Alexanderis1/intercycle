@@ -148,7 +148,11 @@ class IsaacBackend:
 
     def set_movers(self, part_xyp: np.ndarray) -> None:
         th = self.torch
-        for nm, p, (x, y, psi) in zip(self.mover_names, self.parts, part_xyp):
+        last = getattr(self, "_last_xyp", None)
+        self._last_xyp = np.array(part_xyp, float, copy=True)
+        for k, (nm, p, (x, y, psi)) in enumerate(zip(self.mover_names, self.parts, part_xyp)):
+            if last is not None and k < len(last) and abs(last[k, 0] - x) < 1e-5 and abs(last[k, 1] - y) < 1e-5                     and abs(last[k, 2] - psi) < 1e-5:
+                continue                     # unchanged (parked / standing): skip the PhysX write
             pose = th.tensor([[x, y, p.height / 2, math.cos(psi / 2), 0.0, 0.0, math.sin(psi / 2)]],
                              device=self.device, dtype=th.float32)
             self.u.scene[nm].write_root_pose_to_sim(pose)
