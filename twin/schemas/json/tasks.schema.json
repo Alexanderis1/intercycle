@@ -1,0 +1,288 @@
+{
+  "$defs": {
+    "CandidatePose": {
+      "additionalProperties": false,
+      "properties": {
+        "pose": {
+          "$ref": "#/$defs/Pose"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "generated",
+            "confirmed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "standoff_m": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Standoff M"
+        }
+      },
+      "required": [
+        "pose",
+        "source"
+      ],
+      "title": "CandidatePose",
+      "type": "object"
+    },
+    "Checkpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "zone": {
+          "title": "Zone",
+          "type": "string"
+        },
+        "press": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Press"
+        },
+        "target_kind": {
+          "enum": [
+            "press",
+            "fixture",
+            "panel",
+            "other"
+          ],
+          "title": "Target Kind",
+          "type": "string"
+        },
+        "target_xzh": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Target Xzh",
+          "type": "array"
+        },
+        "normal_xz": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Normal Xz",
+          "type": "array"
+        },
+        "candidate_poses": {
+          "items": {
+            "$ref": "#/$defs/CandidatePose"
+          },
+          "minItems": 1,
+          "title": "Candidate Poses",
+          "type": "array"
+        },
+        "inside_danger": {
+          "title": "Inside Danger",
+          "type": "boolean"
+        },
+        "dwell_s": {
+          "exclusiveMinimum": 0,
+          "title": "Dwell S",
+          "type": "number"
+        },
+        "zoom": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Zoom",
+          "type": "number"
+        },
+        "thermal": {
+          "title": "Thermal",
+          "type": "boolean"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "cal_v0",
+            "cal_v1",
+            "traced_v0",
+            "traced_v1",
+            "measured",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "zone",
+        "target_kind",
+        "target_xzh",
+        "normal_xz",
+        "candidate_poses",
+        "inside_danger",
+        "dwell_s",
+        "zoom",
+        "thermal",
+        "source"
+      ],
+      "title": "Checkpoint",
+      "type": "object"
+    },
+    "Inspection": {
+      "additionalProperties": false,
+      "properties": {
+        "defect_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Defect Rate",
+          "type": "number"
+        },
+        "zoom_max": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Zoom Max",
+          "type": "number"
+        },
+        "detectability": {
+          "minLength": 1,
+          "title": "Detectability",
+          "type": "string"
+        }
+      },
+      "required": [
+        "defect_rate",
+        "zoom_max",
+        "detectability"
+      ],
+      "title": "Inspection",
+      "type": "object"
+    },
+    "Pose": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "z": {
+          "title": "Z",
+          "type": "number"
+        },
+        "yaw": {
+          "title": "Yaw",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "z",
+        "yaw"
+      ],
+      "title": "Pose",
+      "type": "object"
+    },
+    "ZoneTasks": {
+      "additionalProperties": false,
+      "properties": {
+        "zone": {
+          "title": "Zone",
+          "type": "string"
+        },
+        "dock": {
+          "$ref": "#/$defs/Pose"
+        },
+        "mission_order": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Mission Order",
+          "type": "array"
+        }
+      },
+      "required": [
+        "zone",
+        "dock",
+        "mission_order"
+      ],
+      "title": "ZoneTasks",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.tasks/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "inspection": {
+      "$ref": "#/$defs/Inspection"
+    },
+    "zones": {
+      "items": {
+        "$ref": "#/$defs/ZoneTasks"
+      },
+      "minItems": 1,
+      "title": "Zones",
+      "type": "array"
+    },
+    "checkpoints": {
+      "items": {
+        "$ref": "#/$defs/Checkpoint"
+      },
+      "minItems": 1,
+      "title": "Checkpoints",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract",
+    "site_id",
+    "inspection",
+    "zones",
+    "checkpoints"
+  ],
+  "title": "Tasks",
+  "type": "object"
+}

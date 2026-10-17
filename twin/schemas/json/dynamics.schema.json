@@ -1,0 +1,182 @@
+{
+  "$defs": {
+    "Dist": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "enum": [
+            "lognormal",
+            "beta",
+            "gamma",
+            "exponential",
+            "poisson",
+            "normal",
+            "uniform",
+            "empirical",
+            "kaplan_meier"
+          ],
+          "title": "Family",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "family"
+      ],
+      "title": "Dist",
+      "type": "object"
+    },
+    "Interval": {
+      "additionalProperties": false,
+      "properties": {
+        "lo": {
+          "title": "Lo",
+          "type": "number"
+        },
+        "hi": {
+          "title": "Hi",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lo",
+        "hi"
+      ],
+      "title": "Interval",
+      "type": "object"
+    },
+    "Param": {
+      "additionalProperties": false,
+      "description": "`value` is the point value the twin uses (for a library or distribution, a scale factor or its median);\n`sweep` is the range of the sensitivity sweep and must contain it.",
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "fitted",
+            "fitted_censored",
+            "prior",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "n": {
+          "minimum": 0,
+          "title": "N",
+          "type": "integer"
+        },
+        "sweep": {
+          "$ref": "#/$defs/Interval"
+        },
+        "dist": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Dist"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        },
+        "time_of_day": {
+          "default": false,
+          "title": "Time Of Day",
+          "type": "boolean"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "value",
+        "unit",
+        "source",
+        "n",
+        "sweep"
+      ],
+      "title": "Param",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.dynamics/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "observed": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Param"
+      },
+      "title": "Observed",
+      "type": "object"
+    },
+    "assumed": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Param"
+      },
+      "title": "Assumed",
+      "type": "object"
+    }
+  },
+  "required": [
+    "contract",
+    "site_id",
+    "version",
+    "observed",
+    "assumed"
+  ],
+  "title": "Dynamics",
+  "type": "object"
+}

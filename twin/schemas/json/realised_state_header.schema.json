@@ -1,0 +1,68 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "header",
+      "title": "Kind",
+      "type": "string"
+    },
+    "contract": {
+      "const": "twin.realised_state/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "world": {
+      "minimum": 0,
+      "title": "World",
+      "type": "integer"
+    },
+    "day": {
+      "minimum": 1,
+      "title": "Day",
+      "type": "integer"
+    },
+    "hz": {
+      "maximum": 2.0,
+      "minimum": 2.0,
+      "title": "Hz",
+      "type": "number"
+    },
+    "t0_s": {
+      "title": "T0 S",
+      "type": "number"
+    },
+    "zones": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Zones",
+      "type": "array"
+    },
+    "presses": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Presses",
+      "type": "array"
+    }
+  },
+  "required": [
+    "kind",
+    "contract",
+    "run_id",
+    "world",
+    "day",
+    "hz",
+    "t0_s",
+    "zones",
+    "presses"
+  ],
+  "title": "RealisedHeader",
+  "type": "object"
+}

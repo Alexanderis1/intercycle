@@ -1,0 +1,304 @@
+{
+  "$defs": {
+    "MoverIntent": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "title": "Entity",
+          "type": "string"
+        },
+        "cls": {
+          "enum": [
+            "person",
+            "forklift"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "zone": {
+          "title": "Zone",
+          "type": "string"
+        },
+        "t_start": {
+          "minimum": 0,
+          "title": "T Start",
+          "type": "number"
+        },
+        "segment": {
+          "title": "Segment",
+          "type": "string"
+        },
+        "speed_scale": {
+          "exclusiveMinimum": 0,
+          "title": "Speed Scale",
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity",
+        "cls",
+        "zone",
+        "t_start",
+        "segment",
+        "speed_scale"
+      ],
+      "title": "MoverIntent",
+      "type": "object"
+    },
+    "PressEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "press": {
+          "title": "Press",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "running",
+            "stopped"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "t0": {
+          "minimum": 0,
+          "title": "T0",
+          "type": "number"
+        },
+        "t1": {
+          "title": "T1",
+          "type": "number"
+        },
+        "period_s": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Period S"
+        },
+        "phase_s": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Phase S"
+        },
+        "cause": {
+          "enum": [
+            "production",
+            "short_stop",
+            "long_stop",
+            "break"
+          ],
+          "title": "Cause",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "observed",
+            "assumed",
+            "prior"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "press",
+        "kind",
+        "t0",
+        "t1",
+        "cause",
+        "source"
+      ],
+      "title": "PressEvent",
+      "type": "object"
+    },
+    "Segment": {
+      "additionalProperties": false,
+      "description": "A path: rows (dt, x, z), dt from the segment start, strictly increasing from 0.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "cls": {
+          "enum": [
+            "person",
+            "forklift"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "resampled",
+            "synthetic_stub"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clip_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clip Id"
+        },
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Id"
+        },
+        "points": {
+          "items": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 2,
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "cls",
+        "source",
+        "points"
+      ],
+      "title": "Segment",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.day_script/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "generator": {
+      "title": "Generator",
+      "type": "string"
+    },
+    "generator_version": {
+      "title": "Generator Version",
+      "type": "string"
+    },
+    "rng_scheme": {
+      "const": "numpy SeedSequence([world_seed, day, blake2b64(entity), blake2b64(event)]) -> PCG64",
+      "title": "Rng Scheme",
+      "type": "string"
+    },
+    "world_seed": {
+      "minimum": 0,
+      "title": "World Seed",
+      "type": "integer"
+    },
+    "day": {
+      "minimum": 1,
+      "title": "Day",
+      "type": "integer"
+    },
+    "t0_s": {
+      "minimum": 0,
+      "title": "T0 S",
+      "type": "number"
+    },
+    "duration_s": {
+      "exclusiveMinimum": 0,
+      "title": "Duration S",
+      "type": "number"
+    },
+    "zones": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Zones",
+      "type": "array"
+    },
+    "presses": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Presses",
+      "type": "array"
+    },
+    "press_events": {
+      "items": {
+        "$ref": "#/$defs/PressEvent"
+      },
+      "title": "Press Events",
+      "type": "array"
+    },
+    "mover_intents": {
+      "items": {
+        "$ref": "#/$defs/MoverIntent"
+      },
+      "title": "Mover Intents",
+      "type": "array"
+    },
+    "segments": {
+      "items": {
+        "$ref": "#/$defs/Segment"
+      },
+      "title": "Segments",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract",
+    "generator",
+    "generator_version",
+    "rng_scheme",
+    "world_seed",
+    "day",
+    "t0_s",
+    "duration_s",
+    "zones",
+    "presses",
+    "press_events",
+    "mover_intents",
+    "segments"
+  ],
+  "title": "DayScript",
+  "type": "object"
+}

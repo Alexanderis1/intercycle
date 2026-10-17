@@ -1,0 +1,145 @@
+{
+  "$defs": {
+    "RealisedMover": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "cls": {
+          "enum": [
+            "person",
+            "forklift",
+            "robot"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "zone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Zone"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "z": {
+          "title": "Z",
+          "type": "number"
+        },
+        "heading": {
+          "title": "Heading",
+          "type": "number"
+        },
+        "speed": {
+          "minimum": 0,
+          "title": "Speed",
+          "type": "number"
+        },
+        "r": {
+          "exclusiveMinimum": 0,
+          "title": "R",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "cls",
+        "zone",
+        "x",
+        "z",
+        "heading",
+        "speed",
+        "r"
+      ],
+      "title": "RealisedMover",
+      "type": "object"
+    },
+    "RealisedPress": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "running",
+            "idle",
+            "stopped",
+            "tripped",
+            "held",
+            "resetting"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "ram": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Ram",
+          "type": "number"
+        },
+        "stroke": {
+          "title": "Stroke",
+          "type": "boolean"
+        },
+        "freeze": {
+          "title": "Freeze",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "state",
+        "ram",
+        "stroke",
+        "freeze"
+      ],
+      "title": "RealisedPress",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "const": "tick",
+      "title": "Kind",
+      "type": "string"
+    },
+    "t": {
+      "title": "T",
+      "type": "number"
+    },
+    "presses": {
+      "items": {
+        "$ref": "#/$defs/RealisedPress"
+      },
+      "title": "Presses",
+      "type": "array"
+    },
+    "movers": {
+      "items": {
+        "$ref": "#/$defs/RealisedMover"
+      },
+      "title": "Movers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "kind",
+    "t",
+    "presses",
+    "movers"
+  ],
+  "title": "RealisedTick",
+  "type": "object"
+}
