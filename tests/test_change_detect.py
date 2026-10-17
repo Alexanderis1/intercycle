@@ -199,6 +199,100 @@ def test_lift_waits_for_the_cells_its_dilation_protects():
     assert free_while_occupied == 0
 
 
+def test_lift_is_judged_in_the_slice_where_the_change_was_seen():
+    """Re-audit S7a fix1 (major). Slices visited in long blocks (time-of-day slices): a cell is occupied in slice 1 only,
+    and the slices alternate in blocks longer than clear_ticks. The lift used to count the clear ticks in ANY slice, so
+    the cell was lifted during a slice-0 block (where the change never occurs) and was broadcast FREE in slice 1 while
+    occupied, until the CUSUM fired again. The lift now needs clear_ticks of slice 1's own observed ticks without an
+    unexplained hit. No background noise (background hits on the cell happened to block the old lift)."""
+    cfg = ChangeConfig(half_life_ticks=1e5, clear_ticks=300)
+    block, hist = 600, 19800                              # blocks > clear_ticks; 19800 empty ticks per slice of history
+    L = ChangeLayer(1, 2, cfg)
+    rng = np.random.default_rng(11)
+    obs, nohit = np.ones(1, bool), np.zeros(1, bool)
+    for t in range(2 * hist):
+        L.step((t // block) % 2, nohit, obs)
+    alarms = lifts = 0
+    first_alarm = None
+    free_while_occupied = 0
+    lift_slices = []
+    for t in range(20 * block):                           # 10 blocks of each slice, slice 1 always occupied
+        s = (t // block) % 2
+        occ = s == 1
+        r = L.step(s, np.array([occ and rng.random() < DET]), obs)
+        alarms += len(r.alarmed)
+        if len(r.lifted):
+            lifts += 1
+            lift_slices.append(s)
+        if first_alarm is None and L.unknown[0]:
+            first_alarm = t
+        if first_alarm is not None and occ and L.state(1)[0] == CD.FREE:
+            free_while_occupied += 1
+    print(f"\nlong slice blocks: first alarm at tick {first_alarm}, alarms {alarms}, lifts {lifts} (in slices "
+          f"{lift_slices}); slice-1 ticks occupied but broadcast FREE after the alarm: {free_while_occupied}; "
+          f"final p {L.p(1)[0]:.3f} P {L.p_lifetime(1)[0]:.3f} state {L.state(1)[0]}")
+    assert first_alarm is not None and first_alarm < 2 * block, "the change must be UNKNOWN in its first block"
+    assert free_while_occupied == 0, "the cell was broadcast FREE in slice 1 while the change occupies it"
+    assert L.state(1)[0] != CD.FREE and L.state(0)[0] != CD.OCCUPIED
+
+
+@pytest.mark.parametrize("pattern", ["persistent", "sweep"])
+def test_lift_in_long_blocks_needs_the_change_gone_from_its_own_slice(pattern):
+    """Same long blocks (slices of 600 ticks > clear_ticks 300), change in slice 1 only, now never absorbed (P stays
+    below p_min: long empty history) and either persistent or an intermittent sweep (on 40 / off 80 ticks). While it is
+    there, the cell is never lifted, whatever the slice-0 blocks show. Once it is gone, the lift comes back after
+    slice 1 has been clear again (availability)."""
+    cfg = ChangeConfig(half_life_ticks=1e6, clear_ticks=300)
+    block = 600
+    L = ChangeLayer(1, 2, cfg)
+    rng = np.random.default_rng(12)
+    obs, nohit = np.ones(1, bool), np.zeros(1, bool)
+    for t in range(200 * block):                          # 100 empty blocks per slice: P stays < p_min for 6 blocks
+        L.step((t // block) % 2, nohit, obs)
+    on = (lambda t: True) if pattern == "persistent" else (lambda t: t % 120 < 40)
+    lifted_while_there = free_while_occupied = 0
+    for t in range(12 * block):                           # 6 blocks of each slice with the change
+        s = (t // block) % 2
+        occ = s == 1 and on(t)
+        r = L.step(s, np.array([occ and rng.random() < DET]), obs)
+        lifted_while_there += len(r.lifted)
+        if L.n_alarms and occ and L.state(1)[0] == CD.FREE:
+            free_while_occupied += 1
+    assert L.n_alarms >= 1 and L.p_lifetime(1)[0] < cfg.p_min, "scenario check: alarmed, not absorbed"
+    assert lifted_while_there == 0 and free_while_occupied == 0
+    t_lift = None
+    for t in range(12 * block, 20 * block):              # the change is gone
+        if len(L.step((t // block) % 2, nohit, obs).lifted):
+            t_lift = t - 12 * block
+            break
+    print(f"\nlong blocks, {pattern}: alarms {L.n_alarms}; lifted {t_lift} ticks after the change went away")
+    assert t_lift is not None and t_lift <= 2 * block, "the lift must come back once slice 1 is clear"
+
+
+def test_lift_in_fast_cycling_slices_takes_clear_ticks_not_clear_ticks_per_slice():
+    """Availability on fast-cycling slices (the body-shop phase bins: 17 bins, a few ticks each). A change seen in
+    every bin goes away: the lift comes after ~clear_ticks of the cell's observed ticks (each bin visited many separate
+    times in that window), not after clear_ticks in each bin (17 x longer)."""
+    cfg = ChangeConfig(half_life_ticks=1e6, clear_ticks=300)
+    nsl, run = 17, 8
+    L = ChangeLayer(1, nsl, cfg)
+    rng = np.random.default_rng(13)
+    obs = np.ones(1, bool)
+    for t in range(nsl * run * 200):
+        L.step((t // run) % nsl, np.zeros(1, bool), obs)
+    t0 = nsl * run * 200
+    for t in range(t0, t0 + 3000):                         # a new arm: 50 % of its own 120-tick cycle
+        L.step((t // run) % nsl, np.array([t % 120 < 60 and rng.random() < DET]), obs)
+    assert L.unknown[0], "scenario check: the change is UNKNOWN"
+    t_lift = None
+    for t in range(t0 + 3000, t0 + 3000 + nsl * cfg.clear_ticks):
+        if len(L.step((t // run) % nsl, np.zeros(1, bool), obs).lifted):
+            t_lift = t - t0 - 3000
+            break
+    print(f"\nfast-cycling slices: lifted {t_lift} ticks after the change went away (clear_ticks {cfg.clear_ticks})")
+    assert t_lift is not None and t_lift <= cfg.clear_ticks + 3 * nsl * run
+
+
 def test_weekly_program_variant_cells_stay_occupied_after_their_decayed_p_falls():
     """Audit S7a #2. Forgetting may only ADD occupancy. A program variant that runs 2 'days' a 'week' (1 day = one
     half-life, as with the 24 h default) sweeps its cells 50 % of the time in slice 2; after 5 days without it the
@@ -257,6 +351,21 @@ def test_sensitivity_floor_10pct_sweep_is_not_detected_in_2h():
     d, fa, _ = _run_change("arm", 0.1, N=120, learn=3 * 3600 * 2, after=2 * 3600 * 2)
     print(f"\n10 % sweep: {np.isfinite(d).sum()} of {len(d)} cells UNKNOWN within 2 h; false-alarm cells {fa}")
     assert not np.isfinite(d).all()
+
+
+def test_change_present_when_the_layer_starts_is_learned_as_its_null():
+    """Disclosed limitation (change_detect_l1 docstring, re-audit S7a fix1): the layer persists nothing, so after a start
+    a change that is already there is learned as the cell's null. With an external broadcast that says FREE (the
+    body-shop map's envelope) a cell swept 50 % of a 60 s cycle from the first tick is not detected in 4 h. This pins the
+    disclosed behaviour; if it fails, the disclosure must change."""
+    L = ChangeLayer(1, 17, ChangeConfig())
+    rng = np.random.default_rng(2)
+    obs, free = np.ones(1, bool), np.ones(1, bool)
+    alarms = 0
+    for t in range(int(4 * 3600 * HZ)):
+        alarms += len(L.step(t % 17, np.array([(t % 120 < 60) and rng.random() < DET]), obs, free=free).alarmed)
+    print(f"\nchange present at start: alarms in 4 h {alarms}; S {L.S[0]:.2f}, max Ss {L.Ss[:, 0].max():.2f}")
+    assert alarms == 0
 
 
 def test_unknown_is_never_lifted_and_cusum_frozen_while_unobserved():

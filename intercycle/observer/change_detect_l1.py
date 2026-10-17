@@ -34,9 +34,19 @@ envelope of the current bin (at cfg.p_min, the robot's 0.05). So
 Forgetting serves the CUSUM's null here (the decayed counts are the learned behaviour of each cell). Availability cost:
 an UNKNOWN box stays until the map's undecayed counts take the change in (~13 h for a newly always-occupied cell against
 a week of history), and usually as long as the change persists, because detection noise keeps hitting FREE fringe cells
-inside its 0.5 m dilation. In a bin the layer has not learned yet (fewer than min_visits observed ticks, e.g. the STOP bin
-of a machine that never stops, or the first ~8.5 min after a start since nothing is persisted) the cells are not
-monitored: the map shows its own fallback there (union of the learned bins), as without this module.
+inside its 0.5 m dilation.
+Not covered (disclosed; the same as without this module, not a regression; re-audit S7a fix1). In a bin the layer has
+not learned yet (fewer than cfg.min_visits = 60 decayed observed ticks in that bin) the cells are not monitored, so an
+in-zone change there is not detected. What the robot gets there is the map's own rule (`LayeredMap.envelope`): the
+union of the learned bins only while the map has fewer than its own min_visits = 8 visits in the bin, and from 8
+visits on that bin's own envelope, which may be small (e.g. the STOP bin after a few short stops). Such bins: the STOP
+bin of a machine that rarely stops, and EVERY bin in the first ~8.5 min after a start (17 bins x 60 ticks at 2 Hz),
+since the layer persists nothing while the map's counts may be loaded with a week of history. Worse, a change that is
+already there when the layer starts is learned as the cell's null (tests/test_change_detect.py::
+test_change_present_when_the_layer_starts_is_learned_as_its_null: 17 bins, broadcast FREE, a cell swept 50 % of a 60 s
+cycle from the start gives no alarm in 4 h; an always-occupied cell alarmed after ~15 min in a probe). Such a change is taken in only by the map's undecayed counts (hours). Failing closed
+instead (the whole machine grid UNKNOWN in bins the layer has not learned) would cost each machine's zone + margin for
+~8.5 min after every start and during its first ~30 s of observed STOP ticks; that choice is the lead's.
 
 Every tick: `mp.update(obs, t, cond)` then `det.step(obs, cond)` (the comparison must see this tick's counts; a step
 without a new map update is refused with RuntimeError). `step` pushes the UNKNOWN boxes into map.unknown_rects itself.

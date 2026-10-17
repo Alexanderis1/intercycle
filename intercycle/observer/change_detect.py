@@ -41,11 +41,28 @@ The fix, as one small object per grid (`ChangeLayer`):
    with its own cycle) and Ss[s, c] per slice (a change in some slices only, e.g. a program change that puts the arm in
    cells at phases where they used to be free). max(S, Ss) >= h  ->  the cell is UNKNOWN at once (that very tick).
 
-3. Lifting UNKNOWN. An unexplained hit is a hit on a cell that the broadcast shows FREE (point 4). An UNKNOWN cell is
-   lifted after `clear_ticks` of its OBSERVED ticks without an unexplained hit on itself or on any cell within `dilate`
-   cells of it (its UNKNOWN dilation is what protects such a neighbour, e.g. a cell the change occupies too rarely for
-   its own CUSUM). This covers both ends: the change went away (no hits), or the broadcast took it in (its hits are no
-   longer on FREE cells). An unobserved cell is never lifted, and its S is frozen.
+3. Lifting UNKNOWN. An unexplained hit is a hit on a cell that the broadcast shows FREE (point 4); it counts for the
+   cell itself and for every cell within `dilate` cells of it (its UNKNOWN dilation is what protects such a neighbour,
+   e.g. a cell the change occupies too rarely for its own CUSUM). "Went away" is judged in the slice where the change
+   was seen (re-audit S7a fix1: with time-of-day slices visited in long blocks, a lift counted over all slices cleared a
+   change seen only in slice B during a block of slice A, where it never occurs, and B was then broadcast FREE while
+   occupied). Per (slice, cell) the layer keeps, since the cell's last unexplained hit IN THAT SLICE: its observed ticks
+   in that slice (own), its observed ticks in any slice (all), and the separate visits of that slice in which it was
+   observed (a visit = a run of consecutive steps with the same slice index). A slice is clear for the cell when
+       own >= clear_ticks                                                     (long blocks: 15 min inside the slice), or
+       all >= clear_ticks and visits >= clear_visits and own >= clear_min_ticks       (fast-cycling slices, e.g. phase
+                                                  bins: the slice was sampled across the whole window, several times),
+   and a slice with no unexplained hit at all is clear. An UNKNOWN cell is lifted only when EVERY slice is clear, so a
+   change seen only in slice B is never cleared by ticks of slice A. The second rule keeps the single-slice behaviour
+   (clear_ticks of the cell's observed ticks) for fast-cycling slices, instead of clear_ticks per slice (17 x longer on
+   the body-shop phase bins). Its two guards: clear_visits = 3 separate visits (a change in a slice visited in long
+   blocks must be absent from whole visits), clear_min_ticks = 12 own ticks (a persistent change at the measured 0.68
+   detection rate is missed 12 ticks in a row with probability 0.32 ** 12 ~ 1e-6). This covers both ends in each slice:
+   the change went away there (no hits), or the broadcast took it in there (its hits are no longer on FREE cells). An
+   unobserved cell is never lifted, and its S is frozen.
+   Availability cost: an unexplained hit in a rarely visited slice (the STOP bin, a weekend time-of-day bin), also a
+   stray detection near the change, keeps the cell UNKNOWN until that slice is clear again by one of the two rules,
+   however long that takes in wall clock.
    Availability cost: detection noise around a persistent change (sigma 0.285 m) keeps hitting FREE fringe cells, so
    the dilated UNKNOWN blob around it usually stays as long as the change does.
 
@@ -89,6 +106,7 @@ API (all arrays flat over the grid, length n_cells):
     layer.p(slice_idx), layer.p_lifetime(slice_idx)   # decayed / undecayed occupancy (NaN where never observed)
     layer.occupied(slice_idx), layer.trusted(slice_idx), layer.monitored(slice_idx)
     layer.visits(slice_idx), layer.S, layer.Ss, layer.unknown
+    layer.slices_clear(cells)                         # bool[n_slices, len(cells)]: the per-slice lift rule (point 3)
     CD.half_life_for(wall_hours, n_slices)            # half_life_ticks for a wall-clock half-life
     CD.drift_per_tick(cfg, a0, b0, q, r)              # expected llr per tick (analytic detection delay ~ h / drift)
 State is in-process only (numpy arrays on the object); nothing is persisted.
@@ -120,6 +138,8 @@ class ChangeConfig:
     a_prior: tuple = (1.0, 2.0)     # (pseudo stays, pseudo hits) for a0: prior mean 0.5
     hold: int = 2                   # run state = a hit within the last hold + 1 observed ticks (bridges detection gaps)
     clear_ticks: int = 1800         # observed ticks without an unexplained hit before UNKNOWN is lifted (15 min at 2 Hz)
+    clear_visits: int = 3           # ... and, when counted over all slices, separate visits of each slice that had one
+    clear_min_ticks: int = 12       # ... and observed ticks of that slice itself (module docstring, point 3)
     half_life_ticks: float | None = None   # None: DAY_TICKS / n_slices (24 h wall clock with even slice coverage)
     dilate: int = 0                 # cells added around UNKNOWN cells by unknown_mask() (needs `shape`)
 
@@ -158,8 +178,16 @@ class ChangeLayer:
         self.S = np.zeros(self.n_cells)                 # pooled CUSUM per cell (changes not locked to the slices)
         self.Ss = np.zeros(z)                           # CUSUM per (slice, cell) (a change in some slices only)
         self.unknown = np.zeros(self.n_cells, bool)
-        self.obs_ticks = np.zeros(self.n_cells, np.int64)          # observed ticks per cell (any slice)
-        self.last_unexpl = np.full(self.n_cells, -(1 << 40), np.int64)
+        # lift bookkeeping (module docstring, point 3), per (slice, cell) since its last unexplained hit in that slice
+        never = -(1 << 40)
+        self.obs_ticks = np.zeros(z, np.int64)          # observed ticks per (slice, cell)
+        self.obs_all = np.zeros(self.n_cells, np.int64)            # observed ticks per cell, any slice
+        self.last_unexpl = np.full(z, never, np.int64)  # obs_ticks of (slice, cell) at its last unexplained hit there
+        self.last_unexpl_all = np.full(z, never, np.int64)         # obs_all of the cell at that same hit
+        self.visits_since = np.zeros(z, np.int64)       # visits of the slice with the cell observed, since that hit
+        self._visit = 0                                 # id of the current visit (a run of steps with one slice index)
+        self._visit_slice = -1
+        self._visit_seen = np.full(self.n_cells, -1, np.int64)     # last visit id in which the cell was observed
         self.cap = cfg.cap_mult * cfg.h
         self.n_alarms = 0
 
@@ -203,6 +231,16 @@ class ChangeLayer:
 
     def not_free(self, slice_idx: int = 0, unknown: np.ndarray | None = None) -> np.ndarray:
         return self.state(slice_idx, unknown) != FREE
+
+    def slices_clear(self, cells: np.ndarray | None = None) -> np.ndarray:
+        """bool[n_slices, len(cells)]: the slice holds no recent unexplained hit for the cell (module docstring, point 3).
+        The lift needs every slice clear."""
+        c = self.cfg
+        sel = slice(None) if cells is None else cells
+        own = self.obs_ticks[:, sel] - self.last_unexpl[:, sel]
+        spread = self.obs_all[sel][None, :] - self.last_unexpl_all[:, sel]
+        return (own >= c.clear_ticks) | ((spread >= c.clear_ticks) & (self.visits_since[:, sel] >= c.clear_visits) &
+                                         (own >= c.clear_min_ticks))
 
     def unknown_mask(self) -> np.ndarray:
         U = self.unknown.copy()
@@ -259,14 +297,24 @@ class ChangeLayer:
         # ---- CUSUM on monitored cells (null from the counts BEFORE this tick)
         mon = (self.trusted(s) & fr)[idx]
         alarmed, lifted = empty, empty
-        self.obs_ticks[idx] += 1
+        if s != self._visit_slice:                       # a new visit of slice s starts
+            self._visit += 1
+            self._visit_slice = s
+        first = idx[self._visit_seen[idx] != self._visit]
+        self.visits_since[s, first] += 1
+        self._visit_seen[idx] = self._visit
+        self.obs_ticks[s, idx] += 1
+        self.obs_all[idx] += 1
         unexpl = idx[h & fr[idx]]
         if len(unexpl):                                  # also blocks the lift of UNKNOWN cells whose dilation covers it
             u = np.zeros(self.n_cells, bool)
             u[unexpl] = True
             if self.cfg.dilate > 0 and self.shape is not None:
                 u = _dilate(u.reshape(self.shape), self.cfg.dilate).reshape(-1)
-            self.last_unexpl[u] = self.obs_ticks[u]
+            self.last_unexpl[s, u] = self.obs_ticks[s, u]          # in THIS slice only (point 3)
+            self.last_unexpl_all[s, u] = self.obs_all[u]
+            self.visits_since[s, u] = 0
+            self._visit_seen[u] = self._visit               # the visit holding the hit is never counted
         if mon.any():
             im = idx[mon]
             r = self.llr(s, im, pv[mon], x[mon])
@@ -277,10 +325,10 @@ class ChangeLayer:
                 self.unknown[new] = True
                 self.n_alarms += len(new)
                 alarmed = new
-        # ---- lift UNKNOWN after clear_ticks observed ticks without an unexplained hit
+        # ---- lift UNKNOWN once EVERY slice is clear (point 3)
         iu = idx[self.unknown[idx]]
         if len(iu):
-            done = iu[self.obs_ticks[iu] - self.last_unexpl[iu] >= self.cfg.clear_ticks]
+            done = iu[self.slices_clear(iu).all(0)]
             if len(done):
                 self.unknown[done] = False
                 self.S[done] = 0.0
