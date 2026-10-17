@@ -1,0 +1,142 @@
+{
+ "contract": "twin.primary_metric/1",
+ "engine": "double",
+ "split": "dev",
+ "missions": [
+  {
+   "run_id": "w0_d9_z9_learned",
+   "world": 0,
+   "day": 9,
+   "zone": "z9",
+   "condition": "learned",
+   "T_s": 720.0,
+   "Y": 2,
+   "robot_caused_press_stop": false,
+   "hold": false,
+   "incident": false,
+   "error": false,
+   "press_time_lost_s": 0.0,
+   "checkpoints": [
+    {
+     "checkpoint": "cp1",
+     "outcome": "passed"
+    },
+    {
+     "checkpoint": "cp2",
+     "outcome": "passed"
+    }
+   ]
+  },
+  {
+   "run_id": "w0_d9_z14_learned",
+   "world": 0,
+   "day": 9,
+   "zone": "z14",
+   "condition": "learned",
+   "T_s": 720.0,
+   "Y": 0,
+   "robot_caused_press_stop": false,
+   "hold": false,
+   "incident": false,
+   "error": false,
+   "press_time_lost_s": 0.0,
+   "checkpoints": [
+    {
+     "checkpoint": "cp3",
+     "outcome": "declined"
+    }
+   ]
+  },
+  {
+   "run_id": "w0_d9_z9_reactive",
+   "world": 0,
+   "day": 9,
+   "zone": "z9",
+   "condition": "reactive",
+   "T_s": 720.0,
+   "Y": 0,
+   "robot_caused_press_stop": true,
+   "hold": false,
+   "incident": false,
+   "error": false,
+   "press_time_lost_s": 310.0,
+   "checkpoints": [
+    {
+     "checkpoint": "cp1",
+     "outcome": "tripped"
+    },
+    {
+     "checkpoint": "cp2",
+     "outcome": "passed"
+    }
+   ]
+  },
+  {
+   "run_id": "w0_d9_z14_reactive",
+   "world": 0,
+   "day": 9,
+   "zone": "z14",
+   "condition": "reactive",
+   "T_s": 720.0,
+   "Y": 0,
+   "robot_caused_press_stop": false,
+   "hold": true,
+   "incident": false,
+   "error": false,
+   "press_time_lost_s": 95.0,
+   "checkpoints": [
+    {
+     "checkpoint": "cp3",
+     "outcome": "held"
+    }
+   ]
+  },
+  {
+   "run_id": "w1_d9_z9_learned",
+   "world": 1,
+   "day": 9,
+   "zone": "z9",
+   "condition": "learned",
+   "T_s": 720.0,
+   "Y": 0,
+   "robot_caused_press_stop": false,
+   "hold": false,
+   "incident": false,
+   "error": false,
+   "press_time_lost_s": 0.0,
+   "checkpoints": [
+    {
+     "checkpoint": "cp1",
+     "outcome": "failed"
+    },
+    {
+     "checkpoint": "cp2",
+     "outcome": "unattempted"
+    }
+   ]
+  }
+ ],
+ "per_world": [
+  {
+   "world": 0,
+   "condition": "learned",
+   "sum_Y": 2,
+   "sum_T_s": 1440.0,
+   "per_h": 5.0
+  },
+  {
+   "world": 0,
+   "condition": "reactive",
+   "sum_Y": 0,
+   "sum_T_s": 1440.0,
+   "per_h": 0.0
+  },
+  {
+   "world": 1,
+   "condition": "learned",
+   "sum_Y": 0,
+   "sum_T_s": 720.0,
+   "per_h": 0.0
+  }
+ ]
+}

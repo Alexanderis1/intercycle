@@ -1,0 +1,214 @@
+{
+  "$defs": {
+    "CheckpointOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "title": "Checkpoint",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "declined",
+            "held",
+            "tripped",
+            "failed",
+            "unattempted"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        }
+      },
+      "required": [
+        "checkpoint",
+        "outcome"
+      ],
+      "title": "CheckpointOutcome",
+      "type": "object"
+    },
+    "MissionMetric": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "world": {
+          "minimum": 0,
+          "title": "World",
+          "type": "integer"
+        },
+        "day": {
+          "minimum": 1,
+          "title": "Day",
+          "type": "integer"
+        },
+        "zone": {
+          "title": "Zone",
+          "type": "string"
+        },
+        "condition": {
+          "enum": [
+            "no_map",
+            "static",
+            "learned",
+            "reactive",
+            "oracle"
+          ],
+          "title": "Condition",
+          "type": "string"
+        },
+        "T_s": {
+          "maximum": 720.0,
+          "minimum": 720.0,
+          "title": "T S",
+          "type": "number"
+        },
+        "Y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "integer"
+        },
+        "robot_caused_press_stop": {
+          "title": "Robot Caused Press Stop",
+          "type": "boolean"
+        },
+        "hold": {
+          "title": "Hold",
+          "type": "boolean"
+        },
+        "incident": {
+          "title": "Incident",
+          "type": "boolean"
+        },
+        "error": {
+          "title": "Error",
+          "type": "boolean"
+        },
+        "press_time_lost_s": {
+          "minimum": 0,
+          "title": "Press Time Lost S",
+          "type": "number"
+        },
+        "checkpoints": {
+          "items": {
+            "$ref": "#/$defs/CheckpointOutcome"
+          },
+          "minItems": 1,
+          "title": "Checkpoints",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "world",
+        "day",
+        "zone",
+        "condition",
+        "T_s",
+        "Y",
+        "robot_caused_press_stop",
+        "hold",
+        "incident",
+        "error",
+        "press_time_lost_s",
+        "checkpoints"
+      ],
+      "title": "MissionMetric",
+      "type": "object"
+    },
+    "WorldValue": {
+      "additionalProperties": false,
+      "properties": {
+        "world": {
+          "title": "World",
+          "type": "integer"
+        },
+        "condition": {
+          "enum": [
+            "no_map",
+            "static",
+            "learned",
+            "reactive",
+            "oracle"
+          ],
+          "title": "Condition",
+          "type": "string"
+        },
+        "sum_Y": {
+          "minimum": 0,
+          "title": "Sum Y",
+          "type": "integer"
+        },
+        "sum_T_s": {
+          "exclusiveMinimum": 0,
+          "title": "Sum T S",
+          "type": "number"
+        },
+        "per_h": {
+          "minimum": 0,
+          "title": "Per H",
+          "type": "number"
+        }
+      },
+      "required": [
+        "world",
+        "condition",
+        "sum_Y",
+        "sum_T_s",
+        "per_h"
+      ],
+      "title": "WorldValue",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.primary_metric/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "engine": {
+      "enum": [
+        "double",
+        "isaac"
+      ],
+      "title": "Engine",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "dev",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "missions": {
+      "items": {
+        "$ref": "#/$defs/MissionMetric"
+      },
+      "minItems": 1,
+      "title": "Missions",
+      "type": "array"
+    },
+    "per_world": {
+      "items": {
+        "$ref": "#/$defs/WorldValue"
+      },
+      "title": "Per World",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract",
+    "engine",
+    "split",
+    "missions",
+    "per_world"
+  ],
+  "title": "PrimaryMetric",
+  "type": "object"
+}

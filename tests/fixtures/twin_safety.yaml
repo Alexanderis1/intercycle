@@ -1,0 +1,27 @@
+# Golden fixture for twin.safety/1 (tests/test_twin_contracts.py). Synthetic values, not real data.
+contract: twin.safety/1
+site_id: fixture_site
+presses:
+- press: P9a
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: &id001
+  - {press_state: running, action: trip}
+  - {press_state: idle, action: hold}
+  - {press_state: stopped, action: allow}
+- press: P14a
+  guard:
+    type: OBSERVED
+    device: fixed_fence
+    reset: auto
+    evidence_clips: [c14_train_0002]
+  reset:
+    family: lognormal
+    median_s: 60.0
+    p90_s: 180.0
+    sweep_s: {lo: 30.0, hi: 300.0}
+  entry_rules: *id001

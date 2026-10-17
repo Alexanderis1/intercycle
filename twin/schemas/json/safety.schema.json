@@ -1,0 +1,189 @@
+{
+  "$defs": {
+    "EntryRule": {
+      "additionalProperties": false,
+      "description": "What the safety system does when the robot enters the (dilated) danger polygon in a press state.\ntrip = robot-caused press stop (reset needed); hold = the press restart is delayed while the robot is inside.",
+      "properties": {
+        "press_state": {
+          "enum": [
+            "running",
+            "idle",
+            "stopped"
+          ],
+          "title": "Press State",
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "trip",
+            "hold",
+            "allow"
+          ],
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "press_state",
+        "action"
+      ],
+      "title": "EntryRule",
+      "type": "object"
+    },
+    "Guard": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "OBSERVED",
+            "ASSUMED"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "device": {
+          "enum": [
+            "light_curtain",
+            "fixed_fence",
+            "interlocked_gate",
+            "two_hand",
+            "none"
+          ],
+          "title": "Device",
+          "type": "string"
+        },
+        "reset": {
+          "enum": [
+            "manual",
+            "auto"
+          ],
+          "title": "Reset",
+          "type": "string"
+        },
+        "evidence_clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Clips",
+          "type": "array"
+        }
+      },
+      "required": [
+        "type",
+        "device",
+        "reset"
+      ],
+      "title": "Guard",
+      "type": "object"
+    },
+    "Interval": {
+      "additionalProperties": false,
+      "properties": {
+        "lo": {
+          "title": "Lo",
+          "type": "number"
+        },
+        "hi": {
+          "title": "Hi",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lo",
+        "hi"
+      ],
+      "title": "Interval",
+      "type": "object"
+    },
+    "PressSafety": {
+      "additionalProperties": false,
+      "properties": {
+        "press": {
+          "title": "Press",
+          "type": "string"
+        },
+        "guard": {
+          "$ref": "#/$defs/Guard"
+        },
+        "reset": {
+          "$ref": "#/$defs/ResetDist"
+        },
+        "entry_rules": {
+          "items": {
+            "$ref": "#/$defs/EntryRule"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Entry Rules",
+          "type": "array"
+        }
+      },
+      "required": [
+        "press",
+        "guard",
+        "reset",
+        "entry_rules"
+      ],
+      "title": "PressSafety",
+      "type": "object"
+    },
+    "ResetDist": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "const": "lognormal",
+          "title": "Family",
+          "type": "string"
+        },
+        "median_s": {
+          "exclusiveMinimum": 0,
+          "title": "Median S",
+          "type": "number"
+        },
+        "p90_s": {
+          "exclusiveMinimum": 0,
+          "title": "P90 S",
+          "type": "number"
+        },
+        "sweep_s": {
+          "$ref": "#/$defs/Interval"
+        }
+      },
+      "required": [
+        "family",
+        "median_s",
+        "p90_s",
+        "sweep_s"
+      ],
+      "title": "ResetDist",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.safety/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "presses": {
+      "items": {
+        "$ref": "#/$defs/PressSafety"
+      },
+      "minItems": 1,
+      "title": "Presses",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract",
+    "site_id",
+    "presses"
+  ],
+  "title": "Safety",
+  "type": "object"
+}

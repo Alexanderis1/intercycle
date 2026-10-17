@@ -1,0 +1,306 @@
+{
+ "contract": "twin.dynamics/1",
+ "site_id": "fixture_site",
+ "version": "fixture",
+ "observed": {
+  "person.speed_mps": {
+   "value": 1.15,
+   "unit": "m/s",
+   "source": "fitted",
+   "n": 412,
+   "sweep": {
+    "lo": 0.9,
+    "hi": 1.4
+   },
+   "clips": [
+    "c9_train_0001"
+   ],
+   "dist": {
+    "family": "lognormal",
+    "params": {
+     "median": 1.15,
+     "sigma": 0.22
+    }
+   }
+  },
+  "person.group_size": {
+   "value": 1.2,
+   "unit": "people",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 1.0,
+    "hi": 2.0
+   },
+   "note": "mean group size; not used by the stub (one walker per intent)"
+  },
+  "person.path_library": {
+   "value": 1.0,
+   "unit": "scale",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 1.0,
+    "hi": 1.0
+   },
+   "note": "resampled train track segments in DYN v1; v0 draws synthetic polylines"
+  },
+  "forklift.speed_mps": {
+   "value": 1.8,
+   "unit": "m/s",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 1.0,
+    "hi": 2.5
+   },
+   "dist": {
+    "family": "lognormal",
+    "params": {
+     "median": 1.8,
+     "sigma": 0.15
+    }
+   }
+  },
+  "forklift.path_library": {
+   "value": 1.0,
+   "unit": "scale",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 1.0,
+    "hi": 1.0
+   },
+   "note": "P5: detected or motion-blob forklift paths in DYN v1; v0 shuttles between two points"
+  },
+  "press.P9a.stroke_period_s": {
+   "value": 4.0,
+   "unit": "s",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 2.0,
+    "hi": 8.0
+   }
+  },
+  "press.P14a.stroke_period_s": {
+   "value": 4.0,
+   "unit": "s",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 2.0,
+    "hi": 8.0
+   }
+  },
+  "press.P9a.p_running": {
+   "value": 0.6,
+   "unit": "probability",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 0.3,
+    "hi": 0.9
+   },
+   "dist": {
+    "family": "beta",
+    "params": {
+     "a": 6.0,
+     "b": 4.0
+    }
+   }
+  },
+  "press.P14a.p_running": {
+   "value": 0.6,
+   "unit": "probability",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 0.3,
+    "hi": 0.9
+   },
+   "dist": {
+    "family": "beta",
+    "params": {
+     "a": 6.0,
+     "b": 4.0
+    }
+   }
+  },
+  "press.P9a.run_bout_median_s": {
+   "value": 420.0,
+   "unit": "s",
+   "source": "fitted_censored",
+   "n": 17,
+   "sweep": {
+    "lo": 200.0,
+    "hi": 900.0
+   },
+   "clips": [
+    "c9_train_0001"
+   ],
+   "dist": {
+    "family": "kaplan_meier",
+    "params": {}
+   }
+  },
+  "press.P14a.run_bout_median_s": {
+   "value": 600.0,
+   "unit": "s",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 120.0,
+    "hi": 1800.0
+   },
+   "dist": {
+    "family": "lognormal",
+    "params": {
+     "median": 600.0,
+     "sigma": 0.8
+    }
+   }
+  },
+  "press.stroke_impulse_s": {
+   "value": 0.6,
+   "unit": "s",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 0.3,
+    "hi": 1.0
+   },
+   "note": "ram down-and-up duration of one stroke"
+  },
+  "site.night_share": {
+   "value": 0.33,
+   "unit": "fraction",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 0.0,
+    "hi": 0.5
+   }
+  }
+ },
+ "assumed": {
+  "zone.z9.walker_rate_per_h": {
+   "value": 30.0,
+   "unit": "1/h",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 10.0,
+    "hi": 60.0
+   },
+   "dist": {
+    "family": "poisson",
+    "params": {}
+   }
+  },
+  "zone.z14.walker_rate_per_h": {
+   "value": 15.0,
+   "unit": "1/h",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 5.0,
+    "hi": 40.0
+   },
+   "dist": {
+    "family": "poisson",
+    "params": {}
+   }
+  },
+  "staff.staffing_factor": {
+   "value": 1.0,
+   "unit": "factor",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 0.8,
+    "hi": 1.2
+   },
+   "note": "staffing +-20 %"
+  },
+  "press.stop_median_s": {
+   "value": 180.0,
+   "unit": "s",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 60.0,
+    "hi": 1800.0
+   },
+   "dist": {
+    "family": "lognormal",
+    "params": {
+     "median": 180.0,
+     "p90": 900.0
+    }
+   },
+   "note": "W-W3 lognormal stops"
+  },
+  "press.stop_p90_s": {
+   "value": 900.0,
+   "unit": "s",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 300.0,
+    "hi": 1800.0
+   }
+  },
+  "person.violation_share": {
+   "value": 0.05,
+   "unit": "fraction",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 0.0,
+    "hi": 0.2
+   }
+  },
+  "forklift.count": {
+   "value": 1.0,
+   "unit": "vehicles",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 0.0,
+    "hi": 2.0
+   }
+  },
+  "social.A_n": {
+   "value": 2.1,
+   "unit": "N",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 1.0,
+    "hi": 5.0
+   },
+   "note": "published social-force default (fitting is cut)"
+  },
+  "social.B_m": {
+   "value": 0.3,
+   "unit": "m",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 0.1,
+    "hi": 1.0
+   }
+  },
+  "social.tau_s": {
+   "value": 0.5,
+   "unit": "s",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 0.2,
+    "hi": 1.0
+   }
+  }
+ }
+}

@@ -1,0 +1,130 @@
+# Golden fixture for twin.site/1 (tests/test_twin_contracts.py). Synthetic values, not real data.
+contract: twin.site/1
+site_id: fixture_site
+frame: plan_xz_m
+scale:
+  value: {lo: 0.9, mid: 1.0, hi: 1.12}
+  source: cal_v1
+  clips: [c9_train_0001, c14_train_0002]
+cal_sources: [c9_train_0001, c14_train_0002]
+framings:
+- id: cam9_f0
+  camera: 9
+  image_size_px:
+    value: [1920, 1080]
+    source: prior
+  K:
+    value:
+    - [1330.0, 0.0, 960.0]
+    - [0.0, 1330.0, 540.0]
+    - [0.0, 0.0, 1.0]
+    source: prior
+    note: f from the vendor VFOV (range 1020-1430 px), principal point at the image centre
+  k1:
+    value: -0.12
+    source: cal_v0
+    clips: [c9_train_0001]
+  H_img_to_floor:
+    value:
+    - [0.007291666666666667, 0.0, 0.0]
+    - [0.0, -0.009259259259259259, 10.0]
+    - [0.0, 0.0, 1.0]
+    source: cal_v0
+    clips: [c9_train_0001]
+  mount_height_m: {value: 4.0, source: prior}
+- id: cam14_f0
+  camera: 14
+  image_size_px:
+    value: [1920, 1080]
+    source: prior
+  K:
+    value:
+    - [1330.0, 0.0, 960.0]
+    - [0.0, 1330.0, 540.0]
+    - [0.0, 0.0, 1.0]
+    source: prior
+  k1: {value: 0.0, source: prior}
+  H_img_to_floor:
+    value:
+    - [0.004166666666666667, 0.0, 30.0]
+    - [0.0, -0.007407407407407408, 8.0]
+    - [0.0, 0.0, 1.0]
+    source: cal_v0
+    clips: [c14_train_0002]
+  mount_height_m: {value: 4.0, source: prior}
+zones:
+- id: z9
+  camera: 9
+  framings: [cam9_f0]
+  floor_polygon:
+    value:
+    - [0.0, 0.0]
+    - [14.0, 0.0]
+    - [14.0, 10.0]
+    - [0.0, 10.0]
+    source: traced_v0
+    clips: [c9_train_0001]
+- id: z14
+  camera: 14
+  framings: [cam14_f0]
+  floor_polygon:
+    value:
+    - [30.0, 0.0]
+    - [38.0, 0.0]
+    - [38.0, 8.0]
+    - [30.0, 8.0]
+    source: prior
+presses:
+- id: P9a
+  zone: z9
+  footprint:
+    value:
+    - [5.0, 6.0]
+    - [7.5, 6.0]
+    - [7.5, 8.5]
+    - [5.0, 8.5]
+    source: traced_v0
+    clips: [c9_train_0001]
+  ram_roi:
+    value:
+    - framing: cam9_f0
+      polygon_px:
+      - [800.0, 200.0]
+      - [920.0, 200.0]
+      - [920.0, 300.0]
+      - [800.0, 300.0]
+    source: prior
+  danger_polygon:
+    value:
+    - [4.8, 5.0]
+    - [7.7, 5.0]
+    - [7.7, 6.0]
+    - [4.8, 6.0]
+    source: prior
+  dilation_m: {value: 0.22, source: cal_v1, note: p95 reprojection error}
+- id: P14a
+  zone: z14
+  footprint:
+    value:
+    - [33.0, 5.0]
+    - [35.5, 5.0]
+    - [35.5, 7.2]
+    - [33.0, 7.2]
+    source: prior
+  ram_roi:
+    value:
+    - framing: cam14_f0
+      polygon_px:
+      - [960.0, 180.0]
+      - [1080.0, 180.0]
+      - [1080.0, 280.0]
+      - [960.0, 280.0]
+    source: prior
+  danger_polygon:
+    value:
+    - [32.8, 4.0]
+    - [35.7, 4.0]
+    - [35.7, 5.0]
+    - [32.8, 5.0]
+    source: prior
+  dilation_m: {value: 0.3, source: prior}

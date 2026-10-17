@@ -1,0 +1,562 @@
+{
+  "$defs": {
+    "Framing": {
+      "additionalProperties": false,
+      "description": "One camera framing (a registered view). H maps undistorted pixels (u, v, 1) to floor (x, z, 1).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "camera": {
+          "enum": [
+            9,
+            14
+          ],
+          "title": "Camera",
+          "type": "integer"
+        },
+        "image_size_px": {
+          "$ref": "#/$defs/Tagged_tuple_int__int__"
+        },
+        "K": {
+          "$ref": "#/$defs/Tagged_Annotated_list_Annotated_list_float___FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3___MaxLen_max_length_3_______FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3___MaxLen_max_length_3_____"
+        },
+        "k1": {
+          "$ref": "#/$defs/Tagged_float_"
+        },
+        "H_img_to_floor": {
+          "$ref": "#/$defs/Tagged_Annotated_list_Annotated_list_float___FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3___MaxLen_max_length_3_______FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3___MaxLen_max_length_3_____"
+        },
+        "mount_height_m": {
+          "$ref": "#/$defs/Tagged_float_"
+        }
+      },
+      "required": [
+        "id",
+        "camera",
+        "image_size_px",
+        "K",
+        "k1",
+        "H_img_to_floor",
+        "mount_height_m"
+      ],
+      "title": "Framing",
+      "type": "object"
+    },
+    "Press": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "zone": {
+          "title": "Zone",
+          "type": "string"
+        },
+        "footprint": {
+          "$ref": "#/$defs/Tagged_Annotated_list_tuple_float__float____FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3_____"
+        },
+        "ram_roi": {
+          "$ref": "#/$defs/Tagged_list_RamRoi__"
+        },
+        "danger_polygon": {
+          "$ref": "#/$defs/Tagged_Annotated_list_tuple_float__float____FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3_____"
+        },
+        "dilation_m": {
+          "$ref": "#/$defs/Tagged_float_"
+        }
+      },
+      "required": [
+        "id",
+        "zone",
+        "footprint",
+        "ram_roi",
+        "danger_polygon",
+        "dilation_m"
+      ],
+      "title": "Press",
+      "type": "object"
+    },
+    "RamRoi": {
+      "additionalProperties": false,
+      "properties": {
+        "framing": {
+          "title": "Framing",
+          "type": "string"
+        },
+        "polygon_px": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 3,
+          "title": "Polygon Px",
+          "type": "array"
+        }
+      },
+      "required": [
+        "framing",
+        "polygon_px"
+      ],
+      "title": "RamRoi",
+      "type": "object"
+    },
+    "ScaleInterval": {
+      "additionalProperties": false,
+      "description": "Multiplicative factor on metric coordinates; the robot runs at both ends when estimates disagree (P6).",
+      "properties": {
+        "lo": {
+          "exclusiveMinimum": 0,
+          "title": "Lo",
+          "type": "number"
+        },
+        "mid": {
+          "exclusiveMinimum": 0,
+          "title": "Mid",
+          "type": "number"
+        },
+        "hi": {
+          "exclusiveMinimum": 0,
+          "title": "Hi",
+          "type": "number"
+        }
+      },
+      "required": [
+        "lo",
+        "mid",
+        "hi"
+      ],
+      "title": "ScaleInterval",
+      "type": "object"
+    },
+    "Tagged_Annotated_list_Annotated_list_float___FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3___MaxLen_max_length_3_______FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3___MaxLen_max_length_3_____": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "title": "Value",
+          "type": "array"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "cal_v0",
+            "cal_v1",
+            "traced_v0",
+            "traced_v1",
+            "measured",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "title": "Tagged[Annotated[list[Annotated[list[float], FieldInfo(annotation=NoneType, required=True, metadata=[MinLen(min_length=3), MaxLen(max_length=3)])]], FieldInfo(annotation=NoneType, required=True, metadata=[MinLen(min_length=3), MaxLen(max_length=3)])]]",
+      "type": "object"
+    },
+    "Tagged_Annotated_list_tuple_float__float____FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3_____": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 3,
+          "title": "Value",
+          "type": "array"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "cal_v0",
+            "cal_v1",
+            "traced_v0",
+            "traced_v1",
+            "measured",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "title": "Tagged[Annotated[list[tuple[float, float]], FieldInfo(annotation=NoneType, required=True, metadata=[MinLen(min_length=3)])]]",
+      "type": "object"
+    },
+    "Tagged_ScaleInterval_": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/ScaleInterval"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "cal_v0",
+            "cal_v1",
+            "traced_v0",
+            "traced_v1",
+            "measured",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "title": "Tagged[ScaleInterval]",
+      "type": "object"
+    },
+    "Tagged_float_": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "number"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "cal_v0",
+            "cal_v1",
+            "traced_v0",
+            "traced_v1",
+            "measured",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "title": "Tagged[float]",
+      "type": "object"
+    },
+    "Tagged_list_RamRoi__": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "items": {
+            "$ref": "#/$defs/RamRoi"
+          },
+          "title": "Value",
+          "type": "array"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "cal_v0",
+            "cal_v1",
+            "traced_v0",
+            "traced_v1",
+            "measured",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "title": "Tagged[list[RamRoi]]",
+      "type": "object"
+    },
+    "Tagged_tuple_int__int__": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Value",
+          "type": "array"
+        },
+        "source": {
+          "enum": [
+            "prior",
+            "cal_v0",
+            "cal_v1",
+            "traced_v0",
+            "traced_v1",
+            "measured",
+            "assumed"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "value",
+        "source"
+      ],
+      "title": "Tagged[tuple[int, int]]",
+      "type": "object"
+    },
+    "Zone": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "camera": {
+          "enum": [
+            9,
+            14
+          ],
+          "title": "Camera",
+          "type": "integer"
+        },
+        "framings": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Framings",
+          "type": "array"
+        },
+        "floor_polygon": {
+          "$ref": "#/$defs/Tagged_Annotated_list_tuple_float__float____FieldInfo_annotation_NoneType__required_True__metadata__MinLen_min_length_3_____"
+        }
+      },
+      "required": [
+        "id",
+        "camera",
+        "framings",
+        "floor_polygon"
+      ],
+      "title": "Zone",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.site/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "site_id": {
+      "title": "Site Id",
+      "type": "string"
+    },
+    "frame": {
+      "const": "plan_xz_m",
+      "default": "plan_xz_m",
+      "title": "Frame",
+      "type": "string"
+    },
+    "scale": {
+      "$ref": "#/$defs/Tagged_ScaleInterval_"
+    },
+    "cal_sources": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Cal Sources",
+      "type": "array"
+    },
+    "framings": {
+      "items": {
+        "$ref": "#/$defs/Framing"
+      },
+      "minItems": 1,
+      "title": "Framings",
+      "type": "array"
+    },
+    "zones": {
+      "items": {
+        "$ref": "#/$defs/Zone"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Zones",
+      "type": "array"
+    },
+    "presses": {
+      "items": {
+        "$ref": "#/$defs/Press"
+      },
+      "minItems": 1,
+      "title": "Presses",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract",
+    "site_id",
+    "scale",
+    "cal_sources",
+    "framings",
+    "zones",
+    "presses"
+  ],
+  "title": "Site",
+  "type": "object"
+}

@@ -1,0 +1,98 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "split": {
+      "enum": [
+        "train",
+        "dev",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "t": {
+      "minimum": 0,
+      "title": "T",
+      "type": "number",
+      "x-arrow": "float64"
+    },
+    "track_id": {
+      "minimum": 0,
+      "title": "Track Id",
+      "type": "integer",
+      "x-arrow": "int64"
+    },
+    "class": {
+      "enum": [
+        "person",
+        "forklift",
+        "vehicle"
+      ],
+      "title": "Class",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "u": {
+      "title": "U",
+      "type": "number",
+      "x-arrow": "float64"
+    },
+    "v": {
+      "title": "V",
+      "type": "number",
+      "x-arrow": "float64"
+    },
+    "x": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "X",
+      "x-arrow": "float64"
+    },
+    "y": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Y",
+      "x-arrow": "float64"
+    },
+    "conf": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Conf",
+      "type": "number",
+      "x-arrow": "float64"
+    },
+    "framing": {
+      "minLength": 1,
+      "title": "Framing",
+      "type": "string",
+      "x-arrow": "string"
+    }
+  },
+  "required": [
+    "split",
+    "t",
+    "track_id",
+    "class",
+    "u",
+    "v",
+    "x",
+    "y",
+    "conf",
+    "framing"
+  ],
+  "title": "TrackRow",
+  "type": "object"
+}

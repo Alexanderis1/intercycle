@@ -1,0 +1,73 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "clip_id": {
+      "minLength": 1,
+      "title": "Clip Id",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "camera": {
+      "enum": [
+        9,
+        14
+      ],
+      "title": "Camera",
+      "type": "integer",
+      "x-arrow": "int64"
+    },
+    "framing_id": {
+      "minLength": 1,
+      "title": "Framing Id",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "group_id": {
+      "minLength": 1,
+      "title": "Group Id",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "class": {
+      "maximum": 7,
+      "minimum": 0,
+      "title": "Class",
+      "type": "integer",
+      "x-arrow": "int64"
+    },
+    "duration": {
+      "exclusiveMinimum": 0,
+      "title": "Duration",
+      "type": "number",
+      "x-arrow": "float64"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Sha256",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "split": {
+      "enum": [
+        "train",
+        "dev",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string",
+      "x-arrow": "string"
+    }
+  },
+  "required": [
+    "clip_id",
+    "camera",
+    "framing_id",
+    "group_id",
+    "class",
+    "duration",
+    "sha256",
+    "split"
+  ],
+  "title": "InventoryRow",
+  "type": "object"
+}

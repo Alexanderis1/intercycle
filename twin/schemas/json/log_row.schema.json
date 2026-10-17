@@ -1,0 +1,101 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "minLength": 1,
+      "title": "Run Id",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "t": {
+      "minimum": 0,
+      "title": "T",
+      "type": "number",
+      "x-arrow": "float64"
+    },
+    "kind": {
+      "enum": [
+        "mission_start",
+        "mission_end",
+        "checkpoint_attempt",
+        "checkpoint_pass",
+        "checkpoint_fail",
+        "checkpoint_decline",
+        "press_trip",
+        "press_hold",
+        "press_restart",
+        "incident",
+        "contact",
+        "error"
+      ],
+      "title": "Kind",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "entity": {
+      "title": "Entity",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "checkpoint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Checkpoint",
+      "x-arrow": "string"
+    },
+    "zone": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Zone",
+      "x-arrow": "string"
+    },
+    "value": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Value",
+      "x-arrow": "float64"
+    },
+    "detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Detail",
+      "x-arrow": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "t",
+    "kind",
+    "entity",
+    "checkpoint",
+    "zone",
+    "value",
+    "detail"
+  ],
+  "title": "LogRow",
+  "type": "object"
+}
