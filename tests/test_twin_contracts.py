@@ -327,8 +327,8 @@ def _site():
 
 def test_camera_v0_on_fixture_stream(tmp_path, monkeypatch):
     site = _site()
-    a = list(camera_v0.stream(FIX / "twin_realised_state.jsonl", site, seed=1))
-    b = list(camera_v0.stream(FIX / "twin_realised_state.jsonl", site, seed=1))
+    a = list(camera_v0.stream(FIX / "twin_realised_state.jsonl", site, world_seed=1))
+    b = list(camera_v0.stream(FIX / "twin_realised_state.jsonl", site, world_seed=1))
     assert len(a) == 8
     assert [camera_v0.detections_to_json(d) for d in a] == [camera_v0.detections_to_json(d) for d in b]
     assert all(math.isnan(d.zone_motion["P9a"]) for d in a), "a person at the P9a ROI makes its motion MISSING"
@@ -341,7 +341,7 @@ def test_camera_v0_on_fixture_stream(tmp_path, monkeypatch):
 
 def test_camera_v0_noise_matches_measured_shim():
     site = _site()
-    cam = camera_v0.CameraV0(site, seed=2)
+    cam = camera_v0.CameraV0(site, world_seed=2, day=1)
     n_ticks, hits, errs = 4000, 0, []
     for i in range(n_ticks):
         tk = RU.RealisedTick(kind="tick", t=0.5 * i, presses=[], movers=[
@@ -355,6 +355,53 @@ def test_camera_v0_noise_matches_measured_shim():
     assert np.mean(errs > 5.0) == pytest.approx(SHIM["gross_p"], abs=0.03)
     rayleigh_median = SHIM["sigma_m"] * math.sqrt(2 * math.log(2))
     assert np.median(errs[errs < 5.0]) == pytest.approx(rayleigh_median, rel=0.08)
+
+
+def _mover(mid, cls, x, z, zone="z9", speed=1.0, r=0.3):
+    return RU.RealisedMover(id=mid, cls=cls, zone=zone, x=x, z=z, heading=0.3, speed=speed, r=r)
+
+
+def _people_and_presses(d):
+    keep = [j for j in range(len(d)) if d.cls[j] != "other"]
+    return ([(str(d.cls[j]), float(d.x[j]), float(d.z[j]), float(d.r[j]), str(d.zone[j])) for j in keep],
+            {k: v for k, v in d.zone_motion.items() if not math.isnan(v)})
+
+
+def test_camera_v0_noise_is_common_across_conditions():
+    """CRN: adding the robot (it differs between paired conditions) leaves every other detection and the press
+    motion noise unchanged; noise is keyed by (world_seed, day, entity, tick), so tick order does not matter."""
+    site = _site()
+    people = [_mover(f"walker:z9:{i:04d}", "person", 2.0 + i, 3.0) for i in range(4)] +              [_mover("forklift:0", "forklift", 10.0, 2.0, speed=1.8, r=1.0),
+              _mover("walker:z14:0000", "person", 33.0, 2.0, zone="z14")]
+    robot = _mover("robot", "robot", 31.0, 1.0, zone="z14", speed=0.5, r=0.45)
+    press = [RU.RealisedPress(id=p.id, state="running", ram=0.3, stroke=False, freeze=False) for p in site.presses]
+    with_r, without = [], []
+    for i in range(200):
+        t = 86400.0 + 0.5 * i
+        with_r.append(RU.RealisedTick(kind="tick", t=t, presses=press, movers=[robot, *people]))
+        without.append(RU.RealisedTick(kind="tick", t=t, presses=press, movers=people))
+    a = [_people_and_presses(d) for d in camera_v0.CameraV0(site, 5, 9).run(with_r)]
+    b = [_people_and_presses(d) for d in camera_v0.CameraV0(site, 5, 9).run(without)]
+    assert a == b
+    # order independence: the same tick observed alone gives the same detections
+    lone = camera_v0.CameraV0(site, 5, 9)
+    lone._prev_ram = {p.id: 0.3 for p in site.presses}
+    assert _people_and_presses(lone.observe(without[150])) == b[150]
+    # and other keys give other noise
+    c = [_people_and_presses(d) for d in camera_v0.CameraV0(site, 5, 10).run(without)]
+    assert c != b
+
+
+@pytest.mark.parametrize("cls", ["person", "forklift", "robot"])
+def test_camera_v0_occluders_include_vehicles_and_the_robot(cls):
+    """S4 patch (T-W6): a person, a forklift or the robot at the press makes its zone_motion MISSING."""
+    site = _site()
+    p9 = next(p for p in site.presses if p.id == "P9a")
+    xs, zs = [q[0] for q in p9.footprint.value], [q[1] for q in p9.footprint.value]
+    occ = _mover("occ", cls, max(xs) + 0.2, (min(zs) + max(zs)) / 2, zone=p9.zone, speed=0.0, r=0.5)
+    press = [RU.RealisedPress(id=p.id, state="running", ram=0.3, stroke=False, freeze=False) for p in site.presses]
+    d = camera_v0.CameraV0(site, 1, 1).observe(RU.RealisedTick(kind="tick", t=0.0, presses=press, movers=[occ]))
+    assert math.isnan(d.zone_motion["P9a"]) and math.isfinite(d.zone_motion["P14a"])
 
 
 # ------------------------------------------------------------------------------------------------ runtime truth guard
