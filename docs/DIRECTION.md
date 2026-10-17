@@ -1,4 +1,4 @@
-# InterCycle — DIRECTION (from the user, 17 Oct 2026 ~14:30 CEST)
+# InterCycle — DIRECTION (from the user; last revised 17 Oct 2026 ~16:45 CEST, re-baselined for a fresh lead session)
 
 This document is the single source of truth until submission. It overrides the restart plan in `docs/STATUS.md` and
 everything in `docs/archive/`. `docs/BRIEF.md` holds the engineering facts (layout, conventions, safety semantics) and
@@ -28,8 +28,15 @@ has been aligned with this document.
 7. **The plan must be complete without the MI300X.** It may arrive later, tomorrow or never. If it arrives, item G5 applies. Nothing waits for it.
 8. **Secrets:**
    - The Token Factory key lives only in `.env` (gitignored).
-   - Never write it in docs, code, logs, commits, artifacts or agent prompts.
-   - Agents read it from the environment.
+   - Modal's token lives in `%USERPROFILE%\.modal.toml`. RunPod is reached through the MCP connector / `runpodctl` config.
+     GitHub uses `gh` auth.
+   - Never write any of them in docs, code, logs, commits, artifacts or agent prompts.
+   - Agents read them from the environment.
+   - Run a secret scan before every `git push`.
+9. **Laptop limits:** 8 GB RAM, 4 cores/8 threads, MX250 GPU.
+   - Run **at most one heavy local job at a time** (a map build, the full test suite, or a WSL/ROS process).
+     Push anything else to Modal CPU or the desktop.
+   - Keep **≤ 5 subagents active at once**. Start the next workstream when one finishes or is waiting on a remote run.
 
 ---------------------------------------------------------------------------------------------------------------------------
 
@@ -66,7 +73,7 @@ Each workstream has one owner (the lead or one subagent). Agents touch only thei
 |---|---|---|---|
 | M | Map quality, convergence, new machine | agent | **`intercycle/observer/mapping.py`, `intercycle/codec/maplayer.py`, `scripts/build_map.py`**, `intercycle/eval/map_metrics.py`, `intercycle/observer/change.py`, `scripts/map_timeline.py`, `scripts/new_machine.py`, scenario variant `scenario/bodyshop_newmachine.yaml`, truth hook for the new machine, `docs/MAP.md`, `docs/MAP_RESULTS.md`, tests |
 | P | Unsupervised phase discovery | agent | `intercycle/observer/phases.py` (new; may call but not rewrite `learn_cycles.py`), `scripts/phase_discovery.py`, `docs/PHASES.md`, tests. Phases reach the map only through a function M calls (`phases.phase_bin(machine_id, t) -> int`). P does not edit `mapping.py`. |
-| R | Legged robot on Nav2, cheat-free (§5) | lead + agents R1–R3 | see §5.7 |
+| R | Legged robot on Nav2, cheat-free (§5) | lead + agents R1–R4 | see §5.7 |
 | G | Gemma 4 semantic layer | agent | `intercycle/llm/*`, `scripts/gemma_*.py`, `docs/GEMMA_RESULTS.md` |
 | C | Two comm channels + robot interface | agent (Sunday) | `intercycle/comms/*`, `intercycle/export/nav2.py`, `docs/INTERFACE.md` |
 | V | Pixel path + perception realism | agent | `intercycle/perception/*`, `scripts/perception_*.py`, `docs/PERCEPTION.md` |
@@ -111,8 +118,8 @@ Each workstream has one owner (the lead or one subagent). Agents touch only thei
 **Do NOT:** tune the simulator or movers; change the robot.
 
 **Timebox:**
-- metrics + timeline by Sat 19:30;
-- new machine by Sat 22:30.
+- metrics + timeline by Sat 21:30;
+- new machine by Sun 00:30.
 
 **Fallback:** if change detection isn't reliable, use the simplest version (a persistent motion blob outside known envelopes
 for more than X minutes → UNKNOWN) and report it honestly.
@@ -138,13 +145,14 @@ for more than X minutes → UNKNOWN) and report it honestly.
 3. Feed the discovered phases into L1 binning as an option, and compare map metrics between discovered and equal-slice bins (with workstream M).
 
 **Done when:**
-- per-machine sub-phases are scored against truth for all machines;
+- per-machine sub-phases are scored against truth for every machine whose truth exposes named phases (check
+  `Kinematics.phase` first and list which do). The others are scored on cycle boundaries only;
 - line states are scored against truth;
 - results are in `docs/PHASES.md`.
 
 **Do NOT:** use truth or the calendar as inputs; build worker routines (they are P2).
 
-**Timebox:** Sat 22:00.
+**Timebox:** Sun 00:00.
 
 **Fallback:** if the HMM is unstable, use change points only. If line clustering fails, report it, with the calendar clearly
 marked "external input".
@@ -180,9 +188,9 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
     - Sensors available without rendering: `RayCaster`, `RayCasterCamera`, `LidarPatternCfg`, contact sensors.
   - **What does NOT work on Modal:** anything using the RTX renderer (cameras, RTX lidar, Isaac rendering).
     It segfaults ("nvidia kernel module not loaded", Modal driver 610), **even with the precedent's exact recipe**.
-    Do not spend time on it. **Visuals stay in Blender (workstream X)**, replaying logged ANYmal poses.
-  - **Known-good recipe** (reference only): `C:\Users\anzel\AppData\Local\Temp\claude\C--AMD\76cf8262-e846-4133-a3c9-8a2e7bb4133f\scratchpad\isaac_smoke\main_policy.py`
-    and `smoke_policy.py`.
+    Do not spend time on it. Rendering happens on RunPod (below).
+  - **Known-good recipes and the verified scripts:** `C:\AMD\_archive\isaac_recipes\` (README.md, `smoke_policy.py`,
+    `smoke_nocam.py`, a reference Modal file, the RunPod render image). Kept outside the repo on purpose.
     - Image: `nvidia/cuda:12.8.1-devel-ubuntu22.04` + py3.11, torch 2.7.0 cu128, `isaacsim[all,extscache]==5.1.0`,
       IsaacLab v2.3.0 editable, then `pip install -e isaaclab_rl 'rsl-rl-lib==3.0.1' 'torch==2.7.0' 'torchvision==0.22.0'`.
     - **Pin torch.** An unpinned `tensordict` upgrades torch and breaks the stack.
@@ -200,7 +208,8 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
       noise, range and occlusion. This is physically equivalent for a 2D lidar.
     - **Robot camera** (no-motion check + inspection): a geometric camera model (frustum + occlusion ray-cast +
       pixel-density / incidence computation + detection noise and latency).
-    - RGB evidence images are rendered **offline** in Blender from the logged camera pose and labelled as such.
+    - RGB evidence images are rendered **offline** from the logged camera pose (Isaac on RunPod, R4; Blender as fallback)
+      and labelled as such.
     - IMU from body acceleration/rates + noise.
     - `/odom` = leg/IMU odometry, modelled as integrated body velocity with a bias random walk. **Label it.**
   - **ROS 2 / Nav2:**
@@ -210,7 +219,13 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
       libraries if they load headless. Pick whichever works first, timeboxed to 1 h.
     - CPU: give the container 8 cores.
     - Optional throughput: N envs in one Isaac process, each with its own namespaced Nav2.
-  - **Cost:** about $0.45 per 15-min episode on an L40S (RTF ≈ 1.1). Separate Isaac cap in section 8.
+  - **GPU choice:** physics-only needs no RT cores. **Try a Modal L4 first** ($0.80/h vs L40S $1.95/h). Use the L40S only
+    if the L4 fails or is too slow. Measure the RTF on whichever runs.
+  - **Throughput:** run episodes as **parallel Modal containers** (one per episode or per seed). The total GPU-hours stay
+    the same but wall time drops. The 40-episode batch must fit overnight.
+  - **Results** go to a Modal Volume (`intercycle-robot`): episode logs (poses, scans, Nav2 state, events) as parquet/JSON.
+    Pull them locally with `modal volume get`.
+  - **Cost:** about $0.20 (L4) to $0.45 (L40S) per 15-min episode at RTF ≈ 1.1. Separate Isaac cap in section 8.
   - **RENDERING on RunPod (verified by the monitor session, 17 Oct 16:00).** User decision: physics-only on Modal (credits),
     rendering on RunPod (the user's money, so keep it lean).
     - The test: RunPod Secure **RTX 4090** (`NVIDIA GeForce RTX 4090`, $0.89/h; Community $0.34/h when in stock), driver
@@ -218,8 +233,8 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
       `NVIDIA_DRIVER_CAPABILITIES=all`.
     - Result: Isaac Lab `Isaac-Velocity-Flat-Anymal-D-v0` with `--headless --enable_cameras` rendered a 640×480 RTX camera
       image (SMOKE_OK).
-    - Install about 6 min, first render about 5 min (shader compile). The reference image is
-      `...\scratchpad\isaac_smoke\anymal_runpod_render.jpg`.
+    - Install about 6 min, first render about 5 min (shader compile). The reference image and the exact pod settings are in
+      `C:\AMD\_archive\isaac_recipes\`.
     - **RunPod uses (rendering only):**
       1. **Sensor-model validation:** replay a few logged Modal episodes on RunPod with **RTX lidar + real robot cameras**.
          Compare against the merged ray-cast lidar and the geometric camera model (range-error histogram, detection
@@ -231,7 +246,7 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
     - **Mechanics:** no file transfer through MCP. Use `runpodctl send/receive`, or SSH with a registered key, for code
       and results. Bake the install into a reusable script or template so each pod is ready in about 6 min.
       **Terminate every pod right after its job.** Never leave one idling.
-  - **Gate:** ANYmal walks to a Nav2 goal in a simple scene on Modal **by Sat 20:30**. Otherwise switch to Branch M,
+  - **Gate:** ANYmal walks to a Nav2 goal in a simple scene on Modal **by Sat 22:30**. Otherwise switch to Branch M,
     keeping the bridge, sensor models and Nav2 config, which are simulator-agnostic by design.
 - **Branch M (if Isaac fails, or as the fallback):**
   - MuJoCo with a Menagerie quadruped and MuJoCo Playground's pretrained **Go1** joystick policy
@@ -239,7 +254,7 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
   - A thin ROS 2 Humble bridge in WSL2: `/cmd_vel` → policy, `/clock`, `/imu` with noise, `/odom` with drift, `/scan` from
     `mj_multiRay` on a gravity-levelled frame, offscreen camera.
   - **Disclose:** the policy observes the sim's true body velocity as a stand-in for an onboard estimator. Nav2 never sees it.
-  - Smoke test by Sat 18:30.
+  - Start it only if R1 is blocked at the Sat 20:00 checkpoint. It runs best on the user's desktop (32 GB RAM) or in WSL.
 - **Branch A (last resort):** CHAMP quadruped on Gazebo Classic + Humble Nav2 (an open-loop gait: weaker locomotion
   credibility, so say so). Swap its DWB config for MPPI Omni.
 
@@ -272,8 +287,8 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
 
 ### 5.5 Inspection task
 - Reach the inspection pose. Hold body speed below a threshold for dwell T. Aim and capture with the robot camera.
-- Pass checks, computed from the camera model in the loop. The RGB evidence image is rendered offline in Blender from
-  the logged pose for the report and video:
+- Pass checks, computed from the camera model in the loop. The RGB evidence image is rendered offline (RunPod Isaac,
+  Blender as fallback) from the logged pose for the report and video:
   - the target centre projects inside the image;
   - the line of sight is unoccluded;
   - incidence angle < 60°;
@@ -305,7 +320,8 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
 - **Statistics:**
   - Wilcoxon signed-rank for continuous metrics, McNemar for binary ones, bootstrap 95 % CIs.
   - Clopper-Pearson for collision rates. Zero collisions in N runs means an upper bound of ≈ 3/N, so say so.
-- **Size:** at least 10 seeds × 4 conditions × 15-min episodes; more if compute allows (Modal CPU for Branch M, L40S for I).
+- **Size:** at least 10 seeds × 4 conditions × 15-min episodes = 40 episodes, about 10 GPU-hours (≈ $8 on an L4, ≈ $20 on an L40S).
+  Run them in parallel containers. More seeds only if the Isaac cap allows (Modal CPU for Branch M).
 - **Limitations stated in the README:**
   - simulation only; 2D lidar;
   - kinematic movers;
@@ -316,14 +332,15 @@ The custom 10 Hz physics sim is **retired for robot results**. The event sim sta
 ### 5.7 Ownership, files, timeboxes
 | Sub-stream | Owner | Files | Done by |
 |---|---|---|---|
-| R1 sim + locomotion + sensor bridge (branch per 5.2) | agent | `ros2/intercycle_sim/*`, `cloud/modal_isaac_robot.py` | Sat 20:30 gate |
-| R2 Nav2 config + `observer_bridge` + `timing_planner` | agent | `ros2/intercycle_nav/*` | Sat 23:30 |
-| R3 movers/interaction + inspection checks + evaluation runner + stats | agent | `ros2/intercycle_eval/*`, `docs/ROBOT_RESULTS.md` | runs overnight; results Sun 10:30 |
-| Integration, learned observer → broadcast (replaces ShimObserver), event-sim re-run | **lead** | `sim/`, `observer/` glue | Sat 22:00 |
+| R1 sim + locomotion + sensor bridge (branch per 5.2) | agent | `ros2/intercycle_sim/*`, `cloud/modal_isaac_robot.py` | smoke Sat 20:00; gate Sat 22:30 |
+| R2 Nav2 config + `observer_bridge` + `timing_planner` | agent | `ros2/intercycle_nav/*` | Sun 01:30 |
+| R3 movers/interaction + inspection checks + evaluation runner + stats | agent | `ros2/intercycle_eval/*`, `docs/ROBOT_RESULTS.md` | ready Sun 01:30; batch overnight; results Sun 10:30 |
+| Integration, learned observer → broadcast (replaces ShimObserver), event-sim re-run | **lead** | `sim/`, `observer/` glue | Sun 00:00 |
 | R4 RunPod rendering: the install script/template, sensor-model validation vs RTX lidar/cameras, photoreal ANYmal shots (coordinate the shot list with X) | agent (starts after R1 has logged episodes) | `cloud/runpod_isaac/*`, `docs/RENDER.md` (Isaac section) | validation by Sun 08:00, shots by Sun 11:00 |
 
-- Keep the ROS 2 workspace on WSL ext4 (`~/intercycle_ws`) and sync it to `ros2/` in the repo. Use CycloneDDS,
-  `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, and kill the process group per episode.
+- The source of truth is `ros2/` in the repo. Build and test **inside the Modal Isaac image** (Ubuntu 22.04 + Humble),
+  not on the 8 GB laptop. Local WSL Humble is optional, for quick config checks only, and counts as the one heavy local job.
+  Use CycloneDDS, `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, and kill the process group per episode.
 - **Do NOT:**
   - fix the old custom physics sim;
   - write a local planner;
@@ -408,7 +425,8 @@ Record mode with the replay cache, so the demo works offline.
     STATUS.md calls it "real video". Correct that everywhere.
   - Set the fusion radius default to the measured best (1.5 m; the code still says 0.8 m).
   - Next: a body-shop-like scene if SmartSpaces has one, plus the ground-plane occupancy error used to calibrate the shim.
-- **Compute:** Modal GPU now. If the MI300X arrives, ONNX Runtime ROCm/MIGraphX on it.
+- **Compute:** the user's desktop RTX 4060 Ti first (free, §8), Modal GPU as overflow. If the MI300X arrives,
+  ONNX Runtime ROCm/MIGraphX on it.
 - Real video: if the user provides a clip of a real cyclic machine, run per-machine phase discovery (workstream P) on it.
   It's the strongest realism proof.
 - **Timebox:** Sun 11:00.
@@ -431,13 +449,17 @@ Blender Cycles is a path tracer. What looks fake is the content (procedural bloc
    - per-frame randomisation.
    These frames feed workstream V.
 5. Ground truth passes (segmentation, depth, boxes).
-6. Modal: OIDN denoiser (OptiX fails in Modal's sandbox). Fix this first and re-run `modal_blender.py::smoke`.
-   The laptop GPU (MX250, 2 GB) is for tiny smoke renders only. Real-asset scenes render on a Modal L4.
+6. **Where it runs:** the user's desktop (Blender + Blender MCP, RTX 4060 Ti, OptiX) is the primary scene-building and
+   render machine (§8).
+   - Modal L4 is overflow only. There, switch to the OIDN denoiser first (OptiX fails in Modal's sandbox) and re-run
+     `modal_blender.py::smoke`.
+   - The laptop GPU (MX250, 2 GB) is for tiny smoke renders only.
+   - Robot shots come from Isaac on RunPod (R4). X owns the plant, CCTV and asset look, and shares the shot list with R4.
 7. **Acceptance:** side-by-side stills against a real body-shop photo in the build log. The user decides; the target is "could pass as real CCTV".
 
 **Timebox:**
 - asset import: 3 h;
-- first realistic stills by Sat 21:00;
+- first realistic stills by Sat 21:30;
 - final shots overnight.
 
 **Fallback:** an asset class that fails stays procedural but gets real materials. Last resort for the video: the Three.js replay.
@@ -465,7 +487,9 @@ In live mode the same messages go over a local websocket. Keep snapshots small (
 2. **Two modes:**
    - **Live:** connects to the websocket while a sim + observer run (`scripts/map_timeline.py --live`). The map fills in as you watch.
    - **Replay:** loads a recorded run. A time slider runs from 1 h → 1 day → 1 week with play / speed controls.
-     It hosts statically (GitHub Pages from the repo), so judges can open it.
+     It hosts statically, so judges can open it.
+     - GitHub Pages works only once the repo is public (at submission; a private repo needs a paid plan).
+     - Until then, preview it locally, or publish the static page as a claude.ai artifact for the user.
 3. Metric curves (IoU, unsafe-free rate) with a cursor synced to the slider.
 4. Event timeline: the new machine appears as an UNKNOWN blob, gets learned, then the envelope settles. Gemma labels show as captions.
 5. Per-machine strip: the discovered sub-phases for the selected machine, with the phase-now marker moving.
@@ -483,8 +507,8 @@ In live mode the same messages go over a local websocket. Keep snapshots small (
 - host on Modal (static hosting only).
 
 **Timebox:** 4 h total.
-- Skeleton against the existing `scripts/build_map.py` outputs: Sat 17:00–19:00.
-- Wire to M's real snapshots: Sat 22:30–23:30.
+- Skeleton against the existing `scripts/build_map.py` outputs: Sat 19:00–21:00.
+- Wire to M's real snapshots: Sun 00:30–01:30.
 - Polish: Sun 09:00–10:00.
 
 **Fallback:** replay mode only, with the PNG snapshots M already produces plus the metric curves.
@@ -505,9 +529,9 @@ In live mode the same messages go over a local websocket. Keep snapshots small (
 - Cheapest GPU that works (L4 before L40S). Low samples + denoiser. Render only the shots in the shot list.
 - Local first: the laptop GPU (MX250) and CPU handle tests, smoke renders and map builds up to 1 week.
 
-**Isaac (only if Branch I passes the gate, §5.2):** the user tops up Modal for it. Separate cap: **$25 of L40S time**
-(≈ 12 h at $1.95/h), logged separately in STATUS. Stop and ask at $20 of Isaac spend. Isaac cannot render on Modal,
-so all visuals stay in Blender. The monitor's Isaac tests on 17 Oct cost about $1.5 (log it).
+**Isaac physics on Modal (§5.2 Branch I):** the user tops up Modal for it. Separate cap: **$25**, L4 first (≈ 30 GPU-h)
+or L40S (≈ 12 GPU-h), logged separately in STATUS. Stop and ask at $20 of Isaac spend. Isaac never renders on Modal;
+rendering is RunPod's job. The monitor's Isaac tests on 17 Oct cost about $1.5 (log it).
 
 **User's desktop (free; connected 17 Oct ~16:15 as a Remote Control session, likely `alexanderis-buzzing-planet`):**
 - Hardware: RTX 4060 Ti 8 GB, 32 GB RAM, **Blender installed with its MCP server**.
@@ -540,7 +564,8 @@ so all visuals stay in Blender. The monitor's Isaac tests on 17 Oct cost about $
 | Workload | Now | If the MI300X arrives |
 |---|---|---|
 | Gemma 4 (workstream G) | **Token Factory (AMD GPUs)**: the required AMD workload | vLLM-ROCm on MI300X |
-| Perception (workstream V) | Modal GPU | ONNX Runtime ROCm/MIGraphX on MI300X |
+| Perception (workstream V) | user's desktop RTX 4060 Ti (Modal overflow) | ONNX Runtime ROCm/MIGraphX on MI300X |
+| Isaac robot physics / rendering | Modal L4 / RunPod RTX 4090 (NVIDIA; say so) | unchanged |
 | Map builds, sweeps | local / Modal CPU | unchanged |
 
 The README states exactly what ran on AMD. Never claim the MI300X if it didn't arrive.
@@ -555,20 +580,24 @@ branch decisions immediately instead of parking them until morning. Overnight pr
 - X renders;
 - G batches within the quota.
 
+Already done before the fresh session: the doc tidy-up is committed and pushed (private repo), Modal is logged in, and
+the Token Factory key is verified (`/v1/usage`). The Isaac physics (Modal) and Isaac rendering (RunPod) smoke tests passed.
+
 | When | Must be true | Status to user |
 |---|---|---|
-| Sat 15:30 | The 5 failing tests (listed in STATUS.md) fixed; the doc tidy-up committed; agents M, P, G, X, D launched, each given its section of this doc + section 0 + section 1. M and D agree the stream data contract | ✔ |
-| Sat 19:30 | M: metrics + 1 h → 1 week curves. X: first realistic stills. D: page skeleton replaying existing map outputs | ✔ + build log update |
-| Sat 18:30 | R1: Isaac image + ROS 2 Humble/Nav2 builds on Modal; ANYmal-D (flat policy) follows `/cmd_vel` in an empty scene. Start Branch M only if R1 is blocked | ✔ |
-| Sat 20:30 | **R gate:** the legged robot walks to a Nav2 goal (Branch I on Modal, else Branch M). Pick the branch, then stop the other | ✔ |
-| Sat 22:30 | M: new machine. P: phases scored. Lead: learned observer replaces ShimObserver | ✔ |
-| Sat 23:30 | D: live + replay working on M's real snapshots | ✔ |
-| Sat 23:30 | R2: observer_bridge masks + timing planner working; R3: movers + inspection checks. Overnight: evaluation batch (4 conditions × ≥10 seeds) + renders, within budget | ✔ + build log update |
+| Sat 17:30 | Lead has read DIRECTION/BRIEF/STATUS; the 5 failing tests (listed in STATUS.md) are fixed and committed; the desktop session is identified (`ListAgents`) and has cloned the repo. M, P, R1, X (on the desktop), D launched (≤ 5 active), each given its own section + §0 + §1. M and D agree the stream data contract | ✔ |
+| Sat 20:00 | R1: Isaac physics image + ROS 2 Humble/Nav2 builds on Modal (L4 tried first); ANYmal-D follows `/cmd_vel` in an empty scene. If blocked, start Branch M | ✔ |
+| Sat 21:30 | M: metrics + 1 h → 1 week curves. X: first realistic stills (desktop). D: page skeleton replaying existing map outputs. Launch R2, R3 and G as slots free up | ✔ + build log update |
+| Sat 22:30 | **R gate:** the legged robot walks to a Nav2 goal (Branch I on Modal, else Branch M). Pick the branch, then stop the other | ✔ |
+| Sun 00:00 | P: phases scored. Lead: learned observer replaces ShimObserver; event sim re-run | ✔ |
+| Sun 00:30 | M: new-machine run done | ✔ |
+| Sun 01:30 | D: live + replay on M's real snapshots. R2: observer_bridge masks + timing planner working. R3: movers + inspection checks + runner ready. **Launch the overnight evaluation batch** (4 conditions × ≥ 10 seeds, parallel containers) + renders, within budget | ✔ + build log update |
+| Sun 08:00 | R4: sensor-model validation on RunPod done (cap $10) | ✔ |
 | Sun 10:00 | G1–G3 done. C started | ✔ |
 | Sun 10:30 | R3: `docs/ROBOT_RESULTS.md` with paired stats | ✔ |
-| Sun 11:00 | C, V done or fallen back. Held-out seeds 1000–1199 run (event-sim scheduling analysis) | ✔ |
-| **Sun 12:30** | **CODE FREEZE.** README, MAP_RESULTS, GEMMA_RESULTS, PHASES final | ✔ |
-| Sun 12:30–15:30 | Video (≤ 3 min), deck, submission form. Submit by 15:30 | ✔ |
+| Sun 11:00 | C, V done or fallen back. R4 photoreal shots done. Held-out seeds 1000–1199 run once (event-sim scheduling analysis) | ✔ |
+| **Sun 12:30** | **CODE FREEZE.** README, MAP_RESULTS, GEMMA_RESULTS, PHASES, ROBOT_RESULTS final; secret scan; repo ready to go public | ✔ |
+| Sun 12:30–15:30 | Video (≤ 3 min), deck, submission form. Make the repo public (user confirms). Submit by 15:30 | ✔ |
 
 **P2 — only if everything above is green:**
 - worker routines (trajectory clustering per time of day; ASOT on pose);
