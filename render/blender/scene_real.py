@@ -37,6 +37,7 @@ core = rb.core
 CCTV_Z = 9.0
 FORKLIFT_YAW_DEG = 90.0       # forklift_c forks point to -Y in the library; +90 deg turns them to +X
 BODY_CORNER = (2.1, 0.8)     # m from the station centre: where the corner robots weld (BIW is 4.65 x 1.74 m)
+COMPARE_LINE_X, COMPARE_LINE_Z, COMPARE_LINE_DX = 15.5, 7.0, 14.0   # compare_line camera: x, height, look-at run (m)
 FRAME_Z = 4.4               # m, top of the overhead cell frame (dress cables, trays); CCTV at 9 m looks over it
 END_REACH = 1.8             # m, base -> gun tip of the FANUC weld poses (fanuc.WELD_Q)
 ARM_REACH_STANDOFF = 2.65    # m, line centre -> FANUC base for on-line cells
@@ -149,7 +150,7 @@ class RealScene(rb.BScene):
             px, py = x - sd * 0.85 * hy - 0.3 * hx, y + sd * 0.85 * hx - 0.3 * hy
             if abs(px - cx) > w / 2 - 0.3 or abs(py - cy) > d / 2 - 0.3 or abs(py - cy) < 1.6:
                 continue
-            clear = min(math.hypot(px - bx, py - by) for bx, by in bases)
+            clear = min(math.hypot(px - bx, py - by) for bx, by in bases if (bx, by) != (x, y))   # other robots only
             if best is None or clear > best[0]:
                 best = (clear, px, py)
         if best is None or best[0] < 0.7:
@@ -475,6 +476,9 @@ class RealScene(rb.BScene):
 def still_cam(name: str, scn: dict) -> "core.Cam":
     if name == "wide":                                         # high corner view down the whole line
         return core.Cam((1.2, 46.5, 8.4), (50.0, 19.0, 0.0), 19.0)
+    if name == "compare_line":                                 # the reference photo's viewpoint: above the line axis near
+        y = next(m["z"] for m in scn["machines"] if m.get("on_line"))  # S20, looking down it (+x), ~95 deg wide lens
+        return core.Cam((COMPARE_LINE_X, y, COMPARE_LINE_Z), (COMPARE_LINE_X + COMPARE_LINE_DX, y, 0.0), 16.5)
     if name == "weld_close":                                   # in the S30 north light-curtain opening, on the middle robot's gun
         m = next(mm for mm in scn["machines"] if mm["id"] == "S30")
         y = m["z"] + m["size"][1] / 2
@@ -488,7 +492,7 @@ def still_cam(name: str, scn: dict) -> "core.Cam":
         else:
             tgt = (x + 10.0 if x < 60 else x - 10.0, y + 16.0 if y < 24 else y - 16.0, 0.0)
         return core.Cam((x, y, CCTV_Z), tgt, 17.5)            # ~91 deg horizontal, like a 2.8 mm CCTV lens
-    raise SystemExit(f"unknown still {name!r}: wide | weld_close | cctv_<i>")
+    raise SystemExit(f"unknown still {name!r}: wide | compare_line | weld_close | cctv_<i>")
 
 
 def label_synthetic(png: Path) -> None:
