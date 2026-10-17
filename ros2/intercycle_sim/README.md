@@ -123,6 +123,7 @@ modal run cloud/modal_isaac_robot.py --action check                       # CPU:
 modal run cloud/modal_isaac_robot.py --action fake --goal 12,16           # CPU: kinematic TEST DOUBLE + Nav2 (wiring only)
 modal run cloud/modal_isaac_robot.py --action cmdvel --seconds 20 --vx 0.6
 modal run cloud/modal_isaac_robot.py --action nav --goal 12,16 [--movers demo] [--nav2-params intercycle_nav/config/x.yaml]
+modal run cloud/modal_isaac_robot.py --action nav --patrol-s 900 --movers demo   # 15-min patrol (RTF / load test)
 modal run cloud/modal_isaac_robot.py --action pull --tag NAME             # Volume episodes/NAME -> out/robot/NAME
 ```
 
@@ -142,7 +143,7 @@ and call `.remote` / `.starmap` inside its app.
 | `tag` | Unique episode name |
 | `mode` | `"nav"` or `"cmdvel"` |
 | `start` | `[x, y, psi]` |
-| `goal` | `[x, y, psi]` |
+| `goal` | `[x, y, psi]`, or a list of them (a patrol, repeated until `patrol_until_s` sim seconds) |
 | `timeout_s` | Goal timeout in sim seconds |
 | `seconds` | Sim-time limit |
 | `nav2` | Bool |

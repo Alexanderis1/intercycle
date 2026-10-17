@@ -176,7 +176,7 @@ def pull(tag: str) -> Path:
 def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: float = 0.0, wz: float = 0.0,
          goal: str = "20,32", start: str = "4,32,0", tag: str = "", gpu: str = "L4", empty: bool = False,
          max_rtf: float = 1.0, timeout_s: float = 300.0, movers: str = "", nav2_params: str = "",
-         cfg_json: str = ""):
+         cfg_json: str = "", patrol_s: float = 0.0):
     import time
 
     if action == "check":
@@ -202,6 +202,9 @@ def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: floa
         world = build_world_bytes(empty=True)
     elif action in ("nav", "fake"):
         cfg.update(mode="nav", goal=[gx, gy, 0.0], nav2=True, timeout_s=timeout_s, seconds=timeout_s + 60)
+        if patrol_s > 0:   # RTF/load test: patrol dock area -> around the line's west end -> south aisle, repeated
+            cfg.update(goal=[[20.0, 32.0, 0.0], [12.0, 16.0, 0.0], [40.0, 16.0, 0.0], [12.0, 16.0, 0.0],
+                             [4.0, 30.0, 0.0]], patrol_until_s=patrol_s, timeout_s=240.0, seconds=patrol_s + 300)
         world = build_world_bytes(empty=empty)
     else:
         raise SystemExit(f"unknown action {action!r}")

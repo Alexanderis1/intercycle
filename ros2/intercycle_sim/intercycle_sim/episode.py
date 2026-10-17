@@ -218,8 +218,10 @@ def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
                 s = cfg.get("start", [4.0, 32.0, 0.0])
                 procs.start("goal", ["/usr/bin/python3", "-u",
                                      os.path.join(PKG_ROOT, "intercycle_sim", "send_goal.py"),
-                                     "--init", ",".join(str(v) for v in s), "--goal", ",".join(str(v) for v in g),
+                                     "--init", ",".join(str(v) for v in s), "--goal",
+                                     ";".join(",".join(str(v) for v in q) for q in (g if isinstance(g[0], list) else [g])),
                                      "--timeout", str(cfg.get("timeout_s", 300)),
+                                     "--until", str(cfg.get("patrol_until_s", 0.0)),
                                      "--out", os.path.join(work, "goal.json")], icenv)
         # wait for the sim to finish (time limit) or the goal client to finish
         limit = float(cfg.get("seconds", 60)) / max(float(cfg.get("max_rtf", 1.0)) or 1.0, 0.05) * 3 + 600

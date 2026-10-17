@@ -27,45 +27,62 @@ def pose(nav, x, y, psi) -> PoseStamped:
     return p
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--init", required=True)
-    ap.add_argument("--goal", required=True)
-    ap.add_argument("--timeout", type=float, default=300.0)
-    ap.add_argument("--out", default="")
-    a = ap.parse_args()
-    ix, iy, ipsi = (float(v) for v in a.init.split(","))
-    g = [float(v) for v in a.goal.split(",")]
-    gx, gy, gpsi = g[0], g[1], (g[2] if len(g) > 2 else 0.0)
-    rclpy.init()
-    nav = BasicNavigator()
-    nav.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, True)])
-    out = {"goal": [gx, gy, gpsi], "init": [ix, iy, ipsi]}
-    w0 = time.time()
-    nav.setInitialPose(pose(nav, ix, iy, ipsi))
-    nav.waitUntilNav2Active()
-    out["nav2_active_wall_s"] = round(time.time() - w0, 1)
+def _go(nav, gx, gy, gpsi, timeout):
     t0 = nav.get_clock().now().nanoseconds * 1e-9
-    out["t_goal_sent"] = t0
     nav.goToPose(pose(nav, gx, gy, gpsi))
-    last_fb = None
+    last_fb, timed_out = None, False
     while not nav.isTaskComplete():
         fb = nav.getFeedback()
         if fb is not None:
             last_fb = {"distance_remaining": float(fb.distance_remaining), "recoveries": int(fb.number_of_recoveries)}
-        now = nav.get_clock().now().nanoseconds * 1e-9
-        if now - t0 > a.timeout:
+        if nav.get_clock().now().nanoseconds * 1e-9 - t0 > timeout:
             nav.cancelTask()
-            out["timeout"] = True
+            timed_out = True
             break
         time.sleep(0.2)
     res = nav.getResult()
-    out["result"] = {TaskResult.SUCCEEDED: "SUCCEEDED", TaskResult.CANCELED: "CANCELED",
-                     TaskResult.FAILED: "FAILED"}.get(res, str(res))
-    out["t_done"] = nav.get_clock().now().nanoseconds * 1e-9
-    out["time_to_goal_s"] = round(out["t_done"] - t0, 2)
-    out["last_feedback"] = last_fb
-    out["wall_s"] = round(time.time() - w0, 1)
+    t1 = nav.get_clock().now().nanoseconds * 1e-9
+    return {"goal": [gx, gy, gpsi], "result": {TaskResult.SUCCEEDED: "SUCCEEDED", TaskResult.CANCELED: "CANCELED",
+                                                TaskResult.FAILED: "FAILED"}.get(res, str(res)),
+            "t_goal_sent": t0, "t_done": t1, "time_to_goal_s": round(t1 - t0, 2), "timeout": timed_out,
+            "last_feedback": last_fb}
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--init", required=True)
+    ap.add_argument("--goal", required=True, help="x,y[,psi]; several goals separated by ';' = a patrol")
+    ap.add_argument("--timeout", type=float, default=300.0, help="per goal, sim seconds")
+    ap.add_argument("--until", type=float, default=0.0, help="repeat the patrol until this sim time (0 = once)")
+    ap.add_argument("--out", default="")
+    a = ap.parse_args()
+    ix, iy, ipsi = (float(v) for v in a.init.split(","))
+    goals = []
+    for g in a.goal.split(";"):
+        v = [float(x) for x in g.split(",")]
+        goals.append((v[0], v[1], v[2] if len(v) > 2 else 0.0))
+    rclpy.init()
+    nav = BasicNavigator()
+    nav.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, True)])
+    w0 = time.time()
+    nav.setInitialPose(pose(nav, ix, iy, ipsi))
+    nav.waitUntilNav2Active()
+    active_wall = round(time.time() - w0, 1)
+    legs = []
+    while True:
+        for g in goals:
+            legs.append(_go(nav, *g, a.timeout))
+            print("LEG " + json.dumps(legs[-1]), flush=True)
+            if a.until and nav.get_clock().now().nanoseconds * 1e-9 >= a.until:
+                break
+        if not a.until or nav.get_clock().now().nanoseconds * 1e-9 >= a.until:
+            break
+    out = dict(legs[0]) if len(legs) == 1 else {
+        "goal": legs[-1]["goal"], "result": "SUCCEEDED" if all(l["result"] == "SUCCEEDED" for l in legs) else "FAILED",
+        "t_goal_sent": legs[0]["t_goal_sent"], "t_done": legs[-1]["t_done"],
+        "time_to_goal_s": round(legs[-1]["t_done"] - legs[0]["t_goal_sent"], 2),
+        "legs_ok": sum(l["result"] == "SUCCEEDED" for l in legs), "legs": legs}
+    out.update(init=[ix, iy, ipsi], nav2_active_wall_s=active_wall, wall_s=round(time.time() - w0, 1))
     print("GOAL_RESULT " + json.dumps(out), flush=True)
     if a.out:
         with open(a.out, "w") as f:
