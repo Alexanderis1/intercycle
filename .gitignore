@@ -6,3 +6,4 @@ out/
 data/
 *.egg-info/
 .env
+render/out/
