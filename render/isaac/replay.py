@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Photoreal replay of the InterCycle kinematic sim in Isaac Sim 5.1  (DESIGN SKELETON).
+"""Path-traced synthetic replay of our simulation (SYNTHETIC) in Isaac Sim 5.1  (DESIGN SKELETON).
 
     python replay.py --scenario scenario/bodyshop.yaml --trace trace.parquet --out out/ \
         --shots overview,curtain,ble,pov,datahall,ab_cam --quality fast --fps 30
@@ -12,7 +12,7 @@ anywhere and `--dry-run` was exercised against a synthetic trace. The Kit half (
 the docs, with each fragile step isolated in one small function so it can be fixed in the smoke
 container in minutes. Items marked `# VERIFY` are the ones most likely to need a tweak.
 
-THE ONLY INPUT IS THE TRACE. The photoreal tier never simulates: it places assets from
+THE ONLY INPUT IS THE TRACE. The render tier never simulates: it places assets from
 bodyshop.yaml, then replays trace.parquet. Nothing here feeds back into the sim.
 
 TRACE CONTRACT (trace.parquet), one row per (entity, sample), sorted by t within entity
