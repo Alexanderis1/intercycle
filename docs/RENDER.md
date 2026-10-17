@@ -9,7 +9,7 @@ Large files never go to git: assets in `D:\icdata\assets\`, renders in `D:\icdat
 |---|---|---|
 | launcher | `render/blender/bl_run.py` | `blender -b --factory-startup --python render/blender/bl_run.py -- <script> [args]`; adds the package folder (`INTERCYCLE_PYLIB`) |
 | plant | `render/blender/plant.py` | hall shell, roof trusses + skylight strips, 128 LED high-bays, column grid between the sim zones, aisle markings from `zones`, overhead trays/ducts/sprinklers, clutter, dressing only on floor no sim zone uses |
-| scene | `render/blender/scene_real.py` | `RealScene(BScene)`: stations (roller-skid conveyor, fixtures, mesh guards with light-curtain openings, stack lights from machine state, signs, controller platform), FANUC arms, spark bursts; stills, CCTV sequences with motion blur, ground truth |
+| scene | `render/blender/scene_real.py` | `RealScene(BScene)`: stations (roller-skid conveyor, fixtures, mesh guards with light-curtain openings, stack lights from machine state, signs, controller platform), FANUC arms, spark bursts, line-side extras (`extras.py`); stills, CCTV sequences with motion blur, ground truth |
 | robot arm | `render/blender/fanuc.py` | FANUC R-2000iC/210F from the NVIDIA USD (CC-BY 4.0) as a joint chain a1..a6 + servo C-gun; `weld_q(phase, k)` |
 | CCTV look | `render/cctv/` | distortion, vignetting, sensor noise, burned-in timestamp + **SYNTHETIC**, real x264 round trip; GT warped by the same map -> boxes + COCO (`pytest render/cctv/test_cctv.py`) |
 | assets | `render/blender/fetch_assets.py` | NVIDIA bucket downloader that records each asset's licence file (`manifest.json`) |
@@ -31,8 +31,8 @@ $env:PYTHONPATH="D:\icdata\pylib"; python -m render.cctv.cctv_post --in D:\icdat
 ```
 `cctv_<i>` is camera i of `bodyshop.yaml` `cameras` at 9 m, ~91° horizontal; CCTV renders carry 5.5 % overscan per side
 (`--overscan`, pass the same value to `cctv_post`). Ground truth per frame: `<stem>_inst.png` (uint16 object index, 0 =
-background/static plant), `<stem>_depth.npy` (m), `<stem>_ids.json` (`{id: {cls, entity_id}}`; classes: robot_arm,
-body, forklift, agv, tugger, person). Speed: ~5-10 s per 1080p frame at 64 spp.
+background/static plant), `<stem>_depth.npy` (m), `<stem>_ids.json` (`{id: {cls, entity_id}}`, plus `extra: true` for
+line-side extras; classes: robot_arm, body, forklift, agv, tugger, person). Speed: ~5-10 s per 1080p frame at 64 spp.
 
 First stills (17 Oct, `render/stills/first/`, trace `trace_synth15.parquet`): `--t 36562.95` is a frame where the near
 middle robot of S30 welds, so the `weld_close` shot shows sparks (spatter leaves the gun on the robot side). Side-by-sides
@@ -55,6 +55,22 @@ people (10 aisle walkers + 2 data-hall techs; break crowds only around breaks), 
 every 0.25 s on their unobstructed paths. Machines and the hero AMR stay synthetic. Note: `bodyshop.yaml`
 `people_per_shift` (early 34) is only used by the statistical occupancy model `truth/traffic.py`; `agents.py` does not
 spawn that many, so the render shows the sim's 12, not 34.
+
+Line-side extras (`render/blender/extras.py`, `--extras`, default 2): rendered workers who are **not** in the trace, so a
+view can show line-side operators next to the sim's 12. Rules:
+- only outside the guarding: an operator at a light-curtain opening of a loaded on-line cell (weld / framing / respot;
+  south side with a walk to the part cart and back, north side with a short walk along the guard), an inspector on the
+  S80 south side, a maintenance tech at the north opening of a cell that is STOPPED / HELD / TRIPPED on every frame of
+  the clip. Never inside a cell, active or not;
+- per view: at most `--extras` (2) and never more than the trace persons inside the nominal frame, taking the fewest over
+  the clip, so the cap holds on every frame. Chosen once per clip: the work spot must be in frame at 4-30 m, keep 1.2 m
+  from every trace mover on every frame and 1.5 m from the other extra, one extra per cell, maintenance first, then nearest;
+- mostly standing / working (work and idle clips) with a short walk;
+- ground truth: class `person`, `entity_id` `extra_<n>`, `"extra": true` in `<stem>_ids.json`, in `<stem>_boxes.json`
+  and in the COCO annotations, so they can be filtered out of anything that compares against the trace.
+Rules are tested in `render/blender/test_extras.py`. `--extras 0` renders the trace persons only.
+Second V sequence: `--cctv-seq cctv_4 --t 36245` (north ceiling camera at (6, 46)). It shows weld cells S10, S20 and S30, all
+ACTIVE, and forklift FL0 on the north aisle for the whole 10 s.
 
 # Photoreal render tier: decision, research, shot list
 

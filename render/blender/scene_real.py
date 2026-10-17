@@ -9,7 +9,9 @@ Same trace contract, YAML layout, shots and per-frame replay as replay_bpy.py; d
     map overlays, not things a CCTV camera sees);
   * weld spark bursts (emissive streaks + flash light) at the welding gun while a cell is ACTIVE;
   * no capsule people: persons are hidden until humans.py (rigged workers) is available;
-  * the hero AMR is hidden (robot shots belong to workstream R4 / Isaac).
+  * the hero AMR is hidden (robot shots belong to workstream R4 / Isaac);
+  * line-side extras (extras.py): up to --extras workers per view that are NOT in the trace, outside the
+    guarding, never more than the trace persons in that view; GT class person, entity_id extra_<n>, extra=true.
 Stills (one frame each, labelled SYNTHETIC):
     blender -b --factory-startup --python render/blender/bl_run.py -- render/blender/scene_real.py \
         --trace D:/icdata/renders/trace_synth.parquet --synth-bodies --out D:/icdata/renders/stills \
@@ -28,6 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import assets  # noqa: E402
+import extras  # noqa: E402
 import fanuc  # noqa: E402
 import humans  # noqa: E402
 import plant  # noqa: E402
@@ -47,6 +50,9 @@ STACK = {"ACTIVE": "g", "IDLE": "g", "STOPPED": "y", "HELD": "y", "TRIPPED": "r"
 class RealScene(rb.BScene):
     def build(self):
         self.rng = random.Random(5)
+        self.worker_names: list[str] = []
+        self.extras: dict[str, tuple[extras.Extra, object]] = {}   # extra_<n> -> (schedule, worker root)
+        self.shown_extras: set[str] = set()                       # the extras of the current view
         self._render_settings()
         self._world()
         plant.build(self, self.args.light_e)
@@ -436,7 +442,7 @@ class RealScene(rb.BScene):
             if persons:
                 rb.log(f"WARNING no worker library at {humans.LIB_PATH}: {len(persons)} persons stay hidden")
             return
-        names = humans.load_workers()
+        names = self.worker_names = humans.load_workers()
         for k, eid in enumerate(persons):                       # stable worker choice + phase per entity
             root = humans.spawn(names[k % len(names)], (0.0, 0.0, -50.0), 0.0, "walk", phase_s=0.37 * k, collection=self.col_real)
             self.prims[eid] = root
@@ -452,6 +458,53 @@ class RealScene(rb.BScene):
             else:
                 humans.set_time(root, t, "idle")
 
+    # ----- line-side extras (render/blender/extras.py) -----
+    def pick_extras(self, times: list[float], margin: float) -> None:
+        """Choose the extras of the current view (camera pointed, render size set) over `times` and spawn the new
+        ones. `margin` is the overscan per side: 'in view' means inside the nominal (post-crop) frame."""
+        from bpy_extras.object_utils import world_to_camera_view
+        self.shown_extras = set()
+        if self.args.extras <= 0 or not self.worker_names:
+            return
+        self.bpy.context.view_layer.update()                   # camera matrix_world after point_camera
+        sc, cam, tracks = self.scene, self.cam_obj, self.ctx.tracks
+
+        def in_view(p):
+            co = world_to_camera_view(sc, cam, self.mu.Vector(p))
+            return co.z if co.z > 0 and margin <= co.x <= 1 - margin and margin <= co.y <= 1 - margin else None
+
+        def persons_in_view(t):
+            return sum(1 for tr in tracks.values()
+                       if tr.cls == "person" and tr.active(t) and in_view((*tr.pose(t)[:2], 0.9)) is not None)
+
+        def movers_at(t):
+            return [tr.pose(t)[:2] for tr in tracks.values() if tr.cls in extras.MOVERS and tr.active(t)]
+
+        def state_at(mid, t):
+            tr = tracks.get(mid)
+            return tr.state_at(t) if tr else "IDLE"
+
+        cands = extras.candidates(self.scn, state_at, times, plant.LINE_SIDE_Y)
+        named = {e: n for n, (e, _) in self.extras.items()}
+        for e in extras.select(cands, times, in_view, persons_in_view, movers_at, self.args.extras):
+            if e not in named:
+                k = len(self.extras)
+                named[e] = f"extra_{k + 1}"
+                root = humans.spawn(self.worker_names[(len(self.workers) + k) % len(self.worker_names)], (0.0, 0.0, -50.0),
+                                    0.0, e.clip_a, phase_s=0.53 * k, collection=self.col_real)
+                self.extras[named[e]] = (e, root)
+            self.shown_extras.add(named[e])
+        rb.log("extras in view:", [(n, self.extras[n][0].role, self.extras[n][0].cell) for n in sorted(self.shown_extras)])
+
+    def _pose_extras(self, t: float) -> None:
+        for name, (e, root) in self.extras.items():
+            if name not in self.shown_extras:
+                self._place(root, 0.0, 0.0, 0.0, -50.0)
+                continue
+            x, y, yaw, clip, v = e.state(t)
+            self._place(root, x, y, yaw)
+            humans.set_time(root, t * v / humans.WALK_SPEED if clip == "walk" else t, clip)
+
     # ----- per frame -----
     def apply(self, t: float, shot=None):
         c, scn = self.ctx, self.scn
@@ -462,6 +515,7 @@ class RealScene(rb.BScene):
             x, y, yaw = tr.pose(t)
             self._place(o, x, y, yaw, 0.0 if tr.active(t) else -50.0)
         self._pose_workers(t)
+        self._pose_extras(t)
         for m in scn["machines"]:
             mid = m["id"]
             tr = c.tracks.get(mid)
@@ -554,8 +608,8 @@ def label_synthetic(png: Path) -> None:
 # ground truth (CCTV frames): instance ids + depth, in the layout render/cctv/gt.py reads
 # =====================================================================================
 def assign_ids(bs) -> dict[str, dict]:
-    """Give every mesh of every tracked entity, and of every welding arm, an object pass index.
-    Returns {id: {"cls", "entity_id"}}; 0 stays background/static plant."""
+    """Give every mesh of every tracked entity, of every welding arm and of every extra, an object pass index.
+    Returns {id: {"cls", "entity_id"}} (+ "extra": true for extras); 0 stays background/static plant."""
     ids: dict[str, dict] = {}
     nxt = 1
     groups = [(eid, bs.ctx.tracks[eid].cls, root) for eid, root in bs.prims.items() if eid in bs.ctx.tracks]
@@ -565,10 +619,11 @@ def assign_ids(bs) -> dict[str, dict]:
             while root.parent is not None:
                 root = root.parent
             groups.append((f"{mid}/arm{k}", "robot_arm", root))
+    groups += [(name, "person", root) for name, (_, root) in bs.extras.items()]
     for eid, cls, root in groups:
         for o in [root, *root.children_recursive]:
             o.pass_index = nxt
-        ids[str(nxt)] = {"cls": cls, "entity_id": eid}
+        ids[str(nxt)] = {"cls": cls, "entity_id": eid} | ({"extra": True} if eid in bs.extras else {})
         nxt += 1
     vl = bs.scene.view_layers[0]
     vl.use_pass_object_index = True
@@ -604,24 +659,38 @@ def write_gt(bs, stem: str, gt_dir: Path, ids: dict) -> None:
     z = z.astype(np.float32)
     z[z > 1e6] = np.inf
     np.save(gt_dir / f"{stem}_depth.npy", z)
-    (gt_dir / f"{stem}_ids.json").write_text(json.dumps(ids, indent=1))
+    view_ids = {k: v for k, v in ids.items() if not v.get("extra") or v["entity_id"] in bs.shown_extras}
+    (gt_dir / f"{stem}_ids.json").write_text(json.dumps(view_ids, indent=1))
     exr.unlink()
+
+
+def _frame(bs, name: str, W: int, H: int, overscan: float) -> float:
+    """Point the camera at still `name` and size the render; returns the overscan per side (0 for non-CCTV).
+    CCTV views are rendered with `overscan` extra field per side (same focal, wider sensor) so the barrel
+    distortion in render/cctv can keep the full nominal view: pass the same value to cctv_post."""
+    cctv = name.startswith("cctv_")
+    k = 1.0 / (1.0 - 2.0 * overscan) if cctv else 1.0
+    bs.cam_obj.data.sensor_width = 36.0 * k
+    bs.scene.render.resolution_x, bs.scene.render.resolution_y = round(W * k), round(H * k)
+    bs.point_camera(still_cam(name, bs.scn))
+    return overscan if cctv else 0.0
 
 
 def run_stills(scn, ctx, args, out_dir: Path) -> list[str]:
     bs = RealScene(scn, ctx, args)
     bs.build()
+    W, H = (int(v) for v in args.res.split("x"))
+    names = [s.strip() for s in args.stills.split(",") if s.strip()]
+    picks = {}
+    for name in names:                                         # extras first: assign_ids gives them ids too
+        bs.pick_extras([args.t], _frame(bs, name, W, H, args.overscan))
+        picks[name] = bs.shown_extras
     ids = assign_ids(bs) if args.gt else {}
     outs = []
-    W, H = (int(v) for v in args.res.split("x"))
-    for name in [s.strip() for s in args.stills.split(",") if s.strip()]:
+    for name in names:
+        _frame(bs, name, W, H, args.overscan)
+        bs.shown_extras = picks[name]
         bs.apply(args.t)
-        bs.point_camera(still_cam(name, scn))
-        # CCTV stills are rendered with `--overscan` extra field per side (same focal, wider sensor) so the
-        # barrel distortion in render/cctv can keep the full nominal view: pass the same value to cctv_post.
-        k = 1.0 / (1.0 - 2.0 * args.overscan) if name.startswith("cctv_") else 1.0
-        bs.cam_obj.data.sensor_width = 36.0 * k
-        bs.scene.render.resolution_x, bs.scene.render.resolution_y = round(W * k), round(H * k)
         dst = out_dir / (f"{name}_clean.png" if name.startswith("cctv_") else f"{name}.png")
         bs.scene.render.filepath = str(dst)
         bs.bpy.ops.render.render(write_still=True)
@@ -631,13 +700,14 @@ def run_stills(scn, ctx, args, out_dir: Path) -> list[str]:
             write_gt(bs, dst.stem, out_dir / "gt", ids)
         rb.log("still", dst)
         outs.append(str(dst))
-    (out_dir / "stills_manifest.json").write_text(json.dumps(dict(stills=outs, t=args.t, device=bs.device, args=vars(args)), indent=2, default=str))
+    (out_dir / "stills_manifest.json").write_text(json.dumps(dict(stills=outs, t=args.t, device=bs.device, args=vars(args),
+                                                                 extras={n: sorted(v) for n, v in picks.items()}), indent=2, default=str))
     return outs
 
 
 def _key_pose(bs, frame: int) -> None:
     """Keyframe everything apply() moves (entity roots, arm joints) so Cycles can motion-blur between frames."""
-    for o in bs.prims.values():
+    for o in [*bs.prims.values(), *(root for _, root in bs.extras.values())]:
         o.keyframe_insert("location", frame=frame)
         o.keyframe_insert("rotation_euler", frame=frame)
     for arms in bs.arms.values():
@@ -652,22 +722,20 @@ def run_cctv_seq(scn, ctx, args, out_dir: Path) -> Path:
     Feed the result to render/cctv: python -m render.cctv.cctv_post --in <out>/frames --gt <out>/gt --overscan ..."""
     bs = RealScene(scn, ctx, args)
     bs.build()
-    ids = assign_ids(bs) if args.gt else {}
     bpy, sc = bs.bpy, bs.scene
     bpy.context.preferences.edit.keyframe_new_interpolation_type = "LINEAR"
     sc.render.use_motion_blur = True
     sc.render.motion_blur_shutter = 0.5
     sc.render.motion_blur_position = "END"
     W, H = (int(v) for v in args.res.split("x"))
-    k = 1.0 / (1.0 - 2.0 * args.overscan)
-    bs.cam_obj.data.sensor_width = 36.0 * k
-    sc.render.resolution_x, sc.render.resolution_y = round(W * k), round(H * k)
-    bs.point_camera(still_cam(args.cctv_seq, scn))
+    margin = _frame(bs, args.cctv_seq, W, H, args.overscan)
     seq = out_dir / args.cctv_seq
     frames = seq / "frames"
     frames.mkdir(parents=True, exist_ok=True)
     n = max(1, int(round(args.seconds * args.fps)))
     dt = 1.0 / args.fps
+    bs.pick_extras([args.t + i * dt for i in range(n)], margin)       # once per clip, checked on every frame
+    ids = assign_ids(bs) if args.gt else {}
     bs.apply(args.t - dt)
     _key_pose(bs, 0)
     for i in range(1, n + 1):
@@ -684,7 +752,8 @@ def run_cctv_seq(scn, ctx, args, out_dir: Path) -> Path:
         if (i - 1) % 25 == 0:
             rb.log(f"[{args.cctv_seq}] frame {i}/{n} t={t:.2f}s")
     (seq / "seq_manifest.json").write_text(json.dumps(dict(cam=args.cctv_seq, t0=args.t, fps=args.fps, frames=n, overscan=args.overscan,
-                                                          device=bs.device, args=vars(args)), indent=2, default=str))
+                                                          device=bs.device, extras=sorted(bs.shown_extras), args=vars(args)),
+                                                     indent=2, default=str))
     return seq
 
 
@@ -698,6 +767,8 @@ def main(argv=None) -> int:
     ap.add_argument("--cctv-seq", default="", help="render a CCTV sequence from camera cctv_<i> starting at --t")
     ap.add_argument("--seconds", type=float, default=4.0, help="length of --cctv-seq (s)")
     ap.add_argument("--gt", action="store_true", help="also write instance/depth ground truth for cctv_* stills (<out>/gt)")
+    ap.add_argument("--extras", type=int, default=2,
+                    help="cap of line-side extras per view (never more than the trace persons in it); 0 = none")
     ap.add_argument("--haze", type=float, default=0.0, help="world volume scatter density (1/m), e.g. 0.002; 0 = off")
     ap.set_defaults(hdri_id="kloofendal_overcast_puresky", cache=r"D:\icdata\assets\ph_cache")
     args = ap.parse_args(argv)
