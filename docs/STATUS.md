@@ -14,6 +14,10 @@
 | 17 Oct (before 16:20) | Modal | perception + sim + earlier tests | L4 etc. | ≈ 1.5 | Modal general ≈ 1.5 |
 | 17 Oct 16:30 | Modal | Isaac physics smoke (monitor) | L40S | ≈ 1.5 | Isaac ≈ 1.5 / cap 25 (ask at 20) |
 | 17 Oct 16:00 | RunPod | Isaac RTX render smoke (monitor), pod terminated | RTX 4090 | ≈ 0.18 | RunPod ≈ 0.18 / cap 10 |
+| 17 Oct ~17:15 | Modal | R1 image build (CPU builders) + bridge/Nav2 CPU test with a kinematic test double | CPU | < 0.06 | Isaac ≈ 1.51 |
+| 17 Oct ~17:30 | Modal | R1 ANYmal-D `/cmd_vel` smoke, Isaac headless physics-only | L4, ~100 s | ≈ 0.04 | Isaac ≈ 1.55 |
+
+**Sat 20:00 checkpoint (R1): met early, ~17:30.** Modal image `intercycle-isaac-robot`: Isaac Sim 5.1, IsaacLab 2.3, torch 2.7.0 pinned, Humble + Nav2. Pretrained FLAT ANYmal-D policy. `/cmd_vel` 0.6 m/s goes through a Unix-socket lockstep bridge (Isaac py3.11 ↔ rclpy py3.10, `/clock` from Isaac). Result: 11.34 m in 20 s sim, heading drift 0.007 rad, RTF 0.78 on an L4. The CPU test double reached a 16 m Nav2 goal (SmacPlanner2D + MPPI Omni + AMCL Omni). Next: the 22:30 gate in the factory scene.
 
 ### Proposed (needs the user's OK)
 - (none yet)
