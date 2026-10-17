@@ -8,8 +8,9 @@ github.com/yuxiang-gao/PySocialForce), re-implemented here because PySocialForce
   * obstacle force  exp(-d / sigma) away from the nearest static surface, sigma 0.2, factor 10, threshold 3 m
 Speeds are capped at 1.3 x the preferred speed (PySocialForce max_speed_multiplier).
 
-The ROBOT is one more agent in the social force (it moves with its true velocity), so people step around it the way
-they step around each other. `reacts` flags who reacts to the robot: ~20 % of people are impassive / distracted and
+The ROBOT is one more agent in the social force (it moves with its true velocity), and for people who react its
+1.0 x 0.64 m body is also an obstacle (the obstacle term, plus a small keep-right tangential share so a head-on approach
+steps around it; the Moussaid term alone lets a walker creep into a STANDING agent). `reacts` flags who reacts to the robot: ~20 % of people are impassive / distracted and
 ignore it (they still avoid each other and walls). The "invisible robot" stress condition sets every flag False.
 Nobody yields on command: the only coupling is the force.
 """
@@ -22,6 +23,8 @@ SOC_FACTOR, LAMBDA, GAMMA, N_ANG, N_VEL = 5.1, 2.0, 0.35, 2.0, 3.0
 OBS_SIGMA, OBS_FACTOR, OBS_THRESH = 0.2, 10.0, 3.0
 MAX_SPEED_MULT = 1.3
 PERSON_R = 0.3
+ROBOT_HL, ROBOT_HW = 0.5, 0.32          # robot footprint half-length / half-width (obstacle term)
+KEEP_RIGHT = 0.3                        # tangential share of the robot-obstacle force (step around, keep right)
 
 
 def _norm(v: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -101,7 +104,7 @@ class Crowd:
         self.vel[i] = 0.0
         self.active[i] = True
 
-    def step(self, dt: float, goals: np.ndarray, v0: np.ndarray, robot_xy, robot_v) -> None:
+    def step(self, dt: float, goals: np.ndarray, v0: np.ndarray, robot_xy, robot_v, robot_psi: float = 0.0) -> None:
         a = np.flatnonzero(self.active)
         if len(a) == 0:
             return
@@ -114,6 +117,14 @@ class Crowd:
         if robot_xy is not None:
             rm = self.reacts[a][:, None]
             f += social_force(p, v, np.asarray(robot_xy, float)[None, :], np.asarray(robot_v, float)[None, :], rm)
+            # a reacting person also treats the robot's body as an obstacle (PySocialForce obstacle term on the 1.0 x
+            # 0.64 m footprint box), with a small keep-right tangential component so a head-on approach steps around
+            # instead of stalling on the symmetry axis
+            box = np.array([[robot_xy[0], robot_xy[1], ROBOT_HL, ROBOT_HW, robot_psi]])
+            fo = obstacle_force(p, box) * self.reacts[a][:, None]
+            heading, _ = _norm(np.where(np.linalg.norm(v, axis=1)[:, None] > 0.05, v, gdir))
+            right = np.stack((heading[:, 1], -heading[:, 0]), axis=1)
+            f += fo + KEEP_RIGHT * np.linalg.norm(fo, axis=1)[:, None] * right
         near = np.abs(self.boxes[:, 0][None, :] - p[:, 0:1]).min(axis=0) < 12.0 if len(self.boxes) else None
         if near is not None and near.any():
             f += obstacle_force(p, self.boxes[near])

@@ -4,6 +4,37 @@ Workstream R3 (DIRECTION section 5.4-5.6). Every number on this page comes from 
 Isaac Lab 2.3 / Isaac Sim 5.1, physics only, on Modal L4. Navigation is ROS 2 Humble Nav2. Nothing here was run on a
 real robot.
 
+## 0. Pre-registration (committed before the held-out batch; the commit timestamp is the record)
+
+This analysis plan is fixed before any held-out episode runs. It is not changed after seeing results.
+
+- **Data.**
+  - Held-out seeds 1000-1009, 4 conditions each (none, static, learned, timing oracle), paired by seed.
+  - One fixed 600 s episode per seed and condition (section 4), run once.
+  - Invalid episodes are listed and excluded; this is decided only by the cheat guard and episode errors. Nothing is
+    re-run or replaced.
+- **Primary endpoint.**
+  - `line_time_lost_s`: union of line-group freeze time from robot-caused trips (90 s recovery each) and holds inside the
+    episode.
+  - Comparison: **learned vs none** (no map).
+  - Test: exact paired sign-flip permutation test on the 10 per-seed differences, two-sided, alpha 0.05.
+    SciPy `permutation_test(permutation_type="samples")` enumerates all 2^10 = 1024 sign flips.
+  - All 10 paired differences are shown, as a table and a plot. Bootstrap intervals are not the lead statistic at n = 10.
+- **Safety endpoint.**
+  - `any_collision` per condition: episodes with at least one robot collision (person / vehicle / machine part /
+    static), with a Clopper-Pearson 95 % interval.
+  - Collision events per hour of episode time get an exact Poisson 95 % upper bound.
+  - With 0 collisions in the 10 learned episodes (100 min), the 95 % upper bounds are **0.31 per episode**
+    (Clopper-Pearson) and about **2.2 per hour** (Poisson). No strong safety claim is made from this.
+  - Collisions where the robot itself was moving (> 0.1 m/s), and person contacts by impassive walkers, are broken out.
+- **Secondary endpoints, Holm-corrected as one family.**
+  - Endpoints: `inspections_ok`, `line_time_lost_s` (other pairs), `machine_time_lost_s`, `trips`, `windows_hit`,
+    `any_collision`, `collisions_robot_moving`, `min_dist_person_m`, `stalled_s`, `spl`, `time_per_target_s`.
+  - Pairs: learned vs none, learned vs static, timing oracle vs learned.
+  - Each uses the same exact sign-flip test.
+  - Everything else (Francis et al. metric list, section 4) is descriptive.
+- **Scope.** 10-minute episodes in production only. No per-shift or per-day extrapolation.
+
 <!-- RESULTS -->
 _Results pending: the held-out batch has not run yet._
 <!-- /RESULTS -->
@@ -18,9 +49,9 @@ movers and the same sensor-noise seed in all four conditions:
 | 1 | `none` | Nav2 + its own sensors only | the robot camera's no-motion check alone (reactive) |
 | 2 | `static` | static keep-out of every hazard zone (provisioned site map) | never enters; inspects from the boundary |
 | 3 | `learned` (InterCycle) | signed observer broadcast: learned map layer + learned cycle models + live nowcast | a predicted idle window with `need_s` left AND the camera's no-motion check |
-| 4 | `oracle` (UPPER BOUND) | true cycle timing (PLC-equivalent) + the same learned spatial layers | same as 3 |
+| 4 | `oracle` = **timing oracle** (UPPER BOUND) | true cycle timing (PLC-equivalent) + the same learned spatial layers | same as 3 |
 
-- The oracle is labelled as an upper bound. Only its timing is oracle. Its spatial layers (L1-L3) are the same learned
+- Condition 4 is a **timing oracle**, labelled as an upper bound. Only its timing is oracle. Its spatial layers (L1-L3) are the same learned
   map as condition 3.
 - No ground truth reaches Nav2 or R2's nodes in conditions 1-3:
   - The robot side gets `/scan`, `/imu`, `/odom`, TF, `/clock`, the static map, the verified broadcast and the camera
@@ -87,7 +118,7 @@ The plant is `ros2/intercycle_eval/intercycle_eval/plant.py`. It runs inside the
 ## 3. Robot camera (R1's geometric model) and inspection
 
 - **Camera.** A pan-tilt inspection head, 1920 x 1080, 70 x 45 deg, mounted 0.45 m ahead of and 0.35 m above
-  base_link. It aims at site-map locations (zone centre, inspection target) with a 0.5 deg Gaussian aim error. Aiming
+  base_link. It aims at site-map locations (zone centre, inspection target) with a 2.5 deg Gaussian aim error. Aiming
   uses the simulator's true pose plus that error, as a stand-in for the robot's pose estimate.
 - **No-motion gate** (`camera.py`; published by the sim bridge on `/intercycle/camera/observations` with source
   `camera_model (R1 geometric, R3 gate)`).
@@ -135,10 +166,19 @@ The plant is `ros2/intercycle_eval/intercycle_eval/plant.py`. It runs inside the
     06:10-10:00.
   - Both training seeds are disjoint from the dev seeds (20-29) and the test seeds (1000-1009).
   - Development used dev seeds only. The final batch uses held-out seeds **1000-1009**, run once, never tuned on.
+- **Pre-registered primary endpoints** (declared before the held-out batch):
+  - endpoints: `line_time_lost_s`, `inspections_ok`, `any_collision`;
+  - comparisons: learned vs none, learned vs static;
+  - test: exact two-sided sign-flip permutation test on the per-seed paired differences (all 2^10 sign assignments),
+    Holm-corrected over those 6 tests.
+  - Everything else is secondary and descriptive.
+- **Scope of the claim.** Results are for **10-minute episodes in production only** (no breaks, shift changes or line
+  start-up inside a window). Nothing is extrapolated per shift or per day.
 - **Statistics.**
   - Continuous metrics: per-seed paired differences, Wilcoxon signed-rank and paired bootstrap 95 % CIs.
   - Binary metrics: exact McNemar.
-  - Rates: Clopper-Pearson 95 %. Zero events in N gives an upper bound of about 3/N; it is stated as such.
+  - Rates: Clopper-Pearson 95 %. Zero events in N gives an upper bound of about 3/N. With N = 10 and 0 collisions, the
+    two-sided 95 % upper bound is **0.31**; the table says so.
   - Every invalid, failed or timed-out episode is listed.
 
 ## 5. Limitations
@@ -148,13 +188,31 @@ The plant is `ros2/intercycle_eval/intercycle_eval/plant.py`. It runs inside the
 - Movers are kinematic. Simulated humans follow routes with a social-force model and are more constrained than real
   people. Machine parts are plan-view circles with assumed heights.
 - The locomotion policy observes the true base velocity, as a stand-in for an onboard estimator. Nav2 never sees it.
+- **Stand mode.** Under a zero `/cmd_vel` the pretrained rsl_rl policy creeps, about 5 cm/s and 1.5 rad/min. In the
+  first dev dry run this drifted the robot from its wait pose into the S80 hazard zone (holds and a trip with no entry
+  decision). The locomotion layer therefore has a stand state: after 0.2 s of zero command it holds the stance pose with
+  a P-loop on the base pose. That loop uses the true base pose, the same estimator stand-in as the policy's velocity
+  input; Nav2 never sees it. Any non-zero command releases it.
+- **People model.** A reacting person treats the robot's footprint as an obstacle (PySocialForce obstacle term) plus a
+  keep-right tangential share, because the Moussaid term alone let walkers creep into a standing robot. The 20 %
+  impassive walkers ignore the robot completely and can walk into it while it stands; such contacts are counted as
+  collisions and broken out.
 - `/odom` is a labelled leg/IMU-odometry model with drift; localisation is AMCL.
 - The camera is a geometric model (frustum, occlusion, pixel density, noise, latency), not rendered images. The camera
-  head is aimed with the true pose plus noise.
+  head is aimed from the TRUE pose plus a 2.5 deg Gaussian aim error, a stand-in for the pose-estimate and head error.
+  The capture outcome published on ROS carries no pose.
 - The oracle's spatial layers are learned. Only its timing is true.
 - R2's planner keeps the whole hazard rectangle keep-out unless a predicted idle window covers [now, now + 6 s]. The
   reason is the BRIEF rule that crossing an ACTIVE boundary trips. HEM1's idle (15.75 s) is shorter than `need_s`
   (16.5 s), so in `learned` / `oracle` HEM1 is never entered. This is a real constraint.
 - `static` inspects from the boundary only.
+- The SpeedFilter's production-state slice comes only from the broadcast. A line where at least half the machines report
+  STOPPED counts as a stopped line; otherwise it is RUNNING. No calendar is used (AUDIT Tier 1).
+- Further disclosures:
+  - arm links are floor-to-2 m columns (conservative);
+  - the AMCL map is the exact sim geometry;
+  - the collision-monitor stop polygon is 8 cm;
+  - the IMU is unused by Nav2;
+  - every cycle runs the same robot program (truth kinematics), with 1 % takt jitter.
 - The map's phase convention (phase 0 = motion start, the same as the fast layer) is assumed with +-1 bin padding. It is
   verified on a dev seed below.

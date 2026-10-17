@@ -124,6 +124,8 @@ class Site:
     site_id: int
     key_id: int
     extent: tuple[float, float, float, float]             # x0, y0, x1, y1 of hall + data hall
+    hard_keepout: list = field(default_factory=list)      # site rects that are keep-out in EVERY condition (none here)
+    speed_limits: list = field(default_factory=list)      # site (x0, y0, x1, y1, percent) static limits (none here)
 
     @classmethod
     def from_scenario(cls, path: str | None = None) -> Site:
@@ -334,6 +336,41 @@ def keepout_mask(grid: Grid, condition: str, site: Site, snap: Snapshot | None, 
         g[d] = FREE
     info["keepout_cells"] = int((g > 0).sum())
     return g, info
+
+
+def keepout_floor(grid: Grid, condition: str, site: Site, snap: Snapshot | None, view, p: MaskParams) -> np.ndarray:
+    """What the broadcast can never free (DIRECTION / PRODUCTION_BRIEF A4: the observer may only ADD keep-out):
+    the site's hard keep-outs in every condition; in static, every hazard zone; in learned / oracle every hazard zone
+    whose machine is not verified open (missing / stale / bad signature / expired fast entry = occupied) and, without a
+    verified map, every hazard zone."""
+    f = grid.zeros()
+    grid.fill_boxes(f, [r[:4] for r in site.hard_keepout], KEEP_OUT)
+    if condition == "none":
+        return f
+    m = p.static_margin_m
+    if condition == "static" or view is None or snap is None:
+        grid.fill_boxes(f, [(r[0] - m, r[1] - m, r[2] + m, r[3] + m) for r in site.rects.values()], KEEP_OUT)
+        return f
+    for mv in snap.machines:
+        if not (mv.held or idle_through(mv.windows, snap.t, snap.t + p.horizon_s)):
+            grid.fill_boxes(f, [site.rects[mv.id]], KEEP_OUT)
+    return f
+
+
+def enforce_monotone(keep: np.ndarray, speed: np.ndarray, floor: np.ndarray, site: Site, grid: Grid,
+                     robot_xy=None, self_clear_r: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+    """Clamp the masks so the broadcast can only ADD keep-out and only LOWER speed: keep-out = max(keep, floor) snapped to
+    {0, 100} (except the self-clear disc under the robot, which lets Nav2 plan out of a zone it is already in); speed =
+    percent of max in [1, 100] or 0 (no limit), and never above a static site limit."""
+    k = np.where(np.maximum(keep, floor) > 0, KEEP_OUT, FREE).astype(np.int8)
+    if robot_xy is not None and self_clear_r > 0:
+        k[grid.disc(robot_xy[0], robot_xy[1], self_clear_r)] = FREE
+    sp = np.clip(speed.astype(np.int16), 0, 100)
+    for x0, y0, x1, y1, pct in site.speed_limits:
+        sl = grid.box_slice(x0, y0, x1, y1)
+        cur = sp[sl]
+        sp[sl] = np.where(cur > 0, np.minimum(cur, int(pct)), int(pct))
+    return k, sp.astype(np.int8)
 
 
 def speed_mask(grid: Grid, condition: str, snap: Snapshot | None, view: M.MapView | None, p: MaskParams) -> tuple[np.ndarray, dict]:

@@ -5,8 +5,8 @@
   continuous metrics  Wilcoxon signed-rank on the per-seed paired differences (scipy, zero_method "wilcox", exact when
                       small), mean difference with a paired bootstrap 95 % CI (10 000 resamples over seeds)
   binary metrics      exact McNemar test (binomial on the discordant pairs)
-  PRIMARY endpoints   line_time_lost_s, inspections_ok, any_collision; learned vs none and learned vs static; exact
-                      sign-flip permutation test, Holm-corrected over the 6 tests (declared before the held-out batch)
+  PRE-REGISTERED      primary: line_time_lost_s, learned vs none, exact sign-flip permutation (SciPy, 2^10 flips);
+                      safety: any_collision, Clopper-Pearson + exact Poisson per hour; secondary: Holm-corrected family
   rates               Clopper-Pearson 95 % interval; with 0 events in N the upper bound is about 3/N ("rule of three")
 Only valid episodes enter a comparison; a seed missing in either condition drops out of that pair (reported).
 """
@@ -26,11 +26,37 @@ CONT = ["n_inspected", "inspections_ok", "inspection_success_rate", "capture_pas
         "irregularity_rad_per_m", "rtf"]
 BIN = ["safe_success", "any_collision", "any_trip"]
 PAIRS = [("learned", "none"), ("learned", "static"), ("oracle", "learned")]
-# Pre-registered before the held-out batch (AUDIT Tier 2): primary endpoints and primary comparisons. Each is tested with
-# an exact two-sided sign-flip permutation test on the per-seed paired differences (all 2^n sign assignments), and the
-# family of PRIMARY x PRIMARY_PAIRS p-values is Holm-corrected. Everything else is secondary / descriptive.
-PRIMARY = ["line_time_lost_s", "inspections_ok", "any_collision"]
-PRIMARY_PAIRS = [("learned", "none"), ("learned", "static")]
+# PRE-REGISTERED (docs/ROBOT_RESULTS.md section 0, committed before the held-out batch; PRODUCTION_BRIEF A3):
+#   primary endpoint  line_time_lost_s, learned vs none (no map): exact paired sign-flip permutation test
+#                     (SciPy permutation_test, permutation_type="samples", all 2^10 = 1024 flips), two-sided, alpha 0.05
+#   safety endpoint   any_collision per condition: Clopper-Pearson 95 % on episodes, exact Poisson 95 % bound per hour
+#   secondary         every other endpoint x pair below: the same exact test, Holm-corrected as one family
+PRIMARY = ("learned", "none", "line_time_lost_s")
+SECONDARY_PAIRS = [("learned", "none"), ("learned", "static"), ("oracle", "learned")]
+SECONDARY = ["inspections_ok", "line_time_lost_s", "machine_time_lost_s", "trips", "windows_hit", "any_collision",
+             "collisions_robot_moving", "min_dist_person_m", "stalled_s", "spl", "time_per_target_s"]
+EPISODE_H = 600.0 / 3600.0
+
+
+def perm_p(da, db) -> float | None:
+    """Exact paired sign-flip permutation p (SciPy permutation_test, permutation_type='samples', all 2^n flips)."""
+    from scipy.stats import permutation_test
+
+    da, db = np.asarray(da, float), np.asarray(db, float)
+    ok = np.isfinite(da) & np.isfinite(db)
+    da, db = da[ok], db[ok]
+    if len(da) < 2 or np.all(da == db):
+        return None
+    r = permutation_test((da, db), lambda x, y, axis: np.mean(x - y, axis=axis), permutation_type="samples",
+                         vectorized=True, n_resamples=np.inf, alternative="two-sided")
+    return float(r.pvalue)
+
+
+def poisson_upper_per_h(k: int, hours: float, conf: float = 0.95) -> float:
+    """Exact two-sided Poisson upper bound on an event rate (k events in `hours`): chi2(1 - a/2, 2k + 2) / 2 / hours."""
+    from scipy.stats import chi2
+
+    return float(chi2.ppf(1 - (1 - conf) / 2, 2 * k + 2) / 2 / hours) if hours > 0 else math.nan
 
 
 def signflip_p(d) -> float | None:
@@ -155,21 +181,47 @@ def summarize(rows: list[dict]) -> dict:
             pr[k] = mcnemar_exact(np.array([bool(bc[a][s].get(k)) for s in seeds]),
                                   np.array([bool(bc[b][s].get(k)) for s in seeds]))
         res["pairs"][f"{a}_vs_{b}"] = pr
+    # pre-registered primary
+    a, b, k = PRIMARY
+    if a in bc and b in bc:
+        seeds = sorted(set(bc[a]) & set(bc[b]))
+        da = np.array([_num(bc[a][q].get(k)) for q in seeds])
+        db = np.array([_num(bc[b][q].get(k)) for q in seeds])
+        res["primary"] = {"comparison": f"{a}_vs_{b}", "endpoint": k, "seeds": seeds, "diffs": (da - db).tolist(),
+                          "mean_diff": float(np.nanmean(da - db)) if len(seeds) else None,
+                          "median_diff": float(np.nanmedian(da - db)) if len(seeds) else None,
+                          "perm_p": perm_p(da, db), "signflip_p_check": signflip_p(da - db)}
+    # safety endpoint
+    res["safety"] = {}
+    for c, d in bc.items():
+        kk = sum(1 for r in d.values() if r.get("any_collision"))
+        km = sum(1 for r in d.values() if (r.get("collisions_robot_moving") or 0) > 0)
+        ev = int(sum(r.get("collisions") or 0 for r in d.values()))
+        hrs = len(d) * EPISODE_H
+        res["safety"][c] = {"episodes": len(d), "with_collision": kk, "cp95": clopper_pearson(kk, len(d)),
+                            "hours": round(hrs, 3), "events": ev, "events_per_h_upper95": poisson_upper_per_h(ev, hrs),
+                            "zero_event_rate_upper95_per_h": poisson_upper_per_h(0, hrs),
+                            "episodes_robot_moving_collision": km}
+    # secondary family, Holm-corrected
     raw = {}
-    for a, b in PRIMARY_PAIRS:
+    res["secondary"] = {}
+    for a, b in SECONDARY_PAIRS:
         if a not in bc or b not in bc:
             continue
         seeds = sorted(set(bc[a]) & set(bc[b]))
-        for k in PRIMARY:
-            da = np.array([_num(bc[a][s].get(k)) for s in seeds])
-            db = np.array([_num(bc[b][s].get(k)) for s in seeds])
+        for k in SECONDARY:
+            if (a, b, k) == PRIMARY:
+                continue
+            da = np.array([_num(bc[a][q].get(k)) for q in seeds])
+            db = np.array([_num(bc[b][q].get(k)) for q in seeds])
+            key = f"{a}_vs_{b}:{k}"
+            raw[key] = perm_p(da, db)
             ok = np.isfinite(da) & np.isfinite(db)
-            raw[f"{a}_vs_{b}:{k}"] = signflip_p(da[ok] - db[ok])
-            res.setdefault("primary", {})[f"{a}_vs_{b}:{k}"] = {
-                "n": int(ok.sum()), "mean_diff": float((da[ok] - db[ok]).mean()) if ok.any() else None,
-                "ci95": bootstrap_ci(da[ok] - db[ok]) if ok.any() else None, "signflip_p": raw[f"{a}_vs_{b}:{k}"]}
-    for k, p in holm(raw).items():
-        res["primary"][k]["holm_p"] = p
+            res["secondary"][key] = {"n": int(ok.sum()), "diffs": (da - db).tolist(),
+                                     "mean_diff": float((da[ok] - db[ok]).mean()) if ok.any() else None,
+                                     "perm_p": raw[key]}
+    for key, p in holm(raw).items():
+        res["secondary"][key]["holm_p"] = p
     return res
 
 
@@ -222,13 +274,65 @@ def pairs_md(st: dict, keys=None) -> str:
 
 
 def primary_md(st: dict) -> str:
-    lines = ["| Primary comparison : endpoint | n | mean diff [boot 95 %] | sign-flip p (exact) | Holm p |",
-             "|---|---|---|---|---|"]
-    for k, v in (st.get("primary") or {}).items():
-        ci = v["ci95"]
-        lines.append(f"| {k} | {v['n']} | {_f(v['mean_diff'])} [{_f(ci[0]) if ci else '-'}, {_f(ci[1]) if ci else '-'}] "
-                     f"| {_f(v['signflip_p'], 3)} | {_f(v.get('holm_p'), 3)} |")
-    return "\n".join(lines)
+    pr = st.get("primary")
+    out = []
+    if pr:
+        out.append(f"**Primary (pre-registered): {pr['endpoint']}, {pr['comparison']}**, n = {len(pr['seeds'])} paired seeds: "
+                   f"mean difference {_f(pr['mean_diff'])} s, median {_f(pr['median_diff'])} s, exact sign-flip "
+                   f"permutation p = {_f(pr['perm_p'], 4)}.")
+        out.append("")
+        out.append("| seed | " + " | ".join(str(q) for q in pr["seeds"]) + " |")
+        out.append("|---|" + "---|" * len(pr["seeds"]))
+        out.append("| learned - none (s) | " + " | ".join(_f(v, 1) for v in pr["diffs"]) + " |")
+        out.append("")
+    out.append("**Safety endpoint: any collision** (Clopper-Pearson 95 % on episodes; exact Poisson 95 % upper bound per "
+               "hour of episode time)")
+    out.append("")
+    out.append("| condition | episodes with a collision | CP 95 % | collision events | events/h upper 95 % | "
+               "episodes with a collision while the robot moved |")
+    out.append("|---|---|---|---|---|---|")
+    for c in ("none", "static", "learned", "oracle"):
+        v = (st.get("safety") or {}).get(c)
+        if v:
+            out.append(f"| {c} | {v['with_collision']}/{v['episodes']} | [{_f(v['cp95'][0])}, {_f(v['cp95'][1])}] | "
+                       f"{v['events']} | {_f(v['events_per_h_upper95'], 1)} | {v['episodes_robot_moving_collision']} |")
+    out.append("")
+    out.append("**Secondary** (exact sign-flip permutation, Holm-corrected over the family)")
+    out.append("")
+    out.append("| comparison : endpoint | n | mean diff | perm p | Holm p |")
+    out.append("|---|---|---|---|---|")
+    for k, v in (st.get("secondary") or {}).items():
+        out.append(f"| {k} | {v['n']} | {_f(v['mean_diff'])} | {_f(v['perm_p'], 3)} | {_f(v.get('holm_p'), 3)} |")
+    return "\n".join(out)
+
+
+def plot_paired(rows: list[dict], path: Path) -> None:
+    """All paired per-seed differences (no bootstrap at n = 10): line time lost and inspections passed, vs none."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    bc = by_cond(rows)
+    fig, axs = plt.subplots(1, 2, figsize=(10, 3.6))
+    for ax, k, lab in ((axs[0], "line_time_lost_s", "line time lost (s): condition - none"),
+                       (axs[1], "inspections_ok", "inspections passed: condition - none")):
+        for j, c in enumerate(("static", "learned", "oracle")):
+            if c not in bc or "none" not in bc:
+                continue
+            seeds = sorted(set(bc[c]) & set(bc["none"]))
+            d = [(_num(bc[c][q].get(k)) - _num(bc["none"][q].get(k))) for q in seeds]
+            xs = j + (np.arange(len(d)) - (len(d) - 1) / 2) * 0.05
+            ax.scatter(xs, d, s=18)
+            if d:
+                ax.hlines(np.nanmedian(d), j - 0.3, j + 0.3, colors="k", linewidth=1)
+        ax.axhline(0, color="0.6", linewidth=0.8)
+        ax.set_xticks(range(3), ["static", "learned", "timing oracle"])
+        ax.set_title(lab, fontsize=9)
+    fig.suptitle("SYNTHETIC: paired per-seed differences (one dot per seed; bar = median)", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+    plt.close(fig)
 
 
 def main() -> None:
@@ -236,7 +340,11 @@ def main() -> None:
     rows = json.loads((d / "metrics.json").read_text())
     st = summarize(rows)
     (d / "stats.json").write_text(json.dumps(st, indent=1, default=str))
-    md = ("## Primary endpoints (pre-registered; Holm-corrected)\n\n" + primary_md(st) + "\n\n## Per condition\n\n"
+    try:
+        plot_paired(rows, d / "paired_differences.png")
+    except Exception as e:  # noqa: BLE001
+        print("plot failed:", e)
+    md = ("## Pre-registered endpoints\n\n" + primary_md(st) + "\n\n## Per condition\n\n"
           + table_md(st) + "\n\n## Paired comparisons (secondary)\n\n" + pairs_md(st))
     (d / "tables.md").write_text(md)
     print(md)

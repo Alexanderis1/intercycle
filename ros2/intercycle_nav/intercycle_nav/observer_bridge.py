@@ -137,6 +137,11 @@ class ObserverBridge(Node):
         kg, kinfo = K.keepout_mask(self.grid, self.condition, self.site, snap if view is not None else None, view, self.p,
                                    robot_xy=xy if self._robot_in_keepout(xy) else None)
         sg, sinfo = K.speed_mask(self.grid, self.condition, snap if view is not None else None, view, self.p)
+        # the broadcast may only ADD keep-out and only LOWER speed (PRODUCTION_BRIEF A4)
+        floor = K.keepout_floor(self.grid, self.condition, self.site, snap if view is not None else None, view, self.p)
+        kg, sg = K.enforce_monotone(kg, sg, floor, self.site, self.grid,
+                                    robot_xy=xy if self._robot_in_keepout(xy) else None,
+                                    self_clear_r=self.p.self_clear_r)
         stamp = self.get_clock().now().to_msg()
         kb, sb = kg.tobytes(), sg.tobytes()
         now_wall = time.time()

@@ -181,3 +181,23 @@ Boot time is 21–25 s. A 15-min episode therefore costs about 24 container-minu
 - No RTX sensors on Modal. RGB evidence is rendered offline on RunPod from the logged poses.
 - The policy observes true base velocity (see the disclosure above).
 - `fake_sim.py` is a test double and never a result.
+
+## R3 additions (plant hooks, camera topics; maintained by R3 since R1 finished)
+
+- **Plant hooks.** A `mover_source` may also implement `attach(caster, dt)`, `sensor_prims(t)`,
+  `after_step(t, state, contacts)`, `frame_extras(t)`, `on_ros(t, events)` and `finish(out_dir, summary)`.
+  `intercycle_eval.plant:make` implements them all:
+  - `sensor_prims(t)`: ALL moving bodies for the lidar / camera (every step);
+  - `after_step`: the plant's dynamics and light-curtain physics;
+  - `frame_extras`: camera observations / capture outcomes for the bridge;
+  - `on_ros`: the planner's `/intercycle/inspection` events, forwarded by the bridge in its reply.
+- `cfg["mover_every"]` (default 5): kinematic pose targets are written to PhysX every N policy steps (10 Hz). The
+  sensors still see every step analytically.
+- **Bridge topics.**
+  - `/intercycle/camera/observations`: the robot camera's no-motion check (R3 camera model; R2's gate contract).
+  - `/intercycle/inspection/capture`: capture outcome, with no pose.
+- **Sim-side python** (Isaac 3.11) has pydantic, pyyaml, pynacl 1.5.0 and astropy 6.1.7 (numpy 1.26.0 and torch 2.7.0
+  unchanged). `sim_env` puts `/root/repo` on its PYTHONPATH. The ROS env exports `IC_SIM_PY` / `IC_SIM_PYTHONPATH` for
+  episode-side helpers (R3's observer process).
+- `episode.json` carries `plant` (plant summary) and `eval_check` (the cheat guard).
+- `sim_summary.json` carries `wall_profile_s` (set_movers / sensors / exchange).

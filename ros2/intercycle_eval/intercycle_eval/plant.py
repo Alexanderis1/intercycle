@@ -220,6 +220,7 @@ class Plant:
                      "ttc_person": math.inf, "ttc_vehicle": math.inf}
         self.overlap = {"person": 0, "vehicle": 0, "machine": 0}
         self.overlap_moving = {"person": 0, "vehicle": 0, "machine": 0}
+        self.overlap_impassive = 0
         self._overlap_prev = {"person": False, "vehicle": False, "machine": False}
         self.wall_plant = 0.0
         self.n_ticks = 0
@@ -435,7 +436,7 @@ class Plant:
             gx, gz, _, _ = ag.at(self.p_tau[i] + 1.0)
             goals[i] = (gx, gz)
             v0[i] = ag.speed
-        self.crowd.step(dt, goals, v0, None if self.invisible else rxy, rv)
+        self.crowd.step(dt, goals, v0, None if self.invisible else rxy, rv, robot_psi=self.robot[2])
         for i, ag in enumerate(self.people):
             if not self.p_present[i]:
                 self.mpose.pop(ag.id, None)
@@ -608,8 +609,16 @@ class Plant:
                 self.overlap[k] += 1
                 moving = rspeed > 0.1
                 self.overlap_moving[k] += int(moving)
-                self.events.append({"t": round(t, 2), "type": "overlap", "with": k, "gap_m": round(gg, 3),
-                                    "robot_v": round(rspeed, 3), "robot_moving": moving})
+                ev = {"t": round(t, 2), "type": "overlap", "with": k, "gap_m": round(gg, 3),
+                      "robot_v": round(rspeed, 3), "robot_moving": moving}
+                if k == "person" and pid:
+                    j = int(np.argmin([min(math.hypot(self.mpose[i][0] - x, self.mpose[i][1] - y) - r for x, y, r in fc)
+                                       for i in pid]))
+                    ev["person"] = pid[j]
+                    ev["person_reacts"] = bool(self.reacts[[a.id for a in self.people].index(pid[j])])
+                    if not ev["person_reacts"]:
+                        self.overlap_impassive += 1
+                self.events.append(ev)
             self._overlap_prev[k] = ov
         zin = next((z for z, v in self.inside.items() if v), None)
         self.rows.append({"t": round(t, 2), "x": round(rx, 3), "y": round(ry, 3), "psi": round(rpsi, 4),
@@ -672,7 +681,8 @@ class Plant:
                 parts = np.column_stack((c[keep, 0], c[keep, 1], np.full(len(keep), CAM.PART_Z)))
             else:
                 parts = np.zeros((0, 3))
-            ms.append((m.id, parts, np.array((m.x, m.z, CAM.PART_Z))))
+            aim_pt = parts.mean(axis=0) if len(parts) else np.array((m.x, m.z, CAM.PART_Z))   # the head looks at the parts
+            ms.append((m.id, parts, aim_pt))
         if not ms:
             self.gate.t_next = t + CAM.GATE_DT
             return
@@ -767,6 +777,7 @@ class Plant:
             "contacts_by": {k: sum(1 for c in self.contacts if c["with"] == k) for k in ("person", "vehicle", "machine", "static")},
             "overlaps_by": dict(self.overlap),
             "overlaps_robot_moving_by": dict(self.overlap_moving),
+            "person_overlaps_impassive": self.overlap_impassive,
             "min_gap_m": {k: fin(self.mins[k]) for k in ("person", "vehicle", "machine", "static")},
             "min_ttc_s": {"person": fin(self.mins["ttc_person"]), "vehicle": fin(self.mins["ttc_vehicle"])},
             "personal_space_events": self.ps_events, "personal_space_s": round(self.ps_time, 1),

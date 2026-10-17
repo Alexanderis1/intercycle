@@ -188,6 +188,7 @@ def episode_metrics(res: dict, d: Path, sp: Shortest | None) -> dict:
     for k in ("person", "vehicle", "machine", "static"):
         m[f"collision_moving_{k}"] = max(int(om.get(k, 0)), int(cm.get(k, 0)))
     m["collisions_robot_moving"] = sum(m[f"collision_moving_{k}"] for k in ("person", "vehicle", "machine", "static"))
+    m["person_overlaps_impassive"] = pl.get("person_overlaps_impassive")
     m["collisions"] = sum(m[f"collision_{k}"] for k in ("person", "vehicle", "machine", "static"))
     m["any_collision"] = m["collisions"] > 0
     mg, mt = pl.get("min_gap_m") or {}, pl.get("min_ttc_s") or {}
