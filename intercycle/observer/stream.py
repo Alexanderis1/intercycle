@@ -59,7 +59,7 @@ SCHEMA = "intercycle.stream/1"
 LABEL = "SYNTHETIC: simulated plant"
 MAX_SNAP_BYTES = 200_000
 ZLIB_ABOVE = 16_000
-KNOWN_KINDS = ("change_detected", "machine_spawned", "phase_discovered", "phase_named", "camera_offline")
+KNOWN_KINDS = ("change_detected", "machine_spawned", "phase_discovered", "phase_named", "camera_offline", "production_state", "note")
 
 
 # ------------------------------------------------------------------------------------------------ encoding

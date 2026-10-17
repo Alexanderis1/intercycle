@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>InterCycle Observer Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand"><span class="logo">INTER<b>CYCLE</b></span><span class="sub">Observer · layered collision map</span></div>
+    <span class="synth" title="Everything on this page comes from a simulated plant and simulated cameras">SYNTHETIC: simulated plant</span>
+    <div class="spacer"></div>
+    <label class="ctl">Run <select id="runSel" aria-label="Recorded run"></select></label>
+    <div class="seg" role="group" aria-label="Mode">
+      <button id="modeReplay" aria-pressed="true">Replay</button><button id="modeLive" aria-pressed="false">Live</button>
+    </div>
+    <span class="conn" id="conn"><span class="dot"></span><span id="connTxt">offline</span></span>
+  </header>
+
+  <main class="grid">
+    <section class="panel plant">
+      <h2>Plant · top-down <span class="hint" id="planHint">L0 static map + learned layers</span>
+        <span class="toggles" id="toggles">
+          <button class="tog l1" data-layer="l1" aria-pressed="true"><span class="sw"></span>L1 machines</button>
+          <button class="tog l2" data-layer="l2" aria-pressed="true"><span class="sw"></span>L2 vehicles</button>
+          <button class="tog l3" data-layer="l3" aria-pressed="true"><span class="sw"></span>L3 people</button>
+          <button class="tog unk" data-layer="unk" aria-pressed="true"><span class="sw"></span>UNKNOWN</button>
+          <button class="tog dir" data-layer="dir" aria-pressed="false"><span class="sw"></span>flow dir</button>
+          <button class="tog" data-layer="cycle" aria-pressed="true" title="Animate each envelope through its learned cycle (4x real time)">cycle ▸</button>
+        </span>
+      </h2>
+      <div class="stage" id="stage">
+        <canvas id="plant"></canvas>
+        <div class="hud">
+          <div class="chip"><span class="k">Sim time</span><b id="hudClock">-</b></div>
+          <div class="chip"><span class="k">Observed</span><b id="hudObs">-</b></div>
+          <div class="chip"><span class="k">Production state (discovered)</span><span class="state"><i id="hudStateSw"></i><b id="hudState">-</b></span></div>
+          <div class="chip"><span class="k">UNKNOWN = occupied</span><b id="hudUnk">-</b></div>
+        </div>
+        <div class="watermark">SYNTHETIC: simulated plant<br><span style="color:var(--ink-3);font-weight:400">advisory · not safety-rated</span></div>
+        <div class="caption" id="caption" style="opacity:0"><span class="kind" id="capKind"></span><span id="capTxt"></span></div>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--l1)"></i>L1 envelope, phase now</span>
+        <span><i style="background:rgba(240,128,60,.22);outline:1px solid rgba(240,128,60,.6)"></i>L1 all phases</span>
+        <span><i class="ramp" style="background:linear-gradient(90deg,rgba(57,135,229,.08),#3987e5)"></i>L2 vehicle occupancy 0→1</span>
+        <span><i class="ramp" style="background:linear-gradient(90deg,rgba(31,191,134,.08),#1fbf86)"></i>L3 people occupancy 0→1</span>
+        <span><i style="background:repeating-linear-gradient(45deg,#c7ccd4 0 2px,transparent 2px 5px);outline:1px solid #c7ccd4"></i>UNKNOWN (treated as occupied)</span>
+        <span><i style="background:none;border:1px dashed #8b97a6"></i>hazard zone</span>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="panel">
+        <h2>Machines <span class="hint">phase now · learned period</span></h2>
+        <div class="machines" id="machines" role="listbox" aria-label="Machines"></div>
+      </section>
+      <section class="panel" style="min-height:0">
+        <h2>Event timeline <span class="hint" id="evCount"></span></h2>
+        <div class="events" id="events"></div>
+      </section>
+    </aside>
+  </main>
+
+  <section class="bottom">
+    <section class="panel">
+      <div class="transport">
+        <button class="btn play" id="play" aria-label="Play">▶</button>
+        <select id="speed" aria-label="Playback speed">
+          <option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option>
+          <option value="2">2×</option><option value="4">4×</option>
+        </select>
+        <div class="track" id="track" tabindex="0" role="slider" aria-label="Time" aria-valuemin="0" aria-valuemax="1000"><canvas id="trackCv"></canvas></div>
+        <div class="readout" id="readout">-</div>
+      </div>
+      <div class="metrics" id="metrics"></div>
+    </section>
+    <section class="panel">
+      <h2>Phase strip <span class="hint" id="stripTitle">select a machine</span></h2>
+      <div class="strip"><canvas id="strip"></canvas><div class="note" id="stripNote"></div></div>
+    </section>
+  </section>
+  <footer class="foot">
+    <span id="runNote"></span>
+    <span>InterCycle · advisory planning layer, not safety-rated · UNKNOWN and stale space count as occupied · SYNTHETIC data</span>
+  </footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
