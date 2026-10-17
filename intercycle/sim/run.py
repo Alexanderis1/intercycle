@@ -126,6 +126,7 @@ class Runner:
         for a, b in zip(path, path[1:]):
             if b == "X":                                        # about to step onto the walkway
                 t = self._cross_walkway(t)
+            self._log(t, a, "depart")
             t += adj[a][b]
             self._log(t, b, "move")
         return t, goal
