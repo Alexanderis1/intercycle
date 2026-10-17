@@ -35,6 +35,8 @@ class PressEvent(Strict):
             raise ValueError("a running event needs period_s and phase_s")
         if self.kind == "stopped" and self.period_s is not None:
             raise ValueError("a stopped event has no period_s")
+        if self.cause == "break" and self.source != "assumed":
+            raise ValueError("a break is time-of-day / shift structure: its source is assumed (P2: no timing signal)")
         return self
 
 

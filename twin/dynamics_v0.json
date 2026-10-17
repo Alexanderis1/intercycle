@@ -26,8 +26,7 @@
     "press.P14a.run_bout_median_s": {"value": 600.0, "unit": "s", "source": "prior", "n": 0, "sweep": {"lo": 120.0, "hi": 1800.0},
                                       "dist": {"family": "lognormal", "params": {"median": 600.0, "sigma": 0.8}}},
     "press.stroke_impulse_s": {"value": 0.6, "unit": "s", "source": "prior", "n": 0, "sweep": {"lo": 0.3, "hi": 1.0},
-                                "note": "ram down-and-up duration of one stroke"},
-    "site.night_share": {"value": 0.33, "unit": "fraction", "source": "prior", "n": 0, "sweep": {"lo": 0.0, "hi": 0.5}}
+                                "note": "ram down-and-up duration of one stroke"}
   },
   "assumed": {
     "zone.z9.walker_rate_per_h": {"value": 30.0, "unit": "1/h", "source": "assumed", "n": 0, "sweep": {"lo": 10.0, "hi": 60.0},
@@ -45,6 +44,9 @@
     "social.A_n": {"value": 2.1, "unit": "N", "source": "prior", "n": 0, "sweep": {"lo": 1.0, "hi": 5.0},
                     "note": "published social-force default (fitting is cut)"},
     "social.B_m": {"value": 0.3, "unit": "m", "source": "prior", "n": 0, "sweep": {"lo": 0.1, "hi": 1.0}},
-    "social.tau_s": {"value": 0.5, "unit": "s", "source": "prior", "n": 0, "sweep": {"lo": 0.2, "hi": 1.0}}
+    "social.tau_s": {"value": 0.5, "unit": "s", "source": "prior", "n": 0, "sweep": {"lo": 0.2, "hi": 1.0}},
+    "site.night_share": {"value": 0.33, "unit": "fraction", "source": "assumed", "n": 0, "sweep": {"lo": 0.0, "hi": 0.5},
+                          "time_of_day": true,
+                          "note": "ASSUMED: share of the day under night lighting; the clips carry no hour-of-day or shift signal (P2: no timing information)"}
   }
 }

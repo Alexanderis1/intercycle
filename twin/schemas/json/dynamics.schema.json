@@ -111,6 +111,11 @@
           "title": "Clips",
           "type": "array"
         },
+        "time_of_day": {
+          "default": false,
+          "title": "Time Of Day",
+          "type": "boolean"
+        },
         "note": {
           "anyOf": [
             {

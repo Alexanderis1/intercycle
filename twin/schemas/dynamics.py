@@ -1,11 +1,15 @@
 """`twin/dynamics.json`: the twin's dynamics parameters (owner S3a; PLAN_TWIN §2, §5 DYN/DAYGEN).
 
 Two blocks. OBSERVED: what is (or will be) fitted from train clips (path shapes, speeds, group size, forklift paths,
-stroke impulse, in-clip intervals, P(press running), layout states, day/night share). ASSUMED: stated assumptions
-(arrival rates, staffing, stops, violation share, social-force defaults). Every parameter has a source
+stroke impulse, in-clip intervals, P(press running), layout states). ASSUMED: stated assumptions (arrival rates,
+staffing, stops, violation share, social-force defaults, and every time-of-day / shift field incl. the day/night share). Every parameter has a source
 (fitted | fitted_censored | prior | assumed), a sample size n and a sweep range. In v0 every value is a prior.
 
 Parameter names are dotted: `<entity>.<name>` (e.g. `press.P9a.stroke_period_s`, `zone.z9.walker_rate_per_h`).
+
+Time of day (user decision, P2: the clips carry no timing information, so no hour-of-day or shift structure is
+observed): any time-of-day, shift, break, night or calendar parameter is tagged `time_of_day: true`, lives in the
+ASSUMED block and has source `assumed`. A name that looks like one (TIME_OF_DAY_RE) must carry the tag.
 """
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ from twin.schemas.common import Interval, Strict
 
 ParamSource = Literal["fitted", "fitted_censored", "prior", "assumed"]
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[A-Za-z0-9_]+)+$")
+TIME_OF_DAY_RE = re.compile(r"(night|daytime|day_share|shift|hour_of_day|time_of_day|tod_|break|calendar|lunch|"
+                            r"lighting)", re.IGNORECASE)
 
 
 class Dist(Strict):
@@ -37,6 +43,7 @@ class Param(Strict):
     dist: Dist | None = None
     ref: str | None = None                   # e.g. path / sha256 of a resampled-segment library
     clips: list[str] = Field(default_factory=list)   # train clip ids it was fitted on
+    time_of_day: bool = False                # time-of-day / shift structure: always ASSUMED (P2: no timing signal)
     note: str | None = None
 
     @model_validator(mode="after")
@@ -70,6 +77,13 @@ class Dynamics(Strict):
         for name, p in self.assumed.items():
             if p.source not in ("prior", "assumed"):
                 raise ValueError(f"ASSUMED parameter {name} cannot be {p.source}")
+        for block, params in (("observed", self.observed), ("assumed", self.assumed)):
+            for name, p in params.items():
+                if TIME_OF_DAY_RE.search(name) and not p.time_of_day:
+                    raise ValueError(f"{name} looks like a time-of-day / shift parameter: tag it time_of_day")
+                if p.time_of_day and (block != "assumed" or p.source != "assumed"):
+                    raise ValueError(f"time-of-day parameter {name} must be ASSUMED with source assumed "
+                                     "(no timing signal in the clips, P2)")
         return self
 
     def get(self, name: str) -> Param:

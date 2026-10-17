@@ -171,16 +171,6 @@
     "hi": 1.0
    },
    "note": "ram down-and-up duration of one stroke"
-  },
-  "site.night_share": {
-   "value": 0.33,
-   "unit": "fraction",
-   "source": "prior",
-   "n": 0,
-   "sweep": {
-    "lo": 0.0,
-    "hi": 0.5
-   }
   }
  },
  "assumed": {
@@ -301,6 +291,18 @@
     "lo": 0.2,
     "hi": 1.0
    }
+  },
+  "site.night_share": {
+   "value": 0.33,
+   "unit": "fraction",
+   "source": "assumed",
+   "n": 0,
+   "sweep": {
+    "lo": 0.0,
+    "hi": 0.5
+   },
+   "time_of_day": true,
+   "note": "ASSUMED: share of the day under night lighting; the clips carry no hour-of-day or shift signal (P2: no timing information)"
   }
  }
 }

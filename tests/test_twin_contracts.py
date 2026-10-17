@@ -273,6 +273,32 @@ def test_dynamics_v0_is_priors_only():
     params = [*dyn.observed.values(), *dyn.assumed.values()]
     assert params and all(p.source in ("prior", "assumed") and p.n == 0 and not p.clips for p in params)
     assert all(p.source == "prior" for p in dyn.observed.values())
+    tod = {k: p for k, p in dyn.assumed.items() if p.time_of_day}
+    assert "site.night_share" in tod and all(p.source == "assumed" and "ASSUMED" in (p.note or "") for p in tod.values())
+    assert not any(p.time_of_day for p in dyn.observed.values())
+
+
+def test_time_of_day_fields_are_assumed():
+    """P2: no timing signal, so time-of-day / shift structure is ASSUMED and tagged (user decision)."""
+    d = _raw(TWIN / "dynamics_v0.json")
+    bad = copy.deepcopy(d)
+    bad["observed"]["site.night_share"] = bad["assumed"].pop("site.night_share")      # moved to OBSERVED
+    _expect_invalid(S.Dynamics, bad, "must be ASSUMED")
+    bad = copy.deepcopy(d)
+    bad["assumed"]["site.night_share"]["time_of_day"] = False                          # tag removed
+    _expect_invalid(S.Dynamics, bad, "tag it time_of_day")
+    bad = copy.deepcopy(d)
+    bad["assumed"]["site.night_share"]["source"] = "prior"
+    _expect_invalid(S.Dynamics, bad, "source assumed")
+    bad = copy.deepcopy(d)
+    bad["assumed"]["staff.shift_start_h"] = {"value": 6.0, "unit": "h", "source": "assumed", "n": 0,
+                                             "sweep": {"lo": 5.0, "hi": 7.0}}          # untagged shift field
+    _expect_invalid(S.Dynamics, bad, "tag it time_of_day")
+    from twin.schemas.dayscript import PressEvent
+    ev = {"press": "P9a", "kind": "stopped", "t0": 0.0, "t1": 60.0, "cause": "break", "source": "prior"}
+    with pytest.raises(ValidationError, match="break"):
+        PressEvent.model_validate(ev)
+    PressEvent.model_validate({**ev, "source": "assumed"})
 
 
 def test_daygen_stub_day_validates_and_is_deterministic():
