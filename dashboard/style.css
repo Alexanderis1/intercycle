@@ -144,7 +144,7 @@ main.grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 10p
 .bottom { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 10px; }
 .transport { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
 .btn.play { width: 38px; height: 32px; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; padding: 0; }
-.track { flex: 1; min-width: 220px; height: 44px; position: relative; cursor: pointer; touch-action: none; }
+.track { flex: 1; min-width: 220px; height: 54px; position: relative; cursor: pointer; touch-action: none; }
 .track canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .readout { font: 12px var(--mono); color: var(--ink-2); min-width: 150px; text-align: right; }
 .readout b { color: var(--ink); font-size: 14px; }

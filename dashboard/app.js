@@ -10,11 +10,18 @@ const Q = new URLSearchParams(location.search);
 const BUNDLE = window.__IC_BUNDLE__ || null;
 const $ = (id) => document.getElementById(id);
 const PROD_COLOR = { running: "#0ca30c", andon: "#d03b3b", break: "#fab219", shift_change: "#ec835a" };
-const KIND_LABEL = { change_detected: "change detected", machine_spawned: "machine spawned", phase_discovered: "phase discovered",
+const KIND_LABEL = { machine_converged: "envelope converged", change_cleared: "change cleared", change_detected: "change detected", machine_spawned: "machine spawned", phase_discovered: "phase discovered",
                      phase_named: "phase named (Gemma)", camera_offline: "camera offline", production_state: "production state", note: "note" };
-const METRIC_PREF = ["l1_iou", "iou", "unsafe_free", "unsafe_free_rate", "false_occupied", "brier", "auroc", "l1_precision", "l1_recall",
+const METRIC_PREF = ["l1_iou", "iou", "unsafe_free", "unsafe_free_rate", "false_occupied", "false_occupied_share", "l2_auroc", "l3_auroc",
+                     "unsafe_free_pre_detection", "unsafe_free_transition", "unsafe_free_learned",
+                     "brier", "auroc", "l2_brier", "l1_precision", "l1_recall",
                      "l3_hot_m2", "l2_hot_m2", "slice_ticks", "unknown_frac"];
-const METRIC_NAME = { l1_iou: "L1 envelope IoU", iou: "IoU", unsafe_free: "Unsafe-free rate", unsafe_free_rate: "Unsafe-free rate",
+const METRIC_NAME = { l1_iou: "L1 envelope IoU (held-out)", iou: "IoU", unsafe_free: "Unsafe-free rate (target 0)", unsafe_free_rate: "Unsafe-free rate",
+                      false_occupied_share: "False-occupied share", l2_auroc: "L2 vehicles AUROC", l3_auroc: "L3 people AUROC",
+                      l2_brier: "L2 Brier", l3_brier: "L3 Brier", l1_recall: "L1 recall", unknown_share: "UNKNOWN share",
+                      env_unsafe_free: "L1 envelope unsafe-free", unsafe_free_centre: "Unsafe-free (cell centres)",
+                      unsafe_free_pre_detection: "Unsafe-free before detection", unsafe_free_transition: "Unsafe-free in transition (target 0)",
+                      unsafe_free_learned: "Unsafe-free after learning",
                       false_occupied: "False-occupied", brier: "Brier (L2/L3)", auroc: "AUROC", slice_ticks: "Slice observations (ticks)",
                       unknown_frac: "UNKNOWN share of site", l2_hot_m2: "L2 hot area p≥0.3 (m²)", l3_hot_m2: "L3 hot area p≥0.3 (m²)",
                       l2_mean_occ: "L2 mean occupancy", l3_mean_occ: "L3 mean occupancy" };
@@ -89,7 +96,7 @@ function pickAxis() {
   if (metaAxis === "t_sim" || metaAxis === "t_obs") { S.axis = metaAxis; return; }
   if (!L.length) { S.axis = "t_sim"; return; }
   const span = L[L.length - 1].t_obs - L[0].t_obs;
-  S.axis = span > 0 ? "t_obs" : "t_sim";
+  S.axis = span > 0 && L[0].t_obs > 0 ? "t_obs" : "t_sim";
 }
 function axisRange() {
   const L = snapsList();
@@ -135,6 +142,12 @@ function fmtClock(t) {
   const hh = Math.floor(r / 3600), mm = Math.floor((r % 3600) / 60);
   return `D${d + 1} ${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
+function tInstall() { const m = S.index && S.index.meta; return m && m.t_install != null ? m.t_install : null; }
+function fmtRel(t) {
+  const d = t - tInstall(), a = Math.abs(d), sg = d < 0 ? "−" : "+";
+  return a < 3600 ? `T${sg}${Math.round(a / 60)} min` : `T${sg}${(a / 3600).toFixed(1)} h`;
+}
+function fmtAxisVal(v) { return isLog() ? fmtDur(v) : tInstall() != null ? fmtRel(v) : fmtClock(v); }
 function fmtDur(s) {
   if (s < 3600) return `${Math.round(s / 60)} min`;
   if (s < 86400) return `${(s / 3600).toFixed(s < 36000 ? 1 : 0)} h`;
@@ -224,9 +237,12 @@ function machinePhase(mid) {
   const s = S.cur; if (!s) return null;
   const b = s.phase_now ? s.phase_now[mid] : null;
   const stop = (S.index.meta && S.index.meta.stop_bin) ?? 16, nb = (S.index.meta && S.index.meta.phase_bins) || 16;
+  const per = periodOf(mid);
+  if (b == null && S.layers.cycle && per) {            // phase not streamed: preview the learned cycle from its start
+    const g = ((nowS() - S.anchor.wall) * CYCLE_RATE) / per; return g - Math.floor(g);
+  }
   if (b == null || b < 0 || b >= stop) return null;
   let f = (b + 0.5) / nb;
-  const per = periodOf(mid);
   if (S.layers.cycle && per) f += ((nowS() - S.anchor.wall) * CYCLE_RATE) / per;
   return f - Math.floor(f);
 }
@@ -234,6 +250,7 @@ function periodOf(mid) {
   const m = S.index && S.index.meta;
   if (m && m.period_s && m.period_s[mid]) return m.period_s[mid];
   if (S.cur && S.cur.metrics && S.cur.metrics[`period_${mid}`]) return S.cur.metrics[`period_${mid}`];
+  if (S.phases && S.phases.machines[mid]) return S.phases.machines[mid].period_s;
   const lm = S.layout.machines.find((x) => x.id === mid);
   return lm ? lm.period_nominal : null;
 }
@@ -364,7 +381,8 @@ function drawArrows(V, d) {
 }
 function evXZ(ev) {
   if (ev.x != null && ev.z != null) return [ev.x, ev.z];
-  if (ev.box) return [(ev.box[0] + ev.box[2]) / 2, (ev.box[1] + ev.box[3]) / 2];
+  const bx = ev.box || ev.rect;
+  if (bx) return [(bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2];
   const m = ev.machine && S.layout.machines.find((q) => q.id === ev.machine);
   if (m) return [(m.rect[0] + m.rect[2]) / 2, (m.rect[1] + m.rect[3]) / 2];
   return null;
@@ -413,6 +431,11 @@ function selectMachine(id) { S.machine = id; renderMachines(); }
 
 function evText(ev) {
   if (ev.caption) return ev.caption;
+  if (ev.kind === "change_detected") return `Candidate ${ev.candidate ?? ""}: persistent motion where L0 is static${ev.cells != null ? ` (${ev.cells} cells)` : ""} → cells UNKNOWN (= occupied)`;
+  if (ev.kind === "change_cleared") return `Candidate ${ev.candidate ?? ""} cleared: the motion did not persist, cells released`;
+  if (ev.kind === "machine_spawned") return `${ev.machine || "new machine"}: cycle learned${ev.period_s ? ` (period ${fmtNum(ev.period_s)} s)` : ""}${(ev.cycles ?? ev.n_cycles) ? ` after ${ev.cycles ?? ev.n_cycles} stable cycles` : ""} → L1 model spawned, cells stay UNKNOWN until it converges`;
+  if (ev.kind === "machine_converged") return `${ev.machine || "new machine"}: period converged${ev.period_s ? ` (${fmtNum(ev.period_s)} s)` : ""} → envelope settles, UNKNOWN released`;
+  if (ev.kind === "camera_offline") return `Camera ${ev.camera ?? ""} offline → its cells UNKNOWN (= occupied)`;
   const f = { ...ev }; delete f.schema; delete f.seq; delete f.kind; delete f.t_sim; delete f.t_obs;
   if (ev.kind === "phase_named" && ev.name) return `${ev.machine || ""} phase ${ev.bin ?? ev.phase ?? ""} named “${ev.name}”`;
   if (ev.label) return ev.label;
@@ -456,12 +479,16 @@ function axisTicks() {
     for (const [t, l] of [[3600, "1 h"], [6 * 3600, "6 h"], [86400, "1 day"], [3 * 86400, "3 days"], [7 * 86400, "1 week"]]) if (t >= a * 0.999 && t <= b * 1.001) out.push([t, l]);
   } else {
     const span = b - a, step = span > 4 * 86400 ? 86400 : span > 30 * 3600 ? 6 * 3600 : span > 6 * 3600 ? 3 * 3600 : 3600;
-    for (let t = Math.ceil(a / step) * step; t <= b; t += step) out.push([t, span > 30 * 3600 ? fmtClock(t) : fmtClock(t).slice(3)]);
+    const ti = tInstall();
+    if (ti != null) {
+      const st = span > 12 * 3600 ? 6 * 3600 : span > 4 * 3600 ? 3600 : span > 3600 ? 1800 : 600;
+      for (let t = ti + Math.ceil((a - ti) / st) * st; t <= b; t += st) out.push([t, Math.abs(t - ti) < 1 ? "install" : fmtRel(t)]);
+    } else for (let t = Math.ceil(a / step) * step; t <= b; t += step) out.push([t, span > 30 * 3600 ? fmtClock(t) : fmtClock(t).slice(3)]);
   }
   return out;
 }
 function drawTrack() {
-  const { w, h, dpr } = resizeCanvas(tcv), c = tctx, pad = 8 * dpr, y = h * 0.42;
+  const { w, h, dpr } = resizeCanvas(tcv), c = tctx, pad = 8 * dpr, y = h * 0.56;
   c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, w, h);
   const X = (u) => pad + u * (w - 2 * pad);
   c.fillStyle = "#222b36"; c.fillRect(pad, y - 2 * dpr, w - 2 * pad, 4 * dpr);
@@ -470,6 +497,13 @@ function drawTrack() {
   for (const s of snapsList()) {
     const u = valToU(axisVal(s)); c.fillStyle = PROD_COLOR[s.prod_state] || "#6f7b8b"; c.globalAlpha = 0.55;
     c.fillRect(X(u) - 0.5 * dpr, y + 5 * dpr, 1 * dpr, 4 * dpr); c.globalAlpha = 1;
+  }
+  // new-machine install (truth-side marker: the observer is not told)
+  if (tInstall() != null && !isLog()) {
+    const x = X(Math.min(1, Math.max(0, valToU(tInstall()))));
+    c.fillStyle = "#fab219"; c.fillRect(x - 1 * dpr, y - 26 * dpr, 2 * dpr, 34 * dpr);
+    c.font = `${10 * dpr}px ${getComputedStyle(document.body).getPropertyValue("--mono")}`;
+    c.fillText(`${(S.index.meta && S.index.meta.machine) || "new machine"} installed (observer not told)`, x + 5 * dpr, y - 18 * dpr);
   }
   // events as diamonds
   for (const ev of (S.index && S.index.events) || []) {
@@ -488,7 +522,7 @@ function drawTrack() {
 }
 function metricKeys() {
   const L = snapsList(), keys = new Set();
-  for (const s of L) for (const [k, v] of Object.entries(s.metrics || {})) if (typeof v === "number" && !k.startsWith("period_")) keys.add(k);
+  for (const s of L) for (const [k, v] of Object.entries(s.metrics || {})) if (typeof v === "number" && !k.startsWith("period_") && k !== "hours") keys.add(k);
   const arr = [...keys];
   arr.sort((a, b) => { const ia = METRIC_PREF.indexOf(a), ib = METRIC_PREF.indexOf(b); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b); });
   return arr.slice(0, 4);
@@ -513,7 +547,7 @@ function drawMetrics() {
     const pts = L.map((s) => [valToU(axisVal(s)), s.metrics ? s.metrics[k] : null]).filter((p) => typeof p[1] === "number");
     if (!pts.length) return;
     let lo = Math.min(...pts.map((p) => p[1])), hi = Math.max(...pts.map((p) => p[1]));
-    if (/iou|auroc|precision|recall/.test(k) && lo >= 0 && hi <= 1) { lo = 0; hi = 1; }
+    if (/iou|auroc|precision|recall/.test(k) && lo >= 0 && hi <= 1) { lo = Math.min(/auroc/.test(k) ? 0.5 : 0, lo); hi = 1; }
     else if (lo >= 0) { lo = 0; hi = hi * 1.15; }
     if (hi - lo < 1e-12) { hi = lo + 1; }
     const pt = 4 * dpr, pb = 4 * dpr, Y = (v) => h - pb - ((v - lo) / (hi - lo)) * (h - pt - pb), X = (u) => u * w;
@@ -533,7 +567,7 @@ function drawMetrics() {
       g.strokeStyle = "rgba(90,169,255,.6)"; g.setLineDash([3 * dpr, 3 * dpr]); g.beginPath(); g.moveTo(X(near[0]), 0); g.lineTo(X(near[0]), h); g.stroke(); g.setLineDash([]);
       if (!tip) { tip = document.createElement("div"); tip.className = "mtip"; card.appendChild(tip); }
       const val = uToVal(near[0]);
-      tip.textContent = `${isLog() ? fmtDur(val) : fmtClock(val)} · ${fmtNum(near[1])}`;
+      tip.textContent = `${fmtAxisVal(val)} · ${fmtNum(near[1])}`;
       tip.style.left = `${Math.min(near[0] * c.clientWidth + 8, c.clientWidth - 90)}px`; tip.style.top = "6px";
     } else if (tip) tip.remove();
   });
@@ -552,9 +586,12 @@ function namedPhases(mid) {
   // discovered sub-phases: meta.phases[mid] = [{name, start, end}] (cycle fractions) and/or phase_named events up to the cursor
   const meta = S.index && S.index.meta, out = [];
   if (meta && meta.phases && meta.phases[mid]) for (const p of meta.phases[mid]) out.push({ ...p });
+  else if (S.phases && S.phases.machines[mid]) for (const p of S.phases.machines[mid].segments) out.push({ ...p });
   const v = uToVal(S.u) + 1e-6;
   for (const ev of (S.index && S.index.events) || []) {
     if ((ev.kind !== "phase_discovered" && ev.kind !== "phase_named") || ev.machine !== mid || evAxis(ev) > v) continue;
+    const byBin = ev.bin != null ? out.find((p) => p.bin === ev.bin) : null;
+    if (byBin) { if (ev.name || ev.label) { byBin.name = ev.name || ev.label; byBin.named = true; } continue; }
     const s = ev.start ?? (ev.bin != null ? ev.bin / 16 : null), e = ev.end ?? (ev.bin != null ? (ev.bin + 1) / 16 : null);
     if (s == null) continue;
     const ex = out.find((p) => Math.abs(p.start - s) < 1e-6);
@@ -568,16 +605,19 @@ function drawStrip() {
   const per = periodOf(mid), A = binAreas(mid), nb = 16, stopW = Math.max(0.07 * w, 34 * dpr), gap = 6 * dpr, cw = w - stopW - gap;
   $("stripTitle").textContent = `${mid} · cycle ${per ? per.toFixed(1) + " s" : "unknown"}`;
   const maxA = Math.max(...A, 1e-9), top = 26 * dpr, base = h - 16 * dpr, H = base - top;
-  const named = namedPhases(mid);
+  const named = namedPhases(mid), f0 = machinePhase(mid);
   // named / discovered segments band
   c.font = `${10 * dpr}px ${getComputedStyle(document.body).getPropertyValue("--sans")}`;
   if (named.length) {
     named.forEach((p, i) => {
       const x0 = p.start * cw, x1 = (p.end ?? (named[i + 1] ? named[i + 1].start : 1)) * cw;
-      c.fillStyle = i % 2 ? "#1d2836" : "#22344a"; c.fillRect(x0, 4 * dpr, Math.max(1, x1 - x0 - 2 * dpr), 16 * dpr);
-      c.fillStyle = "#cfe3ff"; c.save(); c.beginPath(); c.rect(x0, 0, x1 - x0 - 2 * dpr, 24 * dpr); c.clip(); c.fillText(p.name || "?", x0 + 4 * dpr, 16 * dpr); c.restore();
+      const active = f0 != null && f0 >= p.start && f0 < (p.end ?? 1);
+      c.fillStyle = active ? "#2d5a8a" : p.name === "idle" ? "#1a2028" : i % 2 ? "#1d2836" : "#22344a";
+      c.fillRect(x0, 4 * dpr, Math.max(1, x1 - x0 - 2 * dpr), 16 * dpr);
+      c.fillStyle = p.named ? "#ffffff" : "#cfe3ff";
+      if (c.measureText(p.name || "?").width + 6 * dpr <= x1 - x0) c.fillText(p.name || "?", x0 + 4 * dpr, 16 * dpr);
     });
-  } else { c.fillStyle = "#6f7b8b"; c.fillText("equal-slice bins · discovered sub-phases + Gemma names appear here", 0, 15 * dpr); }
+  } else { c.fillStyle = "#6f7b8b"; c.fillText("no discovered sub-phases for this machine yet", 0, 15 * dpr); }
   // envelope area per bin (bars, 2px gaps, baseline-anchored)
   const bw = cw / nb, bnow = phaseBinNow(mid);
   for (let b = 0; b < nb; b++) {
@@ -592,7 +632,9 @@ function drawStrip() {
   const f = machinePhase(mid);
   if (f != null) { const x = f * cw; c.strokeStyle = "#e6ebf1"; c.lineWidth = 2 * dpr; c.beginPath(); c.moveTo(x, top - 4 * dpr); c.lineTo(x, base); c.stroke();
     c.fillStyle = "#e6ebf1"; c.beginPath(); c.moveTo(x - 5 * dpr, top - 8 * dpr); c.lineTo(x + 5 * dpr, top - 8 * dpr); c.lineTo(x, top - 1 * dpr); c.fill(); }
-  $("stripNote").textContent = `Bar height = learned L1 envelope area per phase bin (m², max ${fmtNum(maxA)}). ${S.layers.cycle ? `Marker: phase now, cycle preview at ${CYCLE_RATE}× real time.` : "Marker: phase now at the snapshot."}`;
+  const streamed = S.cur && S.cur.phase_now && S.cur.phase_now[mid] != null;
+  $("stripNote").textContent = `Top band: sub-phases discovered by the observer (workstream P; Gemma names them later). Bars: L1 envelope area per equal-slice bin (m², max ${fmtNum(maxA)}). ` +
+    (S.layers.cycle ? (streamed ? `Marker: phase now, advanced at ${CYCLE_RATE}× real time.` : `Marker: cycle preview at ${CYCLE_RATE}× (phase not streamed in this run).`) : "Marker: phase now at the snapshot.");
 }
 
 // ------------------------------------------------------------------------------------------------ HUD + cursor
@@ -611,13 +653,13 @@ async function applyCursor() {
   }
   const snap = S.cur; if (!snap) return;
   $("hudClock").textContent = fmtClock(snap.t_sim);
-  $("hudObs").textContent = fmtDur(snap.t_obs);
+  $("hudObs").textContent = tInstall() != null ? fmtRel(snap.t_sim) : fmtDur(snap.t_obs);
   $("hudState").textContent = snap.prod_state.replace("_", " ");
   $("hudStateSw").style.background = PROD_COLOR[snap.prod_state] || "#6f7b8b";
   const d = S.rasters && S.rasters.d;
   $("hudUnk").textContent = d ? `${(d.unkCells * d.grid.res * d.grid.res).toFixed(0)} m²` : "–";
   const v = uToVal(S.u);
-  $("readout").innerHTML = isLog() ? `<b>${fmtDur(v)}</b> observed` : `<b>${fmtClock(v)}</b> sim`;
+  $("readout").innerHTML = isLog() ? `<b>${fmtDur(v)}</b> observed` : tInstall() != null ? `<b>${fmtRel(v)}</b> vs install` : `<b>${fmtClock(v)}</b> sim`;
 }
 function seekU(u) { S.u = Math.min(1, Math.max(0, u)); S.follow = S.u >= 0.999; return applyCursor(); }
 
@@ -753,6 +795,7 @@ function bindControls() {
 async function init() {
   try {
     S.layout = BUNDLE ? BUNDLE.layout : await getJSON("layout.json");
+    S.phases = BUNDLE ? BUNDLE.phases : await getJSON("phases.json").catch(() => null);
   } catch (e) { showErr(e); return; }
   if (Q.has("layers")) { const on = new Set(Q.get("layers").split(",")); for (const k of Object.keys(S.layers)) S.layers[k] = on.has(k); }
   document.querySelectorAll("#toggles .tog").forEach((b) => b.setAttribute("aria-pressed", String(S.layers[b.dataset.layer])));

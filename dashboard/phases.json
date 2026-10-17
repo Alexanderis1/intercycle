@@ -1,0 +1,657 @@
+{
+ "schema": "intercycle.phases/1",
+ "label": "SYNTHETIC: simulated plant",
+ "source": "out/phases/model_final_train.pkl",
+ "machines": {
+  "S10": {
+   "period_s": 60.125,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.1083
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.1083,
+     "end": 0.5417
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.5417,
+     "end": 0.6
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.6,
+     "end": 0.6417
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.6417,
+     "end": 0.6917
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.6917,
+     "end": 0.7417
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.7417,
+     "end": 0.7917
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.7917,
+     "end": 1.0
+    }
+   ]
+  },
+  "S20": {
+   "period_s": 60.135714285714286,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.1083
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.1083,
+     "end": 0.1667
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.1667,
+     "end": 0.2083
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.2083,
+     "end": 0.6417
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.6417,
+     "end": 0.6917
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.6917,
+     "end": 0.7417
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.7417,
+     "end": 0.7917
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.7917,
+     "end": 1.0
+    }
+   ]
+  },
+  "S30": {
+   "period_s": 60.16417910447761,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.1083
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.1083,
+     "end": 0.1583
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.1583,
+     "end": 0.2083
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.2083,
+     "end": 0.5417
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.5417,
+     "end": 0.5917
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.5917,
+     "end": 0.6417
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.6417,
+     "end": 0.7917
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.7917,
+     "end": 1.0
+    }
+   ]
+  },
+  "S40": {
+   "period_s": 60.1764705882353,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.1167
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.1167,
+     "end": 0.175
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.175,
+     "end": 0.6417
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.6417,
+     "end": 0.6917
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.6917,
+     "end": 0.7417
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.7417,
+     "end": 0.7833
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.7833,
+     "end": 0.8667
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.8667,
+     "end": 1.0
+    }
+   ]
+  },
+  "S50": {
+   "period_s": 60.166666666666664,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.1167
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.1167,
+     "end": 0.2167
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.2167,
+     "end": 0.3083
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.3083,
+     "end": 0.5333
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.5333,
+     "end": 0.625
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.625,
+     "end": 0.7167
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.7167,
+     "end": 0.8917
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.8917,
+     "end": 1.0
+    }
+   ]
+  },
+  "S60": {
+   "period_s": 60.11940298507463,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.1
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.1,
+     "end": 0.5583
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.5583,
+     "end": 0.6
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.6,
+     "end": 0.6083
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.6083,
+     "end": 0.65
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.65,
+     "end": 0.6833
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.6833,
+     "end": 0.7917
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.7917,
+     "end": 1.0
+    }
+   ]
+  },
+  "S70": {
+   "period_s": 60.11940298507463,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.1083
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.1083,
+     "end": 0.3333
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.3333,
+     "end": 0.5667
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.5667,
+     "end": 0.6083
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.6083,
+     "end": 0.65
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.65,
+     "end": 0.6917
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.6917,
+     "end": 0.8083
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.8083,
+     "end": 1.0
+    }
+   ]
+  },
+  "S80": {
+   "period_s": 60.23260875027025,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.0083
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.0083,
+     "end": 0.0167
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.0167,
+     "end": 0.0667
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.0667,
+     "end": 0.075
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.075,
+     "end": 0.15
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.15,
+     "end": 0.1667
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.1667,
+     "end": 0.175
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.175,
+     "end": 1.0
+    }
+   ]
+  },
+  "HEM1": {
+   "period_s": 45.004464285714285,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.0111
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.0111,
+     "end": 0.2222
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.2222,
+     "end": 0.2333
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.2333,
+     "end": 0.3444
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.3444,
+     "end": 0.4889
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.4889,
+     "end": 0.5111
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.5111,
+     "end": 0.6556
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.6556,
+     "end": 1.0
+    }
+   ]
+  },
+  "SEAL1": {
+   "period_s": 60.04375,
+   "n_bins": 9,
+   "bin_names": [
+    "p0",
+    "p1",
+    "p2",
+    "p3",
+    "p4",
+    "p5",
+    "p6",
+    "idle",
+    "blocked"
+   ],
+   "segments": [
+    {
+     "bin": 0,
+     "name": "p0",
+     "start": 0.0,
+     "end": 0.0833
+    },
+    {
+     "bin": 1,
+     "name": "p1",
+     "start": 0.0833,
+     "end": 0.125
+    },
+    {
+     "bin": 2,
+     "name": "p2",
+     "start": 0.125,
+     "end": 0.2417
+    },
+    {
+     "bin": 3,
+     "name": "p3",
+     "start": 0.2417,
+     "end": 0.3167
+    },
+    {
+     "bin": 4,
+     "name": "p4",
+     "start": 0.3167,
+     "end": 0.4083
+    },
+    {
+     "bin": 5,
+     "name": "p5",
+     "start": 0.4083,
+     "end": 0.5083
+    },
+    {
+     "bin": 6,
+     "name": "p6",
+     "start": 0.5083,
+     "end": 0.9833
+    },
+    {
+     "bin": 7,
+     "name": "idle",
+     "start": 0.9833,
+     "end": 1.0
+    }
+   ]
+  }
+ }
+}

@@ -7,6 +7,8 @@
     python dashboard/export_static.py bundle [--runs build_map_72h,week1] [--out out/stream/dashboard_bundle.html] [--artifact]
         # one self-contained HTML file (CSS, JS, layout and the runs inlined) for an artifact preview
     python dashboard/export_static.py register --run week1 --title "1 week"   # add a run to dashboard/runs.json
+    python dashboard/export_static.py phases [--model out/phases/model_final_train.pkl]
+        # dashboard/phases.json: workstream P's discovered sub-phases per machine (cycle fractions, names p0.., idle)
 
 Light job (loads one .npz, no simulation).
 """
@@ -49,6 +51,27 @@ def cmd_layout(args) -> None:
     p = DASH / "layout.json"
     p.write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
     print(f"wrote {p} ({p.stat().st_size / 1e3:.1f} kB, {len(rects)} rects)")
+
+
+def cmd_phases(args) -> None:
+    from intercycle.observer import phases as PH
+    from intercycle.scenario import load
+
+    pm = PH.PhaseModel.load(ROOT / args.model, load(ROOT / "scenario" / "bodyshop.yaml"))
+    out = dict(schema="intercycle.phases/1", label=LABEL, source=str(args.model), machines={})
+    for mid, mp in pm.machines.items():
+        names = pm.bin_names(mid)
+        seg = np.asarray(mp.seg_of_pos)
+        m = len(seg)
+        segs = []
+        for k in range(int(seg.max()) + 1):
+            pos = np.flatnonzero(seg == k)
+            if len(pos):
+                segs.append(dict(bin=k, name=names[k], start=round(pos.min() / m, 4), end=round((pos.max() + 1) / m, 4)))
+        out["machines"][mid] = dict(period_s=float(mp.period_s), n_bins=pm.n_bins(mid), bin_names=names, segments=segs)
+    p = DASH / "phases.json"
+    p.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    print(f"wrote {p}: " + ", ".join(f"{k} {len(v['segments'])} sub-phases" for k, v in out["machines"].items()))
 
 
 def register(run: str, title: str, note: str = "") -> None:
@@ -135,7 +158,8 @@ def cmd_bundle(args) -> None:
     css = (DASH / "style.css").read_text(encoding="utf-8")
     js = (DASH / "app.js").read_text(encoding="utf-8")
     layout = (DASH / "layout.json").read_text(encoding="utf-8")
-    bundle = json.dumps(dict(layout=json.loads(layout), runs=runs), separators=(",", ":")).replace("</", "<\\/")
+    phases = json.loads((DASH / "phases.json").read_text(encoding="utf-8")) if (DASH / "phases.json").exists() else None
+    bundle = json.dumps(dict(layout=json.loads(layout), phases=phases, runs=runs), separators=(",", ":")).replace("</", "<\\/")
     html = html.replace('<link rel="stylesheet" href="style.css">', f"<style>\n{css}\n</style>")
     html = html.replace('<script src="app.js"></script>', f"<script>window.__IC_BUNDLE__={bundle};</script>\n<script>\n{js}\n</script>")
     if args.artifact:                     # claude.ai artifact: the publisher adds doctype/head/body itself; <title> first
@@ -160,6 +184,8 @@ def main() -> None:
     b.add_argument("--runs", default="")
     b.add_argument("--out", default="out/stream/dashboard_bundle.html")
     b.add_argument("--artifact", action="store_true", help="strip doctype/html/head/body for a claude.ai artifact publish")
+    ph = sub.add_parser("phases")
+    ph.add_argument("--model", default="out/phases/model_final_train.pkl")
     r = sub.add_parser("register")
     r.add_argument("--run", required=True)
     r.add_argument("--title", required=True)
@@ -168,7 +194,7 @@ def main() -> None:
     if args.cmd == "register":
         register(args.run, args.title, args.note)
     else:
-        dict(layout=cmd_layout, npz=cmd_npz, bundle=cmd_bundle)[args.cmd](args)
+        dict(layout=cmd_layout, npz=cmd_npz, bundle=cmd_bundle, phases=cmd_phases)[args.cmd](args)
 
 
 if __name__ == "__main__":

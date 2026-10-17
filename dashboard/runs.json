@@ -1,5 +1,17 @@
 [
  {
+  "id": "week1",
+  "title": "Map growing: 1 h to 1 week (metrics on held-out day 7)",
+  "path": "../out/stream/week1",
+  "note": ""
+ },
+ {
+  "id": "newmachine",
+  "title": "New machine installed (observer not told)",
+  "path": "../out/stream/newmachine",
+  "note": ""
+ },
+ {
   "id": "build_map_72h",
   "title": "Final map, 72 h observed (one day replay)",
   "path": "../out/stream/build_map_72h",
