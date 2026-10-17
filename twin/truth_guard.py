@@ -1,10 +1,11 @@
 """Truth guard (PLAN_TWIN §2 "Truth guards"): who may open truth, and the runtime access log.
 
 Truth = realised_state*, plant_state, the day event script, per-world dynamics draws, world seeds and defect state.
-Only TRUTH_READERS may open it for reading: twin/engine.py, twin/plant.py, twin/camera.py (and its G0 stand-in
-twin/camera_v0.py), twin/oracle_feed.py, the EVAL metrics module (after the run only, once log.parquet is closed)
-and S7b's offline M-W7 calibration on dev worlds only. TRUTH_PRODUCERS may write it (the day generators, the engine,
-the plant). `open_truth` enforces this at run time and appends every opening to results/truth_access.log
+Only TRUTH_READERS may open it for reading: exactly the plan's list (PLAN_READERS: twin/engine.py, twin/plant.py,
+twin/camera.py, twin/oracle_feed.py, the EVAL metrics module after the run only, once log.parquet is closed, and
+S7b's offline M-W7 calibration on dev worlds only) plus STAND_INS that fill one of those slots (twin/camera_v0.py in
+the twin/camera.py slot until stat_v1 lands). Only TRUTH_PRODUCERS may write it (the day generators, the engine, the
+plant), listed separately from the readers. `open_truth` enforces this at run time and appends every opening to results/truth_access.log
 (override the path with INTERCYCLE_TRUTH_LOG); tests/test_truth_allowlist.py checks the same lists statically.
 """
 from __future__ import annotations
@@ -19,23 +20,34 @@ REPO = Path(__file__).resolve().parents[1]
 
 TRUTH_TOKENS = ("realised_state", "plant_state", "day_script", "dynamics_draw", "world_seeds", "defect_state")
 
-# Repo-relative posix paths. twin/eval_metrics.py (S1b EVAL metrics) and twin/margin_calib.py (S7b offline M-W7
-# calibration) are the names reserved for the two plan entries that have no file name yet.
-TRUTH_READERS = (
+# Repo-relative posix paths.
+# PLAN_READERS is exactly the plan's list (§2 "Only these may open it"), one slot per entry: engine, plant, camera,
+# oracle_feed, the EVAL metrics module and S7b's offline M-W7 calibration. twin/eval_metrics.py (S1b EVAL metrics,
+# after the run only) and twin/margin_calib.py (S7b, dev worlds only) are the names reserved for the two plan entries
+# that have no file name yet.
+PLAN_READERS = (
     "twin/engine.py",
     "twin/plant.py",
     "twin/camera.py",
-    "twin/camera_v0.py",
     "twin/oracle_feed.py",
     "twin/eval_metrics.py",
     "twin/margin_calib.py",
 )
+# Stand-ins occupy a plan slot; they are not extra readers. twin/camera_v0.py (MEASURED_SHIM, G0) stands in for
+# twin/camera.py (stat_v1): it reads realised state ONLY in that role, in the plant process, and leaves the allowlist
+# when stat_v1 lands. Each stand-in maps to exactly one PLAN_READERS slot.
+STAND_INS = {"twin/camera_v0.py": "twin/camera.py"}
+TRUTH_READERS = PLAN_READERS + tuple(STAND_INS)
+# Producers WRITE truth and are listed separately from the readers on purpose: the plan's list says who may READ it,
+# while the day generators write the day event script (truth) without reading any, and the engine and the plant
+# write realised_state.jsonl. Writes go through open_truth too, so every write is logged. Only producers may write.
+# The body-shop ros2 plant writes plant_state.json (pre-existing, not part of the twin).
 TRUTH_PRODUCERS = (
     "twin/daygen.py",
     "twin/daygen_stub.py",
     "twin/engine.py",
     "twin/plant.py",
-    "ros2/intercycle_eval/intercycle_eval/plant.py",   # body-shop plant: writes plant_state.json
+    "ros2/intercycle_eval/intercycle_eval/plant.py",
 )
 # Files that name truth paths without opening them (contracts, this guard).
 CONTRACT_FILES = ("twin/truth_guard.py", "twin/schemas/")
@@ -87,7 +99,7 @@ def open_truth(path: str | os.PathLike, mode: str = "r", **kw: Any) -> IO[Any]:
     frame = inspect.currentframe()
     caller = _rel(frame.f_back.f_code.co_filename) if frame and frame.f_back else "<unknown>"
     writing = any(c in mode for c in "wax+")
-    allowed = TRUTH_READERS + TRUTH_PRODUCERS if writing else TRUTH_READERS
+    allowed = TRUTH_PRODUCERS if writing else TRUTH_READERS
     if caller not in allowed:
         raise PermissionError(f"{caller} may not open truth ({path}, mode {mode!r}); allowlist: {allowed}")
     log_access(caller, mode, path)

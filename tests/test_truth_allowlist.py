@@ -18,10 +18,17 @@ import pytest
 from _truth_scan import SCAN_ROOTS, imports, module_name, parse, py_files, rel, string_literals
 from twin import truth_guard as TG
 
-# Exactly the plan's list (§2): engine, plant, camera (+ its G0 stand-in camera_v0), oracle_feed, the EVAL metrics
-# module and S7b's offline M-W7 calibration. Changing it needs the lead.
-PLAN_READERS = ("twin/engine.py", "twin/plant.py", "twin/camera.py", "twin/camera_v0.py", "twin/oracle_feed.py",
-                "twin/eval_metrics.py", "twin/margin_calib.py")
+# Exactly the plan's list (§2 "Only these may open it"): engine, plant, camera, oracle_feed, the EVAL metrics module
+# and S7b's offline M-W7 calibration. Changing any of these pins needs the lead.
+PLAN_READERS = ("twin/engine.py", "twin/plant.py", "twin/camera.py", "twin/oracle_feed.py", "twin/eval_metrics.py",
+                "twin/margin_calib.py")
+# camera_v0 fills the twin/camera.py slot (G0 stand-in), it is not an extra reader.
+STAND_INS = {"twin/camera_v0.py": "twin/camera.py"}
+# Writers of truth (day generators, engine, plant; the body-shop ros2 plant writes plant_state.json), separate list.
+PRODUCERS = ("twin/daygen.py", "twin/daygen_stub.py", "twin/engine.py", "twin/plant.py",
+             "ros2/intercycle_eval/intercycle_eval/plant.py")
+# Launchers that may import truth modules to start the plant / generator; they never open truth.
+ORCHESTRATORS = ("scripts/slice.py", "scripts/sealed_run.py")
 
 # Pre-existing violations, each with its owner; the strict xfail below turns red once fixed, so the entry is removed.
 KNOWN = {
@@ -47,7 +54,24 @@ def _literal_violations() -> dict[str, list[str]]:
 
 
 def test_allowlist_is_the_plan_list():
-    assert TG.TRUTH_READERS == PLAN_READERS
+    assert TG.PLAN_READERS == PLAN_READERS
+    assert TG.STAND_INS == STAND_INS and set(STAND_INS.values()) <= set(PLAN_READERS)
+    assert TG.TRUTH_READERS == PLAN_READERS + tuple(STAND_INS)
+    assert TG.TRUTH_PRODUCERS == PRODUCERS
+    assert TG.ORCHESTRATORS == ORCHESTRATORS
+
+
+def test_only_producers_may_write_truth(tmp_path, monkeypatch):
+    """open_truth refuses a write from a reader that is not a producer (camera_v0 reads realised state only)."""
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "log"))
+    src = (f"from twin.truth_guard import open_truth\n"
+           f"with open_truth({str(tmp_path / 'x.realised_state.jsonl')!r}, 'w') as f:\n    f.write('')\n")
+    code = compile(src, str(TG.REPO / "twin" / "camera_v0.py"), "exec")
+    with pytest.raises(PermissionError, match="may not open truth"):
+        exec(code, {"__name__": "fake_camera_v0"})
+    code = compile(src, str(TG.REPO / "twin" / "daygen_stub.py"), "exec")
+    exec(code, {"__name__": "fake_daygen"})                                  # a producer may write
+    assert (tmp_path / "x.realised_state.jsonl").exists()
 
 
 def test_no_unlisted_file_names_a_truth_path():
