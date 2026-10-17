@@ -11,6 +11,16 @@ T = TypeVar("T")
 # fits from the user's clicks (v1 = bootstrap), `traced_v0` / `traced_v1` = hand-traced on train keyframes,
 # `measured` = measured from train clips by code, `assumed` = a stated assumption.
 SiteSource = Literal["prior", "cal_v0", "cal_v1", "traced_v0", "traced_v1", "measured", "assumed"]
+# Sources derived from clips: a value with one of them must name its clips (twin/provenance.py checks they are train).
+DERIVED_SITE_SOURCES = ("cal_v0", "cal_v1", "traced_v0", "traced_v1", "measured")
+
+
+def require_clips(source: str, clips: list[str], what: str) -> None:
+    """A clip-derived source must list a non-empty set of non-empty clip ids (provenance, PLAN_TWIN §5)."""
+    if any(not c for c in clips):
+        raise ValueError(f"{what}: empty clip id")
+    if source in DERIVED_SITE_SOURCES and not clips:
+        raise ValueError(f"{what}: a {source} value must list the clip ids it was derived from")
 
 Point = tuple[float, float]                    # plan frame (x, z) in metres, or (u, v) in pixels where stated
 Polygon = Annotated[list[Point], Field(min_length=3)]
@@ -36,6 +46,11 @@ class Tagged(Strict, Generic[T]):
     source: SiteSource
     clips: list[str] = Field(default_factory=list)
     note: str | None = None
+
+    @model_validator(mode="after")
+    def _provenance(self):
+        require_clips(self.source, self.clips, "tagged value")
+        return self
 
 
 class Interval(Strict):

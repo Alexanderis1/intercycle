@@ -50,7 +50,7 @@ def site() -> None:
     f14["H_img_to_floor"].update(source="cal_v0", clips=[C14])
     s["zones"][0]["floor_polygon"].update(source="traced_v0", clips=[C9])
     s["presses"][0]["footprint"].update(source="traced_v0", clips=[C9])
-    s["presses"][0]["dilation_m"] = {"value": 0.22, "source": "cal_v1", "note": "p95 reprojection error"}
+    s["presses"][0]["dilation_m"] = {"value": 0.22, "source": "cal_v1", "clips": [C9], "note": "p95 reprojection error"}
     s["scale"] = {"value": {"lo": 0.9, "mid": 1.0, "hi": 1.12}, "source": "cal_v1", "clips": [C9, C14]}
     dump_yaml("twin_site.yaml", "twin.site/1", s)
 
@@ -61,7 +61,7 @@ def tasks() -> None:
                 "target_xzh": [x, z, 1.2], "normal_xz": [0.0, -1.0],
                 "candidate_poses": [{"pose": {"x": x, "z": z - 1.5, "yaw": 0.0}, "source": "generated", "standoff_m": 1.5}],
                 "inside_danger": inside, "dwell_s": 8.0, "zoom": 20.0 if press else 4.0, "thermal": bool(press),
-                "source": "traced_v0"}
+                "source": "traced_v0", "clips": [C14 if zone == "z14" else C9]}
     data = {
         "contract": "twin.tasks/1", "site_id": "fixture_site",
         "inspection": {"defect_rate": 0.25, "zoom_max": 20.0,

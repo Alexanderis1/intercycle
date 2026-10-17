@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from twin.schemas.common import SiteSource, Strict, unique
+from twin.schemas.common import SiteSource, Strict, require_clips, unique
 
 
 class Pose(Strict):
@@ -37,6 +37,12 @@ class Checkpoint(Strict):
     zoom: float = Field(ge=1, le=20)
     thermal: bool
     source: SiteSource
+    clips: list[str] = Field(default_factory=list)   # train clip ids a traced/measured checkpoint was derived from
+
+    @model_validator(mode="after")
+    def _provenance(self):
+        require_clips(self.source, self.clips, f"checkpoint {self.id}")
+        return self
 
 
 class ZoneTasks(Strict):

@@ -45,6 +45,8 @@ class Param(Strict):
             raise ValueError(f"value {self.value} outside its sweep [{self.sweep.lo}, {self.sweep.hi}]")
         if self.source in ("fitted", "fitted_censored") and self.n <= 0:
             raise ValueError(f"a {self.source} parameter needs n > 0")
+        if self.source in ("fitted", "fitted_censored") and (not self.clips or any(not c for c in self.clips)):
+            raise ValueError(f"a {self.source} parameter must list the (train) clip ids it was fitted on")
         if self.source in ("prior", "assumed") and self.clips:
             raise ValueError(f"a {self.source} parameter lists no fit clips")
         return self

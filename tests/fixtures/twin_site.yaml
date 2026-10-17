@@ -101,7 +101,11 @@ presses:
     - [7.7, 6.0]
     - [4.8, 6.0]
     source: prior
-  dilation_m: {value: 0.22, source: cal_v1, note: p95 reprojection error}
+  dilation_m:
+    value: 0.22
+    source: cal_v1
+    clips: [c9_train_0001]
+    note: p95 reprojection error
 - id: P14a
   zone: z14
   footprint:

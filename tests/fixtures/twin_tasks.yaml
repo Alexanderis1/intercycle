@@ -25,6 +25,7 @@ checkpoints:
   zoom: 20.0
   thermal: true
   source: traced_v0
+  clips: [c9_train_0001]
 - id: cp2
   zone: z9
   press: null
@@ -40,6 +41,7 @@ checkpoints:
   zoom: 4.0
   thermal: false
   source: traced_v0
+  clips: [c9_train_0001]
 - id: cp3
   zone: z14
   press: P14a
@@ -55,3 +57,4 @@ checkpoints:
   zoom: 20.0
   thermal: true
   source: traced_v0
+  clips: [c14_train_0002]

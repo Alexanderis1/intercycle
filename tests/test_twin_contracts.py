@@ -135,6 +135,7 @@ def test_dynamics_rules():
     bad = copy.deepcopy(d)
     bad["assumed"]["staff.staffing_factor"]["source"] = "fitted"
     bad["assumed"]["staff.staffing_factor"]["n"] = 3
+    bad["assumed"]["staff.staffing_factor"]["clips"] = ["c9_train_0001"]
     _expect_invalid(S.Dynamics, bad, "ASSUMED")
     bad = copy.deepcopy(d)
     bad["assumed"]["staff.staffing_factor"]["value"] = 1.5                   # outside its sweep

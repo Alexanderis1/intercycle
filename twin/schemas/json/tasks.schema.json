@@ -139,6 +139,13 @@
           ],
           "title": "Source",
           "type": "string"
+        },
+        "clips": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Clips",
+          "type": "array"
         }
       },
       "required": [

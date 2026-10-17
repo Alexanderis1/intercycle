@@ -49,7 +49,7 @@ class Segment(Strict):
 
     @model_validator(mode="after")
     def _shape(self):
-        if self.source == "resampled" and (self.clip_id is None or self.track_id is None):
+        if self.source == "resampled" and (not self.clip_id or self.track_id is None):
             raise ValueError(f"resampled segment {self.id} needs clip_id and track_id")
         dts = [p[0] for p in self.points]
         if dts[0] != 0 or any(b <= a for a, b in zip(dts, dts[1:])):
