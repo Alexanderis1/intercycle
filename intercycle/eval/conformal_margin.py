@@ -8,9 +8,14 @@ What it fixes (docs/WEAKNESSES.md M-W7, the old `map_metrics.conformal_margin`):
     Hoeffding-Bentkus p-value (Bates et al. 2021, arXiv 2101.02703) and fixed-sequence testing from the largest margin
     down: P(R(margin_hat) <= alpha) >= 1 - delta over the draw of the calibration set;
   * correlated episodes -> the p-value uses a Kish effective sample size from the intra-class correlation of the unit
-    losses within (world, day) clusters (`n_eff_mode="kish"`, a disclosed heuristic: LTT itself assumes iid units);
+    losses within WORLD clusters (`n_eff_mode="kish"`, a disclosed heuristic: LTT itself assumes iid units). Dynamics
+    are drawn per world (PLAN_TWIN §2) and the margin is applied to new test worlds, so all days of one world form
+    one cluster; (world, day) clusters overstate the effective sample and break the bound. With few dev worlds this
+    often certifies no margin: that is the fail-closed outcome (nothing is frozen, the lead takes the fallback);
   * 4 hand-picked windows -> every unit of every calibration day is used, units never cross a time-slice boundary, and
-    `calibrate` refuses a calibration set that misses a required slice;
+    every path that writes the frozen file requires the list of time slices the robot can run in and refuses when any
+    of them has too few scored units (`calibrate`, `calibrate_files`, the CLI `--slices`, and `write_margin_file`,
+    which re-checks the result); one stream per (world, day): repeats are refused;
   * unweighted vs weighted means -> ONE estimand, used by calibration and by evaluation alike: the risk is the
     UNWEIGHTED mean over units of each unit's pooled miss share (`unit_mean_miss_share`). EVAL computes the gate-3
     per-world miss share with that same function.
@@ -20,15 +25,20 @@ Definitions
     (default 720 s = one robot mission, PLAN_TWIN §5 "fixed denominator T = 720 s");
   * truly occupied cell-instant = a True cell of the truth grid at a robot-use tick (the caller decides what is truth:
     moving hazards' footprints, the press ram, ...);
-  * covered at margin m (metres) = the Euclidean distance from the cell centre to the nearest cell the robot's map
-    marks occupied/UNKNOWN in the prediction it holds is <= m (a disc dilation of the prediction by m);
+  * covered at margin m (metres) = the Euclidean distance from the cell centre to the centre of the nearest cell the
+    robot's map marks occupied/UNKNOWN in the prediction it holds is <= m (a disc dilation of the prediction by m),
+    with the integer rounding rule of `intercycle.margin_inflate` (radius2_cells). The frozen JSON states this rule in
+    its `inflation` block, and the robot applies it with `intercycle.margin_inflate.inflate`; calibrate_files
+    cross-checks its counts against that same function and refuses on any mismatch;
   * unit miss share(m) = uncovered / truly occupied cell-instants of the unit; units with no truly occupied
     cell-instant carry no loss and are left out of both calibration and evaluation (their count is reported);
   * risk R(m) = E[unit miss share(m)], the unweighted mean over units.
 
 Isolation (PLAN_TWIN §2 truth guards): this module reads truth (dev worlds only). It must never be imported by
 twin/observer_live.py, the robot policy or the broadcaster; tests/test_conformal_margin_isolation.py checks their import
-graphs. They read only the frozen JSON constant this module writes (`write_margin_file`, key `margin_m`).
+graphs. They read only the frozen JSON constant this module writes (`write_margin_file`), through the truth-free
+`intercycle.margin_inflate.load_margin`. Every truth opening is logged to <repo>/results/truth_access.log (the repo root
+is resolved from this file, not from the current directory).
 """
 from __future__ import annotations
 
@@ -45,7 +55,11 @@ from typing import Iterable, Sequence
 import numpy as np
 from scipy import ndimage, stats
 
-SCHEMA = "intercycle.m7_margin/v1"
+from intercycle.margin_inflate import SCHEMA, Margin, inflate, inflation_spec, radius2_cells
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TRUTH_LOG_DEFAULT = REPO_ROOT / "results" / "truth_access.log"
+CLUSTER = "world"
 DEFAULT_EPISODE_S = 720.0
 DEFAULT_MARGINS_M = tuple(round(0.05 * k, 2) for k in range(0, 81))  # 0 .. 4 m in 5 cm steps
 DEFAULT_OUT = "twin/m7_margin.json"
@@ -106,7 +120,8 @@ def tick_counts(truth: np.ndarray, pred: np.ndarray, idx: np.ndarray, cell_m: fl
     if np.any(idx >= len(pred)):
         raise ValueError("idx points past the prediction stack")
     T, M = len(truth), len(margins)
-    margin_cells = margins / float(cell_m)
+    # the shared integer rule (intercycle.margin_inflate): covered iff squared centre distance in cells <= r2
+    r2 = np.array([radius2_cells(m, cell_m) for m in margins], float)
     occ = np.zeros(T, np.int64)
     miss = np.zeros((T, M), np.int64)
     for s in range(0, T, chunk):
@@ -119,8 +134,9 @@ def tick_counts(truth: np.ndarray, pred: np.ndarray, idx: np.ndarray, cell_m: fl
         D = np.stack([_distance_cells(pred[k]) for k in uniq])
         tt, yy, xx = np.nonzero(truth[s:e][ok])
         d = D[inv[tt], yy, xx]
-        # b = number of margins strictly below d (with a float tolerance): the cell is missed at margin k iff k < b
-        b = np.searchsorted(margin_cells, d - _EPS, side="left")
+        d2 = np.rint(d * d)  # exact integer squared distance (inf stays inf: nothing predicted)
+        # b = number of margins with r2 < d2: the cell is missed at margin k iff k < b
+        b = np.searchsorted(r2, d2, side="left")
         hist = np.zeros((len(ok), M + 1), np.int64)
         np.add.at(hist, (tt, b), 1)
         rows = s + ok
@@ -170,9 +186,9 @@ class UnitCounts:
         return self.miss[s] / self.occ[s][:, None]
 
     def clusters(self) -> np.ndarray:
-        """(world, day) cluster label of every scored unit."""
-        s = self.scored
-        _, lab = np.unique(np.stack([self.world[s], self.day[s]], 1), axis=0, return_inverse=True)
+        """World cluster label of every scored unit. All days of one world are one cluster: dynamics are drawn per
+        world and the margin must hold on new worlds."""
+        _, lab = np.unique(self.world[self.scored], return_inverse=True)
         return lab.reshape(-1)
 
     def subset(self, mask: np.ndarray) -> "UnitCounts":
@@ -361,33 +377,56 @@ def ltt_fixed_sequence(losses: np.ndarray, margins_m: "Sequence[float] | np.ndar
 
 # ------------------------------------------------------------------------------------------------ calibration
 
-def calibrate(counts: UnitCounts, alpha: float, delta: float, *, n_eff_mode: str = "kish",
-              required_slices: Sequence[int] | None = None, min_units_per_slice: int = 1,
+def _check_required_slices(required_slices: Iterable[int] | None, min_units_per_slice: int | None,
+                           per_slice_n: dict) -> list[int]:
+    """The 'calibrated over all time slices' rule, shared by calibrate() and write_margin_file(): a non-empty list of
+    required slices, each with at least min_units_per_slice (>= 1) scored units. Returns the sorted slice list."""
+    if required_slices is None:
+        raise ValueError("required_slices is mandatory: the time slices the robot can run in must all be covered")
+    req = sorted({int(k) for k in required_slices})
+    if not req:
+        raise ValueError("required_slices is empty: the time slices the robot can run in must all be covered")
+    if not isinstance(min_units_per_slice, int) or isinstance(min_units_per_slice, bool) or min_units_per_slice < 1:
+        raise ValueError(f"min_units_per_slice must be an int >= 1 for every required slice, got {min_units_per_slice!r}")
+    n_by = {int(k): int(v) for k, v in (per_slice_n or {}).items()}
+    missing = [k for k in req if n_by.get(k, 0) < min_units_per_slice]
+    if missing:
+        raise ValueError(f"calibration does not cover every time slice: too few scored units in slices {missing}")
+    return req
+
+
+def calibrate(counts: UnitCounts, alpha: float, delta: float, *, required_slices: Iterable[int],
+              n_eff_mode: str = "kish", min_units_per_slice: int = 1,
               zero_latency: UnitCounts | None = None, cell_m: float | None = None, episode_s: float | None = None,
               age_summary: dict | None = None, provenance: dict | None = None) -> dict:
     """Calibrate the M-W7 margin on dev-world units (all time slices). Returns the content of the frozen constant file.
 
-    required_slices: the time slices the robot can run in; calibration refuses if any has fewer than
-    `min_units_per_slice` scored units ("calibrated over all time slices"). zero_latency: the same streams counted with
+    required_slices (mandatory, non-empty): the time slices the robot can run in; calibration refuses if any has fewer
+    than `min_units_per_slice` scored units ("calibrated over all time slices"). Units must be unique: the same
+    (world, day, slice, t0) unit twice (a stream counted twice) is refused. zero_latency: the same streams counted with
     age 0, reported only (shows the zero-latency margin is smaller, M-W7)."""
     s = counts.scored
     if not s.any():
         raise ValueError("no scored unit (no truly occupied cell-instant) in the calibration set")
+    key = np.stack([counts.world.astype(float), counts.day.astype(float), counts.slice_id.astype(float),
+                    np.asarray(counts.t0, float)], 1)
+    if len(np.unique(key, axis=0)) != len(key):
+        raise ValueError("duplicate units: the same (world, day, slice, t0) unit appears more than once")
     sl_scored = counts.slice_id[s]
     per_slice_n = {int(k): int((sl_scored == k).sum()) for k in np.unique(counts.slice_id)}
-    if required_slices is not None:
-        missing = [int(k) for k in required_slices if per_slice_n.get(int(k), 0) < min_units_per_slice]
-        if missing:
-            raise ValueError(f"calibration does not cover every time slice: too few scored units in slices {missing}")
+    req = _check_required_slices(required_slices, min_units_per_slice, per_slice_n)
     L = counts.losses()
     res = ltt_fixed_sequence(L, counts.margins_m, alpha, delta, counts.clusters(), n_eff_mode)
+    mg = None if res["margin_m"] is None or cell_m is None else Margin(float(res["margin_m"]), float(cell_m))
     out: dict = dict(schema=SCHEMA, status="ok" if res["margin_m"] is not None else "no_valid_margin",
                      alpha=float(alpha), delta=float(delta), margin_m=res["margin_m"],
-                     margin_cells=None if res["margin_m"] is None or cell_m is None else res["margin_m"] / cell_m,
-                     cell_m=cell_m, estimand="unweighted mean over units of the unit-pooled miss share",
+                     margin_cells=None if mg is None else mg.margin_m / mg.cell_m,
+                     cell_m=cell_m, inflation=None if mg is None else inflation_spec(mg),
+                     estimand="unweighted mean over units of the unit-pooled miss share",
                      unit=dict(episode_s=episode_s, kind="episode within one (world, day) and one time slice"),
                      method=dict(name="learn_then_test", pvalue="hoeffding_bentkus", fwer="fixed_sequence_desc",
-                                 n_eff_mode=n_eff_mode, cluster="(world, day)"),
+                                 n_eff_mode=n_eff_mode, cluster=CLUSTER),
+                     required_slices=req, min_units_per_slice=int(min_units_per_slice),
                      n_units_total=int(len(counts.occ)), n_units_scored=int(s.sum()),
                      n_units_unscored=int((~s).sum()), dropped_ticks=int(counts.dropped_ticks),
                      worlds=sorted(int(w) for w in np.unique(counts.world)),
@@ -434,9 +473,25 @@ def age_summary(age_s: np.ndarray, source: str) -> dict:
 
 def write_margin_file(result: dict, path: str | os.PathLike, overwrite: bool = False) -> Path:
     """Write the frozen margin constant (JSON). Refuses a result without a valid margin (the plan's fallback, a fixed
-    latency-p99 margin, is the lead's decision, not this module's) and refuses to overwrite a frozen file."""
+    latency-p99 margin, is the lead's decision, not this module's) and refuses to overwrite a frozen file.
+
+    It re-checks the result rather than trusting its caller: the schema; every required time slice covered with at
+    least min_units_per_slice scored units; Kish n_eff over world clusters; and an `inflation` block that is exactly
+    the rule of intercycle.margin_inflate for this margin and cell size (what the robot side will apply)."""
     if result.get("status") != "ok" or result.get("margin_m") is None:
         raise ValueError("no valid margin: LTT rejected no margin on the grid; do not freeze (lead decides fallback)")
+    if result.get("schema") != SCHEMA:
+        raise ValueError(f"result schema {result.get('schema')!r} is not {SCHEMA}")
+    _check_required_slices(result.get("required_slices"), result.get("min_units_per_slice"),
+                           result.get("units_per_slice") or {})
+    method = result.get("method") or {}
+    if method.get("n_eff_mode") != "kish" or method.get("cluster") != CLUSTER:
+        raise ValueError(f"only a Kish n_eff over {CLUSTER} clusters may be frozen, got {method!r}")
+    cell_m = result.get("cell_m")
+    if cell_m is None:
+        raise ValueError("cell_m is missing: the robot could not apply the margin on the right grid")
+    if result.get("inflation") != inflation_spec(Margin(float(result["margin_m"]), float(cell_m))):
+        raise ValueError("the inflation block is missing or differs from intercycle.margin_inflate's rule")
     p = Path(path)
     if p.exists() and not overwrite:
         raise FileExistsError(f"{p} exists: the margin is frozen")
@@ -448,12 +503,20 @@ def write_margin_file(result: dict, path: str | os.PathLike, overwrite: bool = F
 
 # ------------------------------------------------------------------------------------------------ dev-only stream files
 
+def truth_log_path(log: str | os.PathLike | None = None) -> Path:
+    """Absolute path of the truth-access log: `log`, else $INTERCYCLE_TRUTH_LOG, else <repo>/results/truth_access.log.
+    A relative path is taken relative to the repo root (resolved from this file), never to the current directory."""
+    raw = log or os.environ.get("INTERCYCLE_TRUTH_LOG") or None
+    p = TRUTH_LOG_DEFAULT if raw is None else Path(raw)
+    return p if p.is_absolute() else (REPO_ROOT / p)
+
+
 def _truth_log(path: Path, purpose: str, log: str | os.PathLike | None) -> None:
-    lp = Path(log or os.environ.get("INTERCYCLE_TRUTH_LOG", "results/truth_access.log"))
+    lp = truth_log_path(log)
     lp.parent.mkdir(parents=True, exist_ok=True)
     with lp.open("a", encoding="utf-8") as f:
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\tintercycle.eval.conformal_margin\t"
-                f"{path.as_posix()}\t{purpose}\n")
+                f"{path.resolve().as_posix()}\t{purpose}\n")
 
 
 def load_dev_stream(path: str | os.PathLike, truth_log: str | os.PathLike | None = None) -> dict:
@@ -474,25 +537,74 @@ def load_dev_stream(path: str | os.PathLike, truth_log: str | os.PathLike | None
     return d
 
 
-def calibrate_files(paths: Sequence[str | os.PathLike], alpha: float, delta: float, *,
+N_INFLATE_CHECK = 16  # ticks per stream cross-checked against intercycle.margin_inflate.inflate
+
+
+def _cross_check_inflate(truth: np.ndarray, pred: np.ndarray, idx: np.ndarray, occ: np.ndarray, miss: np.ndarray,
+                         cell_m: float, margins_m: np.ndarray, where: str) -> int:
+    """The calibration's miss counts must equal what the robot's inflate() leaves uncovered, at every grid margin, on
+    up to N_INFLATE_CHECK evenly spaced scored ticks. Raises RuntimeError on any mismatch (fail closed)."""
+    cand = np.nonzero((idx >= 0) & (occ > 0))[0]
+    if not len(cand):
+        return 0
+    pick = cand[np.unique(np.linspace(0, len(cand) - 1, min(N_INFLATE_CHECK, len(cand))).round().astype(np.int64))]
+    for j in pick:
+        tj = np.asarray(truth[j], bool)
+        pj = np.asarray(pred[idx[j]], bool)
+        for k, m in enumerate(margins_m):
+            cov = inflate(pj, Margin(float(m), float(cell_m)), cell_m=float(cell_m))
+            if int((tj & ~cov).sum()) != int(miss[j, k]):
+                raise RuntimeError(f"{where}: calibration counts disagree with intercycle.margin_inflate.inflate at "
+                                   f"tick {int(j)}, margin {float(m)} m; refusing to calibrate")
+    return int(len(pick))
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def calibrate_files(paths: Sequence[str | os.PathLike], alpha: float, delta: float, *, required_slices: Iterable[int],
                     margins_m: "Sequence[float] | np.ndarray" = DEFAULT_MARGINS_M, episode_s: float = DEFAULT_EPISODE_S,
-                    required_slices: Sequence[int] | None = None, n_eff_mode: str = "kish",
-                    truth_log: str | os.PathLike | None = None) -> dict:
+                    min_units_per_slice: int = 1, truth_log: str | os.PathLike | None = None) -> dict:
+    """Calibrate from dev (world, day) stream files. required_slices is mandatory (see calibrate). One stream per
+    (world, day): a repeated (world_seed, day) or a repeated file content is refused (ValueError)."""
+    margins = np.asarray(margins_m, float)
     parts, zparts, ages, cells = [], [], [], set()
+    seen_wd: dict[tuple[int, int], str] = {}
+    seen_sha: dict[str, str] = {}
+    files, n_checked = [], 0
     for path in paths:
-        d = load_dev_stream(path, truth_log)
+        p = Path(path)
+        sha = _file_sha256(p)
+        if sha in seen_sha:
+            raise ValueError(f"duplicate stream: {p} has the same content as {seen_sha[sha]}")
+        d = load_dev_stream(p, truth_log)
         w, dy, cm = int(d["world_seed"]), int(d["day"]), float(d["cell_m"])
-        for age, acc in ((d["age_s"], parts), (np.zeros_like(d["age_s"]), zparts)):
-            acc.append(units_from_stream(d["t"], d["truth"], d["t_pred"], d["pred"], age, d["slice_id"], world=w,
-                                         day=dy, cell_m=cm, margins_m=margins_m, episode_s=episode_s))
+        if (w, dy) in seen_wd:
+            raise ValueError(f"duplicate (world, day) = ({w}, {dy}): {p} and {seen_wd[(w, dy)]}")
+        seen_wd[(w, dy)], seen_sha[sha] = str(p), str(p)
+        files.append(dict(name=p.name, sha256=sha, world_seed=w, day=dy))
+        idx = align_by_age(d["t"], d["age_s"], d["t_pred"])
+        occ, miss = tick_counts(d["truth"], d["pred"], idx, cm, margins)
+        n_checked += _cross_check_inflate(d["truth"], d["pred"], idx, occ, miss, cm, margins, str(p))
+        parts.append(stream_units(d["t"], d["slice_id"], occ, miss, idx >= 0, world=w, day=dy, margins_m=margins,
+                                  episode_s=episode_s))
+        zparts.append(units_from_stream(d["t"], d["truth"], d["t_pred"], d["pred"], np.zeros_like(d["age_s"]),
+                                        d["slice_id"], world=w, day=dy, cell_m=cm, margins_m=margins,
+                                        episode_s=episode_s))
         ages.append(np.asarray(d["age_s"], float))
-        cells.add(float(d["cell_m"]))
+        cells.add(cm)
     if len(cells) != 1:
         raise ValueError(f"streams use different cell sizes {sorted(cells)}")
-    res = calibrate(UnitCounts.concat(parts), alpha, delta, n_eff_mode=n_eff_mode, required_slices=required_slices,
-                    zero_latency=UnitCounts.concat(zparts), cell_m=cells.pop(), episode_s=float(episode_s),
+    res = calibrate(UnitCounts.concat(parts), alpha, delta, required_slices=required_slices,
+                    min_units_per_slice=min_units_per_slice, zero_latency=UnitCounts.concat(zparts),
+                    cell_m=cells.pop(), episode_s=float(episode_s),
                     age_summary=age_summary(np.concatenate(ages), "measured per tick in the dev runs (age_s)"),
-                    provenance=dict(stream_files=[Path(p).name for p in paths]))
+                    provenance=dict(stream_files=files, inflate_cross_checked_ticks=n_checked))
     return res
 
 
@@ -502,20 +614,39 @@ def _parse_margins(spec: str) -> tuple[float, ...]:
     return tuple(round(a + step * k, 6) for k in range(n + 1))
 
 
+def _parse_slices(spec: str) -> list[int]:
+    """'0-3,7' -> [0, 1, 2, 3, 7] (inclusive ranges)."""
+    out: set[int] = set()
+    for part in (x.strip() for x in spec.split(",")):
+        if not part:
+            continue
+        if "-" in part:
+            a, b = (int(x) for x in part.split("-", 1))
+            if b < a:
+                raise ValueError(f"bad slice range {part!r}")
+            out.update(range(a, b + 1))
+        else:
+            out.add(int(part))
+    if not out:
+        raise ValueError("no time slice given")
+    return sorted(out)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="M-W7: calibrate and freeze the conformal safety margin on dev worlds.")
-    ap.add_argument("streams", nargs="+", help="dev (world, day) stream .npz files")
+    ap.add_argument("streams", nargs="+", help="dev (world, day) stream .npz files, one per (world, day)")
     ap.add_argument("--alpha", type=float, required=True, help="risk level (frozen in PREREG v1)")
     ap.add_argument("--delta", type=float, required=True, help="confidence level (frozen in PREREG v1)")
     ap.add_argument("--episode-s", type=float, default=DEFAULT_EPISODE_S)
     ap.add_argument("--margins-m", default="0:4:0.05", help="start:stop:step in metres")
-    ap.add_argument("--slices", default=None, help="comma-separated time slices that must all be covered")
-    ap.add_argument("--n-eff", choices=("kish", "none"), default="kish")
-    ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--slices", required=True, type=_parse_slices,
+                    help="REQUIRED: the time slices the robot can run in, all of which must be covered, e.g. 0-47")
+    ap.add_argument("--min-units-per-slice", type=int, default=1)
+    ap.add_argument("--out", default=str(REPO_ROOT / DEFAULT_OUT),
+                    help="frozen JSON (default <repo>/twin/m7_margin.json)")
     a = ap.parse_args(argv)
-    req = [int(x) for x in a.slices.split(",")] if a.slices else None
     res = calibrate_files(a.streams, a.alpha, a.delta, margins_m=_parse_margins(a.margins_m), episode_s=a.episode_s,
-                          required_slices=req, n_eff_mode=a.n_eff)
+                          required_slices=a.slices, min_units_per_slice=a.min_units_per_slice)
     print(json.dumps({k: res.get(k) for k in ("status", "alpha", "delta", "margin_m", "margin_m_zero_latency",
                                               "n_units_scored", "risk_cal_at_margin")}, indent=1))
     if res["status"] != "ok":

@@ -147,7 +147,7 @@ def test_b_ltt_bound_holds_iid():
 
 
 def test_b_ltt_bound_holds_clustered_with_kish():
-    """Units correlated within (world, day) clusters: 30 clusters x 15 units with a shared cluster scale."""
+    """Units correlated within clusters: 40 clusters x 20 units with a shared cluster scale (independent clusters)."""
     alpha, delta, trials = 0.10, 0.10, 300
     C, m = 40, 20
 
@@ -167,6 +167,198 @@ def test_b_ltt_bound_holds_clustered_with_kish():
     assert v_kish <= delta + tol, v_kish
     # demonstration (fixed seed): treating the 800 correlated units as iid violates alpha more often than delta
     assert v_iid > delta > v_kish, (v_iid, v_kish)
+
+
+def _counts_from_losses(L: np.ndarray, world: np.ndarray, day: np.ndarray, margins) -> "CM.UnitCounts":
+    n = len(L)
+    occ = np.full(n, 1_000_000, np.int64)
+    return CM.UnitCounts(world=world.astype(np.int64), day=day.astype(np.int64), slice_id=np.zeros(n, np.int64),
+                         t0=np.arange(float(n)), n_ticks=np.ones(n, np.int64), occ=occ,
+                         miss=np.rint(L * occ[:, None]).astype(np.int64), margins_m=np.asarray(margins, float))
+
+
+def test_clusters_are_worlds_not_world_days():
+    """The margin is applied to NEW worlds, and dynamics are drawn per world (PLAN_TWIN §2), so the days of one world
+    are one cluster."""
+    w = np.repeat(np.arange(3), 4)
+    d = np.tile(np.arange(4), 3)
+    u = _counts_from_losses(np.zeros((12, 2)), w, d, (0.0, 1.0))
+    lab = u.clusters()
+    assert len(np.unique(lab)) == 3
+    assert all(len(np.unique(lab[w == k])) == 1 for k in range(3))
+
+
+def test_b_ltt_bound_holds_with_nested_world_effects():
+    """Plan design: 4 dev worlds x 7 days x 120 units, a per-world loss scale (dynamics drawn per world), a day effect
+    and unit noise; the risk that matters is over NEW worlds. Kish over (world, day) clusters overstates the effective
+    sample and breaks alpha more often than delta; the module's clusters (worlds) hold it."""
+    alpha, delta, trials = 0.10, 0.10, 300
+    W, D, m = 4, 7, 120
+    G = np.round(np.arange(0.0, 6.0001, 0.1), 4)
+
+    def draw_S(rng, nw):
+        Sw = rng.gamma(3.0, 1.0 / 3.0, nw)
+        Sd = np.exp(0.1 * rng.standard_normal((nw, D)))
+        Su = np.exp(1.0 * rng.standard_normal((nw, D, m)))
+        return (Sw[:, None, None] * Sd[:, :, None] * Su).reshape(-1)
+
+    S_new = draw_S(np.random.default_rng(99), 2000)  # fresh worlds
+    R = np.array([np.exp(-g / S_new).mean() for g in G])
+    world, day = np.repeat(np.arange(W), D * m), np.tile(np.repeat(np.arange(D), m), W)
+    wd = world * D + day
+    rng = np.random.default_rng(2024)
+    v_mod = v_wd = none_mod = 0
+    for _ in range(trials):
+        S = draw_S(rng, W)
+        u = _counts_from_losses(np.exp(-G[None, :] / S[:, None]), world, day, G)
+        r = CM.ltt_fixed_sequence(u.losses(), G, alpha, delta, u.clusters(), "kish")
+        if r["chosen_index"] is None:
+            none_mod += 1
+        elif R[r["chosen_index"]] > alpha:
+            v_mod += 1
+        r = CM.ltt_fixed_sequence(u.losses(), G, alpha, delta, wd, "kish")
+        if r["chosen_index"] is not None and R[r["chosen_index"]] > alpha:
+            v_wd += 1
+    # fixed seed: (world, day) clustering breaks the bound, world clustering holds it (fail closed: often no margin)
+    assert v_wd / trials > delta, v_wd / trials
+    assert v_mod / trials <= delta, v_mod / trials
+    assert none_mod > 0
+
+
+def test_calibration_file_states_world_clusters():
+    u = _counts_from_losses(np.zeros((400, 2)), np.repeat(np.arange(4), 100), np.tile(np.arange(4), 100), (0.0, 0.5))
+    res = CM.calibrate(u, 0.1, 0.1, required_slices=[0], cell_m=0.25, episode_s=720.0)
+    assert res["method"]["cluster"] == "world" and res["method"]["n_eff_mode"] == "kish"
+
+
+# ------------------------------------------------------------------------------------------------ audit fixes (S7b-fix1)
+
+def _ok_counts(n: int = 400, slices: int = 4) -> "CM.UnitCounts":
+    return CM.UnitCounts(world=np.repeat(np.arange(4), n // 4), day=np.tile(np.repeat(np.arange(4), n // 16), 4),
+                         slice_id=np.tile(np.arange(slices), n // slices), t0=np.arange(float(n)),
+                         n_ticks=np.full(n, 60), occ=np.full(n, 20, np.int64),
+                         miss=np.stack([np.full(n, 20), np.zeros(n, np.int64)], 1), margins_m=np.array([0.0, 0.5]))
+
+
+def test_required_slices_are_mandatory_on_every_writing_path(tmp_path):
+    u = _ok_counts()
+    with pytest.raises(TypeError):
+        CM.calibrate(u, 0.1, 0.1, cell_m=0.25)  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="required_slices"):
+        CM.calibrate(u, 0.1, 0.1, required_slices=[], cell_m=0.25)
+    with pytest.raises(TypeError):
+        CM.calibrate_files([], 0.1, 0.1)  # type: ignore[call-arg]
+    res = CM.calibrate(u, 0.1, 0.1, required_slices=range(4), cell_m=0.25, episode_s=720.0)
+    assert res["required_slices"] == [0, 1, 2, 3] and res["min_units_per_slice"] == 1
+    # the writer re-checks: a result that does not show every required slice covered is refused
+    for bad in (dict(res, required_slices=None), dict(res, required_slices=[]),
+                dict(res, required_slices=[0, 1, 2, 3, 4]), dict(res, units_per_slice={0: 100, 1: 100}),
+                {k: v for k, v in res.items() if k != "min_units_per_slice"}):
+        with pytest.raises(ValueError, match="slice"):
+            CM.write_margin_file(bad, tmp_path / "m.json")
+    assert not (tmp_path / "m.json").exists()
+    CM.write_margin_file(res, tmp_path / "m.json")
+
+
+def test_writer_refuses_non_world_clustering_and_missing_inflation(tmp_path):
+    res = CM.calibrate(_ok_counts(), 0.1, 0.1, required_slices=range(4), cell_m=0.25, episode_s=720.0)
+    for bad in (dict(res, method=dict(res["method"], cluster="(world, day)")),
+                dict(res, method=dict(res["method"], n_eff_mode="none")),
+                {k: v for k, v in res.items() if k != "inflation"},
+                dict(res, inflation=dict(res["inflation"], radius2_cells=1))):
+        with pytest.raises(ValueError):
+            CM.write_margin_file(bad, tmp_path / "m.json")
+    assert not (tmp_path / "m.json").exists()
+
+
+def test_json_states_exactly_how_to_inflate(tmp_path):
+    from intercycle import margin_inflate as MI
+    res = CM.calibrate(_ok_counts(), 0.1, 0.1, required_slices=range(4), cell_m=0.25, episode_s=720.0)
+    inf = res["inflation"]
+    assert inf["kernel"] == "euclidean_disc" and inf["distance"] == "cell_centre_to_cell_centre"
+    assert inf["radius_m"] == 0.5 and inf["cell_m"] == 0.25 and inf["radius2_cells"] == 4
+    assert inf["includes_unknown"] is True and inf["helper"] == "intercycle.margin_inflate.inflate"
+    assert "floor" in inf["rounding"]
+    p = CM.write_margin_file(res, tmp_path / "m7.json")
+    mg = MI.load_margin(p)  # the robot side: JSON only
+    assert mg.margin_m == 0.5 and mg.cell_m == 0.25 and mg.radius2_cells == 4
+
+
+def test_calibrate_files_cross_checks_counts_with_the_shared_inflate(tmp_path, monkeypatch):
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
+    files = _dev_files(tmp_path, 2, 1)
+    called = []
+    real = CM.inflate
+
+    def spy(pred, margin, *, cell_m):
+        called.append(margin.margin_m)
+        return real(pred, margin, cell_m=cell_m)
+
+    monkeypatch.setattr(CM, "inflate", spy)
+    CM.calibrate_files(files, 0.2, 0.1, margins_m=MARGINS, episode_s=30.0, required_slices=[0])
+    assert called
+    monkeypatch.setattr(CM, "inflate", lambda pred, margin, *, cell_m: np.asarray(pred, bool).copy())  # no dilation
+    with pytest.raises(RuntimeError, match="inflate"):
+        CM.calibrate_files(files, 0.2, 0.1, margins_m=MARGINS, episode_s=30.0, required_slices=[0])
+
+
+def _dev_files(tmp_path, n_worlds: int, n_days: int, minutes: float = 2.0) -> list[str]:
+    files = []
+    for w in range(n_worlds):
+        for d in range(n_days):
+            s = _stream(50 + 10 * w + d, minutes=minutes)
+            f = tmp_path / f"w{w}d{d}.npz"
+            np.savez(f, **s, world_seed=w, day=d, cell_m=CELL, split="dev")
+            files.append(str(f))
+    return files
+
+
+def test_duplicate_world_day_streams_are_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
+    files = _dev_files(tmp_path, 2, 1)
+    kw: dict[str, Any] = dict(margins_m=MARGINS, episode_s=30.0, required_slices=[0])
+    with pytest.raises(ValueError, match="duplicate"):
+        CM.calibrate_files([files[0], files[1], files[0]], 0.2, 0.1, **kw)  # the same file twice
+    s = _stream(999, minutes=2.0)  # a different file claiming an existing (world, day)
+    other = tmp_path / "copy.npz"
+    np.savez(other, **s, world_seed=0, day=0, cell_m=CELL, split="dev")
+    with pytest.raises(ValueError, match="duplicate"):
+        CM.calibrate_files([files[0], files[1], str(other)], 0.2, 0.1, **kw)
+    # the API path: the same units counted twice
+    u = _ok_counts()
+    with pytest.raises(ValueError, match="duplicate"):
+        CM.calibrate(CM.UnitCounts.concat([u, u]), 0.1, 0.1, required_slices=range(4), cell_m=0.25)
+
+
+def test_truth_log_path_is_anchored_at_the_repo_root(tmp_path, monkeypatch):
+    from pathlib import Path
+    repo = Path(CM.__file__).resolve().parents[2]
+    monkeypatch.delenv("INTERCYCLE_TRUTH_LOG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert CM.truth_log_path() == repo / "results" / "truth_access.log"
+    assert CM.truth_log_path().is_absolute()
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", "results/other.log")  # a relative override is the repo's, not the cwd's
+    assert CM.truth_log_path() == repo / "results" / "other.log"
+    assert CM.truth_log_path(tmp_path / "x.log") == tmp_path / "x.log"
+    # the logged file path is absolute too
+    log = tmp_path / "t.log"
+    s = _stream(5, minutes=0.5)
+    np.savez(tmp_path / "rel.npz", **s, world_seed=1, day=1, cell_m=CELL, split="dev")
+    CM.load_dev_stream("rel.npz", log)
+    logged = log.read_text(encoding="utf-8").strip().split("\t")[2]
+    assert Path(logged).is_absolute() and Path(logged) == (tmp_path / "rel.npz").resolve()
+
+
+def test_cli_refuses_without_slices(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
+    files = _dev_files(tmp_path, 2, 1)
+    out = tmp_path / "m7.json"
+    with pytest.raises(SystemExit) as e:
+        CM.main([*files, "--alpha", "0.2", "--delta", "0.1", "--episode-s", "30", "--margins-m", "0:4:0.25",
+                 "--out", str(out)])
+    assert e.value.code != 0
+    assert not out.exists()
+    assert CM._parse_slices("0-3,7") == [0, 1, 2, 3, 7]
 
 
 # ------------------------------------------------------------------------------------------------ building blocks

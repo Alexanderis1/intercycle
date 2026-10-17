@@ -27,6 +27,8 @@ def _live_entry_points() -> dict[str, list[Path]]:
         + g("twin/**/*policy*.py"),
         "broadcaster": g("ros2/intercycle_eval/intercycle_eval/broadcaster.py") + g("twin/**/*broadcast*.py")
         + g("intercycle/codec/**/*.py"),
+        # the truth-free inflation helper the robot side imports to apply the frozen JSON margin
+        "margin_helper": g("intercycle/margin_inflate.py"),
     }
 
 
@@ -97,7 +99,7 @@ def _closure(files: list[Path]) -> dict[str, Path]:
     return seen
 
 
-@pytest.mark.parametrize("name", ["observer_live", "policy", "broadcaster"])
+@pytest.mark.parametrize("name", ["observer_live", "policy", "broadcaster", "margin_helper"])
 def test_live_chain_never_reaches_the_margin_calibration(name):
     files = _live_entry_points()[name]
     if name != "observer_live":
