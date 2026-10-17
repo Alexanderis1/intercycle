@@ -157,7 +157,12 @@ def build_client(args: argparse.Namespace) -> GemmaClient:
                                  cache_dir=args.cache_dir or ROOT / "out" / "llm_cache_mock",
                                  log_path=ROOT / "out" / "llm_calls_mock.jsonl", cost_free=True)
         return GemmaClient(cfg, transport=FixtureHeuristicTransport())
-    return GemmaClient(LLMConfig.from_env(model=args.model, mode=args.mode, cache_dir=args.cache_dir))
+    cfg = LLMConfig.from_env(model=args.model, mode=args.mode, cache_dir=args.cache_dir)
+    if cfg.mode == "replay":
+        return GemmaClient(cfg)
+    # live calls go through the shared limiter: <= 15 req/min, <= 2 in flight, retry only on 429 (DIRECTION §6)
+    import gemma_run_eval as RE
+    return GemmaClient(cfg, transport=RE.RateLimitedTransport(cfg, max_per_min=15, max_conc=2, min_gap_s=4.2))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -177,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         make_fixture(a.frames)
         print(f"generated synthetic fixture in {a.frames}")
     client = build_client(a)
-    res = evaluate(a.frames, client, a.labels, a.concurrency, a.limit)
+    res = evaluate(a.frames, client, a.labels, min(a.concurrency, 2), a.limit)
     print(format_report(res))
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(res, indent=1), encoding="utf-8")

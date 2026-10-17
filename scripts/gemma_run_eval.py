@@ -72,11 +72,12 @@ class RateLimitedTransport:
     """
 
     def __init__(self, cfg: LLMConfig, max_per_min: int = 15, max_conc: int = 4, min_gap_s: float = 0.0,
-                 max_requests: int = 450):
+                 max_requests: int = 450, retry_5xx: int = 0):
         import openai
         self._openai = openai
         self._client = openai.OpenAI(base_url=cfg.base_url, api_key=cfg.api_key, timeout=cfg.timeout_s, max_retries=0)
         self.max_per_min, self.min_gap_s, self.max_requests = max_per_min, min_gap_s, max_requests
+        self.retry_5xx = retry_5xx          # DIRECTION §6: retry only on 429 (default 0 retries on 5xx / connection)
         self._sem = threading.BoundedSemaphore(max_conc)
         self._lock = threading.Lock()
         self._stamps: collections.deque[float] = collections.deque()
@@ -152,7 +153,7 @@ class RateLimitedTransport:
                 except oa.APIStatusError as e:
                     self.n_errors += 1
                     self._log({"status": e.status_code, "error": str(e.message)[:120]})
-                    if e.status_code >= 500 and attempt < 2:
+                    if e.status_code >= 500 and attempt < self.retry_5xx:
                         attempt += 1
                         with self._lock:
                             self._cool_until = max(self._cool_until, time.time() + 3.0 * attempt)
@@ -162,7 +163,7 @@ class RateLimitedTransport:
                 except oa.APIConnectionError as e:
                     self.n_errors += 1
                     self._log({"status": "connection", "error": str(e)[:120]})
-                    if attempt < 2:
+                    if attempt < self.retry_5xx:
                         attempt += 1
                         with self._lock:
                             self._cool_until = max(self._cool_until, time.time() + 3.0 * attempt)

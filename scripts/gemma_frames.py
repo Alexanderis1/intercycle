@@ -330,7 +330,7 @@ def _value_noise(rng, X, Z, cell, amp_shape=(64, 64)):
     return ndimage.map_coordinates(lat, [u.ravel(), v.ravel()], order=1, mode="wrap").reshape(X.shape)
 
 
-def floor_image(cam: Cam, scn, machine, seed=0):
+def floor_image(cam: Cam, scn, machine, seed=0, hatch=True):
     """Textured floor as seen by `cam` (SS x resolution). Returns (PIL RGB image, X, Z world coordinates)."""
     ys, xs = np.mgrid[0:cam.h, 0:cam.w].astype(np.float32)
     dx = (xs + 0.5 - cam.cx) / cam.fpx
@@ -370,10 +370,11 @@ def floor_image(cam: Cam, scn, machine, seed=0):
     wear = _value_noise(rng, X, Z, 0.25)
     col = np.where(stripe[..., None], np.array([232, 196, 24], np.float32), np.array([30, 30, 30], np.float32))
     col = col * (0.85 + 0.2 * wear)[..., None]
-    img[band] = col[band]
+    if hatch:
+        img[band] = col[band]
     # other zones' hatch (visible neighbours), lighter
     for o in scn.machines:
-        if o.id == machine:
+        if o.id == machine or not hatch:
             continue
         a0, b0, a1, b1 = o.rect
         ins = (X >= a0) & (X <= a1) & (Z >= b0) & (Z <= b1)

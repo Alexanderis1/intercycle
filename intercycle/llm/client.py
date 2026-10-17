@@ -254,13 +254,16 @@ class LLMConfig:
     timeout_s: float = 60.0
     max_retries: int = 2
     provider: str = ""
+    vlm_mode: str = "cloud"          # INTERCYCLE_VLM_MODE: off | local (on-prem OpenAI-compatible server) | cloud
 
     def __post_init__(self) -> None:
+        if self.vlm_mode not in ("off", "local", "cloud"):
+            raise ConfigError("INTERCYCLE_VLM_MODE must be off|local|cloud")
         self.cache_dir, self.log_path = Path(self.cache_dir), Path(self.log_path)
         if self.mode not in MODES:
             raise ConfigError(f"INTERCYCLE_LLM_MODE must be one of {MODES}, got {self.mode!r}")
-        if self.json_mode not in ("auto", "schema", "prompt"):
-            raise ConfigError("INTERCYCLE_LLM_JSON_MODE must be auto|schema|prompt")
+        if self.json_mode not in ("auto", "schema", "object", "prompt"):
+            raise ConfigError("INTERCYCLE_LLM_JSON_MODE must be auto|schema|object|prompt")
         if self.tools_mode not in ("auto", "native", "react"):
             raise ConfigError("INTERCYCLE_LLM_TOOLS must be auto|native|react")
         if not self.provider:
@@ -279,7 +282,7 @@ class LLMConfig:
             mode=g("MODE") or ("record" if (base and key) else "replay"),
             json_mode=g("JSON_MODE") or "auto", tools_mode=g("TOOLS") or "auto",
             cost_free=_truthy(g("COST_FREE"), True), timeout_s=float(g("TIMEOUT_S") or 60),
-            provider=g("PROVIDER"),
+            provider=g("PROVIDER"), vlm_mode=e.get("INTERCYCLE_VLM_MODE", "cloud") or "cloud",
         )
         if g("CACHE_DIR"):
             kw["cache_dir"] = Path(g("CACHE_DIR"))
@@ -375,7 +378,8 @@ class GemmaClient:
     def __init__(self, config: LLMConfig | None = None, transport: Transport | None = None):
         self.cfg = config or LLMConfig.from_env()
         self._transport = transport
-        self._rf_ok: bool | None = None if self.cfg.json_mode == "auto" else (self.cfg.json_mode == "schema")
+        self._rf_ok: bool | None = (None if self.cfg.json_mode == "auto" else
+                                    (self.cfg.json_mode in ("schema", "object")))
 
     @classmethod
     def from_env(cls, **overrides: Any) -> "GemmaClient":
@@ -422,6 +426,8 @@ class GemmaClient:
              tool_choice: str | Mapping | None = None, response_format: Mapping | None = None,
              temperature: float = 0.0, max_tokens: int = 512, extra_body: Mapping | None = None,
              task: str = "chat") -> ChatResult:
+        if self.cfg.vlm_mode == "off":
+            raise ConfigError("INTERCYCLE_VLM_MODE=off: no model calls (the observer runs without Gemma)")
         messages = list(messages)
         params = {k: v for k, v in dict(
             temperature=temperature, max_tokens=max_tokens, tools=list(tools) if tools else None,
@@ -510,7 +516,8 @@ class GemmaClient:
         hint = ("Reply with ONLY one JSON object (no prose, no markdown fences) that validates against this "
                 "JSON Schema:\n" + json.dumps(js, separators=(",", ":")))
         base = _with_system_hint(messages, hint)
-        rf = {"type": "json_schema", "json_schema": {"name": name or schema.__name__, "schema": js}}
+        rf = ({"type": "json_object"} if self.cfg.json_mode == "object" else
+              {"type": "json_schema", "json_schema": {"name": name or schema.__name__, "schema": js}})
         kw = dict(task=task, temperature=temperature, max_tokens=max_tokens, extra_body=extra_body)
         raw, err = "", ""
         results: list[ChatResult] = []
