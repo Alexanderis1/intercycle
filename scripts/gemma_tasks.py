@@ -41,10 +41,13 @@ USAGE_KEYS = ("today.requests", "today.errors", "today.prompt_tokens", "today.co
 
 
 # ----------------------------------------------------------------------------------------------- client
-def jpeg(path, person_boxes=()) -> bytes:
+def jpeg(path, person_boxes=(), max_side: int = 1280) -> bytes:
     """Privacy-filtered image for the VLM: people boxes blacked out (+15 %), downscaled, metadata-free JPEG."""
     from intercycle.llm.privacy import filtered_jpeg
-    return filtered_jpeg(path, person_boxes)
+    return filtered_jpeg(path, person_boxes, max_side=max_side)
+
+
+G3_MAX_SIDE = 512     # 3 images per triage call: 768 px images hit provider-side CUDA OOM (HTTP 500) on 17 Oct
 
 
 def make_client(max_requests: int):
@@ -244,17 +247,58 @@ def _lat(xs):
 
 
 # ==================================================================================================== G2
-def g2_items():
+FAMILY_OF_TYPE = {"weld_robot": "weld", "lifter": "lift", "hemming_cell": "cell", "sealer_robot": "cell"}
+TYPE_DESC = {"weld_robot": "spot-welding station", "lifter": "unload lifter", "hemming_cell": "roller-hemming cell",
+             "sealer_robot": "sealer cell"}
+
+
+def g1_families() -> dict[str, dict]:
+    """Machine family per camera from G1's OWN headline output (variant A, no hint): the machine_type of the predicted
+    hazard-zone / machine polygon whose centroid is nearest the image centre (each machine camera is aimed at its
+    machine). No truth is used."""
+    d = OUT / "g1"
+    labs = json.loads((d / "labels.json").read_text(encoding="utf-8"))
+    rows = load_rows(OUT / "rows_g1.jsonl")
+    out = {}
+    for name, lab in labs.items():
+        r = rows.get(f"A:{name}")
+        if not r or not r.get("ok"):
+            continue
+        w, h = lab["size"]
+        cands = [z for z in r["zones"] if z["kind"] in ("hazard_zone", "machine") and z.get("machine_type") in FAMILY_OF_TYPE]
+        if not cands:
+            continue
+
+        def dist(z):
+            pts = np.array(z["polygon_px"], float)
+            return float(np.hypot(pts[:, 0].mean() - w / 2, pts[:, 1].mean() - h / 2))
+        best = min(cands, key=dist)
+        out[lab["primary"]] = {"machine_type": best["machine_type"], "family": FAMILY_OF_TYPE[best["machine_type"]],
+                               "centre_dist_px": round(dist(best), 1)}
+    return out
+
+
+def g2_items(family_source: str = "plan"):
     d = OUT / "g2"
     labs = json.loads((d / "labels.json").read_text(encoding="utf-8"))
+    fams = g1_families() if family_source == "g1" else {}
     items = []
     for key, b in labs["bins"].items():
+        if family_source == "g1":
+            f = fams.get(b["machine"])
+            if f is None or f["family"] == b["family"]:
+                continue          # same vocabulary as the plan run: that answer is reused, no new call
+            b = dict(b, family=f["family"], machine_type=TYPE_DESC[f["machine_type"]])
+            key = f"g1fam:{key}"
+
         def fn(client, b=b):
             r = OT.name_phase([jpeg(d / k["file"]) for k in b["keyframes"]], b["machine"], b["family"], b["machine_type"],
                               client=client)
             return {"machine": b["machine"], "bin": b["bin"], "ok": r.ok, "name": r.name, "confidence": r.confidence,
                     "notes": r.notes, "latency_s": r.latency_s, "cached": r.cached, "error": r.error}
         items.append((key, fn))
+    if family_source == "g1":
+        return items
     tot = sum(c["n_ticks"] for c in labs["line"].values())
     for c, L in labs["line"].items():
         def fn(client, L=L):
@@ -317,7 +361,37 @@ def score_g2():
                          "confidence": r.get("confidence"), "correct": r.get("name") == L["truth_majority"],
                          "rule_correct": L["observer_rule_name"] == L["truth_majority"], "notes": r.get("notes")})
             lat.append(r.get("service_latency_s") or r.get("latency_s"))
+    # family taken from G1's own output instead of the site plan (machines G1 typed differently were re-asked)
+    fams = g1_families()
+    fam_g1 = None
+    if fams:
+        acc_g1, wts, n_diff, missing = [], [], 0, 0
+        for x in res_b:
+            f = fams.get(x["machine"])
+            if f is None:
+                missing += 1
+                continue
+            if f["family"] == x["family"]:
+                ok_, corr = x["ok"], x["correct"]
+            else:
+                n_diff += 1
+                r = rows.get(f"g1fam:{x['id']}")
+                if not r:
+                    missing += 1
+                    continue
+                ok_, corr = bool(r.get("ok")), r.get("name") == x["truth"]
+            if ok_:
+                acc_g1.append(float(corr))
+                wts.append(x["n_ticks"])
+        fam_g1 = {"machines_typed_by_g1": len(fams),
+                  "family_agrees_with_plan": sum(1 for m, f in fams.items()
+                                                 if any(x["machine"] == m and x["family"] == f["family"] for x in res_b)),
+                  "bins_with_other_family": n_diff, "bins_not_covered": missing, "n": len(acc_g1),
+                  "bin_acc": float(np.mean(acc_g1)) if acc_g1 else None,
+                  "bin_acc_time_weighted": float(np.average(acc_g1, weights=wts)) if acc_g1 else None,
+                  "families": fams}
     return {"n_bins": len(res_b), "n_ok": len(ok), "bin_acc": float(c.mean()) if len(c) else None,
+            "family_source": "site plan (truth machine kind)", "family_from_g1": fam_g1,
             "bin_acc_time_weighted": float(np.average(c, weights=w)) if len(c) else None,
             "baselines": baselines,
             "clean_bins": {"n": len(clean), "acc": float(np.mean([x["correct"] for x in clean])) if clean else None},
@@ -357,7 +431,7 @@ def g3_items():
     items = []
     for key, L in labs.items():
         def fn(client, L=L, key=key):
-            f = [jpeg(d / x) for x in L["files"]]
+            f = [jpeg(d / x, max_side=G3_MAX_SIDE) for x in L["files"]]
             dt = L["t_after"][1] - L["t_after"][0] if len(L["t_after"]) > 1 else None
             r = OT.triage_change(f[0], f[1:], camera_id=f"CAM-{key.upper()}", client=client, after_dt_s=dt and round(dt, 1))
             st = OT.apply_triage({"blob": OT.UNKNOWN}, r)
@@ -419,6 +493,8 @@ def main(argv=None):
     ap.add_argument("cmd", choices=["run", "score"])
     ap.add_argument("task", nargs="?", choices=["g1", "g2", "g3"])
     ap.add_argument("--variants", default="AB", help="G1 variants (A headline, B hinted)")
+    ap.add_argument("--family-source", default="plan", choices=["plan", "g1"],
+                    help="G2: machine family from the site plan, or from G1's own commissioning output")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--retry-errors", action="store_true")
     ap.add_argument("--concurrency", type=int, default=2)
@@ -426,7 +502,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     OUT.mkdir(parents=True, exist_ok=True)
     if a.cmd == "run":
-        items = {"g1": lambda: g1_items(a.variants), "g2": g2_items, "g3": g3_items}[a.task]()
+        items = {"g1": lambda: g1_items(a.variants), "g2": lambda: g2_items(a.family_source), "g3": g3_items}[a.task]()
         batch(a.task, items[:a.limit] if a.limit else items, a.retry_errors, a.max_requests, min(a.concurrency, 2))
     res = score_all()
     for k in ("g1", "g1_hinted", "g2", "g3", "g3_oracle"):
