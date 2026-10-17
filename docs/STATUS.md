@@ -54,3 +54,12 @@ All 5 failures come from geometry tweaks made in the last hour (not logic regres
 - `scripts/gemma_frames.py` complete and tested (36 of 160 frames rendered before the stop; `labels.json` is written only at the end, so re-run it).
 - `scripts/gemma_run_eval.py` written, never run. Not started: `scripts/gemma_ops_demo.py`, `docs/GEMMA_RESULTS.md`.
 - Resume: `python scripts/gemma_frames.py --n 160 --composites 8`, then `set -a; . ./.env; set +a; INTERCYCLE_LLM_MODE=record python scripts/gemma_run_eval.py` (≤15 req/min).
+
+## Perception at stop (real video, NVIDIA PhysicalAI-SmartSpaces, CC-BY-4.0)
+- Dataset is public (not gated). Ingested 19 cameras of `MTMC_Tracking_2026/train/Warehouse_000` into Modal Volume `intercycle-data`.
+- RF-DETR Medium (Apache-2.0) at 800x1408 + ByteTrack, 5 min of video at 5 fps on Modal L4:
+  detection precision 0.89, recall 0.68 (persons, IoU 0.5); MOTA 0.59; IDF1 0.34; zone occupancy error 1.47 persons/zone-minute
+  (1.00 with 1.5 m multi-camera fusion radius; code default is still 0.8 m — change it).
+- Throughput ~42 frames/s per L4 (4 cameras on one L4 at 41 fps → ~8 cameras real-time at 5 fps). Modal spend ≈ $1.5.
+- Code complete: `intercycle/perception/`, `cloud/modal_perception.py`, `scripts/perception_*.py`, 21 tests pass.
+- Not done: `docs/PERCEPTION.md`; ROCm path (`cloud/Dockerfile.rocm`, `cloud/run_rocm.sh`) untested — needs MI300X access.

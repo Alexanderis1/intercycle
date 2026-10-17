@@ -1,0 +1,60 @@
+# Perception workload for an AMD Instinct MI300X (gfx942) with ROCm PyTorch.
+#
+# Same code as the Modal/NVIDIA path: the repository is bind-mounted at run time (see run_rocm.sh), so this image only
+# holds dependencies.  Build with the *cloud/* directory as context (keeps .venv/ and out/ out of the build context):
+#
+#     docker build -f cloud/Dockerfile.rocm -t intercycle-perception:rocm cloud/
+#
+# Base image: pinned ROCm 10.1.0 / Ubuntu 24.04 / Python 3.12 / PyTorch 2.14.0 (the `latest` tag pointed to the same image
+# on 2026-10-17).  Fallback if the host driver is older:  --build-arg BASE_IMAGE=rocm/pytorch:latest
+#   or e.g. rocm/pytorch:rocm7.14.1_ubuntu24.04_py3.12_pytorch_release_2.12.0
+ARG BASE_IMAGE=rocm/pytorch:rocm10.1.0_ubuntu24.04_py3.12_pytorch_release_2.14.0
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/workspace/intercycle
+
+# opencv (pulled in by supervision / trackers) needs libGL at import time.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Never let pip replace the ROCm build of torch with a CUDA wheel: freeze it as a constraint.
+RUN python3 -m pip freeze 2>/dev/null | grep -iE '^(torch|torchvision|torchaudio|triton|pytorch-triton-rocm)==' > /tmp/torch-constraints.txt || true; \
+    cat /tmp/torch-constraints.txt; \
+    python3 -m pip install -c /tmp/torch-constraints.txt \
+        "rfdetr==1.11.1" \
+        "trackers==2.6.1" \
+        "supervision==0.30.6" \
+        "transformers==5.18.0" \
+        "av==19.0.0" \
+        "huggingface_hub==2.1.1" \
+        "ijson==3.5.1" \
+        "motmetrics==1.4.0" \
+        pandas pyarrow scipy numpy pytest
+
+# Optional: ONNX Runtime MIGraphX execution provider (AMD) for the ONNX path (scripts/perception_export_onnx.py).
+#   docker build --build-arg WITH_MIGRAPHX=1 ...
+# Versions follow the AMD ROCm AI-ecosystem pages for ROCm 10.1.0 (MIGraphX 2.18.0); adjust for other ROCm releases.
+ARG WITH_MIGRAPHX=0
+ARG ROCM_VERSION=10.1.0
+ARG MIGRAPHX_VERSION=2.18.0
+RUN if [ "$WITH_MIGRAPHX" = "1" ]; then \
+      python3 -m pip install --index-url https://stable.repo.amd.com/rocm/migraphx/whl-next/ \
+          "migraphx==${MIGRAPHX_VERSION}+rocm${ROCM_VERSION}" "migraphx-libs==${MIGRAPHX_VERSION}+rocm${ROCM_VERSION}" \
+   && python3 -m pip install onnx \
+   && python3 -m pip install --extra-index-url https://stable.repo.amd.com/rocm/onnxruntime/whl-next/ \
+          "onnxruntime-ep-migraphx==1.0.0+rocm${ROCM_VERSION}"; \
+    fi
+
+# Build-time guard: this must be a ROCm (HIP) torch.
+RUN python3 -c "import torch; assert torch.version.hip, 'torch is not a ROCm build'; print('torch', torch.__version__, 'hip', torch.version.hip)"
+
+# Bake the COCO RF-DETR weights (Apache-2.0) into the image (CPU load only; no GPU is needed at build time).
+RUN python3 -c "import rfdetr; [c(device='cpu') for c in (rfdetr.RFDETRNano, rfdetr.RFDETRSmall, rfdetr.RFDETRMedium, rfdetr.RFDETRLarge)]"
+
+WORKDIR /workspace/intercycle
+CMD ["python3", "scripts/perception_bench.py", "--help"]
