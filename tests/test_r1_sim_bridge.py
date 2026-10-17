@@ -146,3 +146,21 @@ def test_sensor_suite_frame_has_no_truth():
     assert set(fr) == {"t", "imu", "odom", "scan"}
     assert set(fr["odom"]) == {"x", "y", "psi", "vx", "vy", "wz", "v_var", "w_var"}
     assert fr["odom"]["x"] != 4.0                    # odom frame starts at 0, not at the true world pose
+
+
+def test_track_movers_interpolate(tmp_path):
+    p = tmp_path / "movers.npz"
+    xy = np.zeros((3, 2, 3))
+    xy[:, 0, 0] = [0.0, 1.0, 2.0]
+    xy[:, 1, :] = np.nan
+    xy[2, 1, :] = (5.0, 5.0, 0.0)
+    np.savez(p, ids=np.array(["P1", "F1"]), cls=np.array(["person", "forklift"]), t=np.array([0.0, 1.0, 2.0]),
+             xy_psi=xy)
+    src = M.load_source(None, {"mover_tracks": "movers.npz", "world_dir": str(tmp_path)})
+    assert [m["cls"] for m in src.spec()] == ["person", "forklift"]
+    q = src.poses(0.5)
+    assert q["P1"][0] == pytest.approx(0.5) and "F1" not in q
+    parts = M.parts_for(src.spec())
+    assert len(parts) == 3                       # person 1 part, forklift body + forks
+    pp = M.part_poses(parts, q)
+    assert pp[1, 0] < -50                        # absent forklift parked far away

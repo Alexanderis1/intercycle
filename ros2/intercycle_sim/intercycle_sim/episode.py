@@ -27,7 +27,17 @@ import subprocess
 import time
 
 PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../intercycle_sim (package dir parent)
+ROS2_ROOT = os.path.dirname(PKG_ROOT)                                         # the repo's ros2/ tree (all packages)
 ROS_SETUP = "/opt/ros/humble/setup.bash"
+
+
+def _pkg_paths() -> str:
+    """Every package dir under ros2/ (intercycle_sim, intercycle_nav, intercycle_eval, ...) for PYTHONPATH."""
+    try:
+        return ":".join(os.path.join(ROS2_ROOT, d) for d in sorted(os.listdir(ROS2_ROOT))
+                        if os.path.isdir(os.path.join(ROS2_ROOT, d)))
+    except FileNotFoundError:
+        return PKG_ROOT
 
 CYCLONE_XML = """<?xml version="1.0" encoding="UTF-8" ?>
 <CycloneDDS xmlns="https://cdds.io/config">
@@ -55,7 +65,8 @@ def ros_env(work: str) -> dict:
     env.update(RMW_IMPLEMENTATION="rmw_cyclonedds_cpp", CYCLONEDDS_URI=f"file://{xml}",
                ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST", ROS_DOMAIN_ID="17", PYTHONUNBUFFERED="1",
                RCUTILS_COLORIZED_OUTPUT="0")
-    env["PYTHONPATH"] = PKG_ROOT + ":" + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = _pkg_paths() + ":" + env.get("PYTHONPATH", "")
+    env["INTERCYCLE_ROS2"] = ROS2_ROOT
     return env
 
 
@@ -63,7 +74,7 @@ def sim_env() -> dict:
     env = {k: v for k, v in os.environ.items()
            if not (k.startswith("ROS_") or k.startswith("AMENT") or k.startswith("COLCON") or k in ("RMW_IMPLEMENTATION",
                                                                                                    "CYCLONEDDS_URI"))}
-    env["PYTHONPATH"] = PKG_ROOT
+    env["PYTHONPATH"] = _pkg_paths()
     env["PYTHONUNBUFFERED"] = "1"
     return env
 
@@ -175,7 +186,8 @@ def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
                                  "autostart:=True", "use_composition:=False", "slam:=False",
                                  f"map:={os.path.join(wdir, 'map.yaml')}", f"params_file:={params}"], renv)
             for k, cmd in enumerate(cfg.get("extra_launch", [])):
-                procs.start(f"extra{k}", cmd, renv, shell=True)
+                procs.start(f"extra{k}", cmd, dict(renv, IC_WORK=work, IC_WORLD=wdir, IC_OUT=out_dir), cwd=ROS2_ROOT,
+                            shell=True)
             g = cfg["goal"]
             s = cfg.get("start", [4.0, 32.0, 0.0])
             procs.start("goal", ["/usr/bin/python3", "-u", os.path.join(PKG_ROOT, "intercycle_sim", "send_goal.py"),

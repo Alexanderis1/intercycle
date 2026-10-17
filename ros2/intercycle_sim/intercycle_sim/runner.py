@@ -36,6 +36,27 @@ def _write_table(rows: list[dict], path_noext: str) -> str:
         return p
 
 
+ROBOT_R = 0.5          # ANYmal-D body + leg swing as a disc, for the (evaluation-only) clearance metric
+
+
+def _min_gap(x: float, y: float, prims: dict) -> float:
+    """Truth clearance (m) from a robot disc to the nearest mover primitive. EVALUATION ONLY, never sent to ROS."""
+    import numpy as np
+
+    g = float("inf")
+    c = prims.get("circles")
+    if c is not None and len(c):
+        g = min(g, float((np.hypot(c[:, 0] - x, c[:, 1] - y) - c[:, 2]).min()) - ROBOT_R)
+    b = prims.get("boxes")
+    if b is not None and len(b):
+        cs, sn = np.cos(b[:, 4]), np.sin(b[:, 4])
+        dx, dy = x - b[:, 0], y - b[:, 1]
+        lx, ly = np.abs(dx * cs + dy * sn), np.abs(-dx * sn + dy * cs)
+        q = np.hypot(np.maximum(lx - b[:, 2], 0), np.maximum(ly - b[:, 3], 0))
+        g = min(g, float(q.min()) - ROBOT_R)
+    return g
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cfg", required=True)
@@ -104,6 +125,7 @@ def main() -> None:
     p0 = np.array(st["pos_w"][:2])
     path_len, prev = 0.0, p0.copy()
     fell, end_reason = False, "time_limit"
+    min_scan, min_gap, min_gap_t = float("inf"), float("inf"), None
     wall0 = time.time()
     step_wall = 0.0
     try:
@@ -120,10 +142,28 @@ def main() -> None:
             fr = suite.frame(t, st["pos_w"], st["quat_wxyz"], st["v_w"], st["v_b"], st["omega_b"], prims)
             if k == 0:
                 fr["mounts"] = mounts
+            if "scan" in fr:
+                fin = [v for v in fr["scan"]["ranges"] if v != float("inf")]
+                if fin:
+                    min_scan = min(min_scan, min(fin))
+            if prims is not None:
+                gap = _min_gap(st["pos_w"][0], st["pos_w"][1], prims)
+                if gap < min_gap:
+                    min_gap, min_gap_t = gap, t
             cs = be.contacts()
             if cs:
                 fr["contacts"] = cs
-                contacts.append({"t": round(t, 3), "contacts": cs, "x": st["pos_w"][0], "y": st["pos_w"][1]})
+                ev = {"t": round(t, 3), "contacts": cs, "x": st["pos_w"][0], "y": st["pos_w"][1],
+                      "nearest_mover": None, "nearest_mover_gap_m": None}
+                if parts:
+                    gaps = {}
+                    for prt, q in zip(parts, pp):
+                        one = M.primitives([prt], q[None, :])
+                        g = _min_gap(st["pos_w"][0], st["pos_w"][1], one)
+                        gaps[prt.mover_id] = min(g, gaps.get(prt.mover_id, float("inf")))
+                    mid = min(gaps, key=gaps.get)
+                    ev["nearest_mover"], ev["nearest_mover_gap_m"] = mid, round(gaps[mid], 3)
+                contacts.append(ev)
             reply = client.exchange(fr)
             cmd = (reply["vx"], reply["vy"], reply["wz"])
             p = np.array(st["pos_w"][:2])
@@ -160,7 +200,9 @@ def main() -> None:
         "steps": k, "dt": be.dt, "max_rtf": max_rtf, "start": list(p0), "end": list(p1),
         "end_psi": yaw_of(st["quat_wxyz"]), "end_z": st["pos_w"][2],
         "displacement_m": round(float(np.linalg.norm(p1 - p0)), 3), "path_length_m": round(path_len, 3),
-        "fell": fell, "end_reason": end_reason, "n_contact_steps": len(contacts),
+        "fell": fell, "end_reason": end_reason,
+        "min_scan_m": None if min_scan == float("inf") else round(min_scan, 3),
+        "min_mover_gap_m": None if min_gap == float("inf") else round(min_gap, 3), "min_mover_gap_t": min_gap_t, "n_contact_steps": len(contacts),
         "odom_end": rows[-1] if rows else None,
     }
     summary["truth_log"] = _write_table(rows, os.path.join(out_dir, "truth_log"))

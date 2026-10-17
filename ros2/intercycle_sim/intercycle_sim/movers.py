@@ -102,9 +102,41 @@ class ScriptedMovers:
                           m["y"] + m.get("v", 0.0) * t * math.sin(m["psi"]), m["psi"]) for m in self.m}
 
 
+class TrackMovers:
+    """Precomputed trajectories (the recommended path for R3: compute them with intercycle's models on a CPU, ship them
+    as a world file).  npz keys: ids (M,) str, cls (M,) str, t (T,) s, xy_psi (T, M, 3) in the ROS frame.  Linear
+    interpolation in time (heading unwrapped); NaN rows = mover absent (parked)."""
+
+    def __init__(self, path: str):
+        d = np.load(path, allow_pickle=False)
+        self.ids = [str(v) for v in d["ids"]]
+        self.cls = [str(v) for v in d["cls"]]
+        self.t = np.asarray(d["t"], float)
+        q = np.array(d["xy_psi"], float)
+        q[:, :, 2] = np.unwrap(q[:, :, 2], axis=0)
+        self.q = q
+
+    def spec(self) -> list[dict]:
+        return [{"id": i, "cls": c} for i, c in zip(self.ids, self.cls)]
+
+    def poses(self, t: float) -> dict[str, tuple[float, float, float]]:
+        k = int(np.clip(np.searchsorted(self.t, t) - 1, 0, len(self.t) - 2)) if len(self.t) > 1 else 0
+        if len(self.t) > 1:
+            a = float(np.clip((t - self.t[k]) / max(self.t[k + 1] - self.t[k], 1e-9), 0.0, 1.0))
+            q = self.q[k] * (1 - a) + self.q[k + 1] * a
+        else:
+            q = self.q[0]
+        return {i: (float(x), float(y), float(p)) for i, (x, y, p) in zip(self.ids, q) if np.isfinite(x)}
+
+
 def load_source(ref: str | None, cfg: dict):
-    """'pkg.mod:factory' -> factory(cfg); None -> scripted movers from cfg['movers'] (or none)."""
+    """'pkg.mod:factory' -> factory(cfg); else cfg['mover_tracks'] (npz file name in the world dir, see TrackMovers);
+    else scripted movers from cfg['movers']; else none."""
     if not ref:
+        if cfg.get("mover_tracks"):
+            import os
+
+            return TrackMovers(os.path.join(cfg["world_dir"], cfg["mover_tracks"]))
         return ScriptedMovers(cfg["movers"]) if cfg.get("movers") else NoMovers()
     mod, _, fn = ref.partition(":")
     return getattr(importlib.import_module(mod), fn or "make")(cfg)

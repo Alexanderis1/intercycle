@@ -32,7 +32,8 @@ PKG = REPO / "ros2" / "intercycle_sim"
 APP_NAME = "intercycle-isaac-robot"
 VOL_NAME = "intercycle-robot"
 VOL = "/vol"
-REMOTE_PKG = "/root/intercycle_sim"
+REMOTE_ROS2 = "/root/ros2"                      # the whole repo ros2/ tree (intercycle_sim, intercycle_nav, intercycle_eval)
+REMOTE_PKG = f"{REMOTE_ROS2}/intercycle_sim"
 ISAACLAB_TAG = "v2.3.0"
 CU128 = "https://download.pytorch.org/whl/cu128"
 
@@ -85,7 +86,7 @@ image = (
         "bash -c 'source /opt/ros/humble/setup.bash && ros2 pkg list | grep -E \"^nav2_(bringup|mppi_controller|smac_planner|amcl)$\"'",
     )
     .env({"LANG": "en_US.UTF-8", "PYTHONUNBUFFERED": "1"})
-    .add_local_dir(str(PKG), REMOTE_PKG, ignore=["**/__pycache__", "**/*.pyc", "test/**"])
+    .add_local_dir(str(REPO / "ros2"), REMOTE_ROS2, ignore=["**/__pycache__", "**/*.pyc", "**/test/**"])
 )
 
 
@@ -161,7 +162,7 @@ def pull(tag: str) -> Path:
 @app.local_entrypoint()
 def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: float = 0.0, wz: float = 0.0,
          goal: str = "20,32", start: str = "4,32,0", tag: str = "", gpu: str = "L4", empty: bool = False,
-         max_rtf: float = 1.0, timeout_s: float = 300.0):
+         max_rtf: float = 1.0, timeout_s: float = 300.0, movers: str = "", nav2_params: str = ""):
     import time
 
     if action == "check":
@@ -174,6 +175,12 @@ def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: floa
     gx, gy = (float(v) for v in goal.split(","))
     tag = tag or f"{action}_{time.strftime('%m%d_%H%M%S')}"
     cfg = {"tag": tag, "start": [sx, sy, syaw], "max_rtf": max_rtf}
+    if nav2_params:        # a path relative to the repo's ros2/ dir, e.g. intercycle_nav/config/nav2.yaml (R2)
+        cfg["nav2_params"] = f"{REMOTE_ROS2}/{nav2_params}"
+    if movers == "demo":   # hook smoke: a person standing in the north aisle, a parked AGV, a person walking across
+        cfg["movers"] = [{"id": "P1", "cls": "person", "x": 11.0, "y": 32.2, "psi": 0.0, "v": 0.0},
+                         {"id": "AGV1", "cls": "agv", "x": 16.0, "y": 33.0, "psi": 0.0, "v": 0.0},
+                         {"id": "P2", "cls": "person", "x": 22.0, "y": 36.0, "psi": -1.5708, "v": 0.4}]
     if action == "cmdvel":
         cfg.update(mode="cmdvel", seconds=seconds, cmd=[vx, vy, wz], nav2=False)
         world = build_world_bytes(empty=True)
