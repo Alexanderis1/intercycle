@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InterCycle Labeller</title>
+<!--
+  InterCycle labeller (lane S4). One static file: no server, no network, no CDN.
+  Images are opened from disk with the file picker and never leave the browser. Labels are saved by download (JSON).
+  Modes: 1 CAL points (4+ floor points per framing), 2 person/forklift boxes (spot-checks), 3 stroke clicks on a frame strip.
+  Coordinates: continuous image pixels of the ORIGINAL image, origin at the top-left corner of the image
+  (the centre of pixel column i is i + 0.5; subtract 0.5 for OpenCV's pixel-centre convention).
+-->
+<style>
+:root {
+  --bg: #15171a; --panel: #1e2126; --line: #30343b; --text: #e6e8eb; --muted: #9aa1ab; --accent: #4ea1ff;
+  --warn: #ffb547; --bad: #ff5d5d; --ok: #4cd18a; --person: #4ea1ff; --forklift: #ffb547; --stroke: #ff5d5d;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header strong { margin-right: 8px; }
+button, .btn { background: #2a2e35; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 9px; cursor: pointer; font: inherit; }
+button:hover, .btn:hover { border-color: var(--accent); }
+button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+#modes { display: flex; gap: 4px; margin-right: 8px; }
+#wrap { display: flex; flex: 1; min-height: 0; }
+aside { width: 300px; min-width: 240px; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 8px; }
+aside h3 { margin: 6px 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+aside section { margin-bottom: 12px; }
+#imgList { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; }
+#imgList li { padding: 2px 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#imgList li.cur { background: #2d3b50; }
+#imgList li .tag { float: right; color: var(--muted); font-size: 11px; }
+#imgList li.done .tag { color: var(--ok); }
+label.f { display: block; margin: 4px 0; color: var(--muted); }
+label.f input, label.f textarea, label.f select { display: block; width: 100%; margin-top: 2px; background: #121417; color: var(--text); border: 1px solid var(--line); border-radius: 3px; padding: 3px 5px; font: inherit; }
+.row { display: flex; gap: 6px; }
+.row > * { flex: 1; }
+table.pts { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.pts td, table.pts th { border-bottom: 1px solid var(--line); padding: 2px 3px; text-align: left; }
+table.pts tr.sel { background: #2d3b50; }
+table.pts input { width: 100%; background: #121417; color: var(--text); border: 1px solid var(--line); border-radius: 3px; padding: 1px 3px; font: inherit; }
+.muted { color: var(--muted); }
+.warn { color: var(--warn); }
+.bad { color: var(--bad); }
+.okc { color: var(--ok); }
+main { flex: 1; position: relative; display: flex; flex-direction: column; min-width: 0; }
+#cv { flex: 1; width: 100%; min-height: 0; display: block; background: #0d0e10; cursor: crosshair; outline: none; }
+#strip { display: none; height: 112px; overflow-x: auto; overflow-y: hidden; white-space: nowrap; border-top: 1px solid var(--line); background: var(--panel); padding: 4px; }
+#strip .fr { display: inline-block; position: relative; margin-right: 3px; border: 2px solid transparent; border-radius: 3px; cursor: pointer; vertical-align: top; }
+#strip .fr img { height: 76px; display: block; }
+#strip .fr .cap { font-size: 10px; color: var(--muted); text-align: center; }
+#strip .fr.cur { border-color: var(--accent); }
+#strip .fr.stk { border-color: var(--stroke); }
+#strip .fr.stk.cur { border-color: #ff9fe0; }
+#strip .fr.stk::after { content: "STROKE"; position: absolute; top: 2px; left: 2px; background: var(--stroke); color: #fff; font-size: 9px; padding: 0 3px; border-radius: 2px; }
+footer { height: 24px; padding: 3px 10px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; max-width: 720px; }
+dialog kbd, aside kbd { background: #2a2e35; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font: 12px ui-monospace, monospace; }
+dialog td { padding: 2px 8px 2px 0; vertical-align: top; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <strong>InterCycle labeller</strong>
+  <nav id="modes">
+    <button data-mode="cal" title="Key 1">1 CAL points</button>
+    <button data-mode="box" title="Key 2">2 Boxes</button>
+    <button data-mode="stroke" title="Key 3">3 Strokes</button>
+  </nav>
+  <label class="btn" title="Pick image files">Open images<input type="file" id="fileImages" accept="image/*" multiple hidden></label>
+  <label class="btn" title="Pick a folder; in stroke mode each sub-folder is one window">Open folder<input type="file" id="fileDir" webkitdirectory multiple hidden></label>
+  <label class="btn" title="Load labels saved earlier (any mode)">Import JSON<input type="file" id="fileJson" accept=".json,application/json" multiple hidden></label>
+  <button id="btnExport" title="Ctrl+S">Save JSON</button>
+  <button id="btnHelp" title="?">Help</button>
+  <button id="btnClear" title="Forget every label kept in this browser">Clear all</button>
+</header>
+<div id="wrap">
+  <aside id="side">
+    <section>
+      <h3>Images <span id="imgCount" class="muted"></span></h3>
+      <ol id="imgList"></ol>
+    </section>
+
+    <section id="panelCal">
+      <h3>CAL points</h3>
+      <label class="f">framing_id <input id="calFraming" placeholder="e.g. cam9_f1"></label>
+      <p class="muted">Click 4 (or more) floor points. For each, type its floor coordinates in metres and/or a relation
+        to other points (e.g. "p2 is 3.0 m from p1 along the yellow stripe"). Drag a point to move it.</p>
+      <table class="pts">
+        <thead><tr><th>#</th><th>u, v (px)</th><th>x m</th><th>y m</th></tr></thead>
+        <tbody id="calRows"></tbody>
+      </table>
+      <label class="f">relation of selected point <textarea id="calRel" rows="2"></textarea></label>
+      <label class="f">framing note <textarea id="calNote" rows="2"></textarea></label>
+      <div id="calCheck"></div>
+    </section>
+
+    <section id="panelBox">
+      <h3>Boxes</h3>
+      <div class="row">
+        <button id="clsPerson" title="P">P person</button>
+        <button id="clsForklift" title="K">K forklift</button>
+      </div>
+      <p class="muted">Drag on empty image to draw. Click a box to select; drag it to move, drag a corner/edge handle to
+        resize. <kbd>Del</kbd> deletes. <kbd>C</kbd> marks the frame as checked (also when it has no box).</p>
+      <div id="boxInfo"></div>
+      <label class="f">frame note <textarea id="boxNote" rows="2"></textarea></label>
+      <button id="btnChecked">C mark checked</button>
+    </section>
+
+    <section id="panelStroke">
+      <h3>Strokes</h3>
+      <p class="muted">Each window = the frames of one folder (or all loaded images). Step with <kbd>&larr;</kbd>/<kbd>&rarr;</kbd>,
+        toggle a stroke on the current frame with <kbd>S</kbd> or <kbd>Enter</kbd>, or double-click a thumbnail.
+        <kbd>C</kbd> marks the window checked when done (a window with no stroke is saved only when checked).</p>
+      <label class="f">window <select id="stkGroup"></select></label>
+      <label class="f">window_id <input id="stkId"></label>
+      <div class="row">
+        <label class="f">fps <input id="stkFps" type="number" step="any" min="0.001"></label>
+        <label class="f">t0 (s) <input id="stkT0" type="number" step="any"></label>
+      </div>
+      <label class="f">time from file name (regex, group 1 = seconds; empty = use fps) <input id="stkRe"></label>
+      <div id="stkInfo"></div>
+      <label class="f">window note <textarea id="stkNote" rows="2"></textarea></label>
+    </section>
+  </aside>
+  <main>
+    <canvas id="cv" tabindex="0"></canvas>
+    <div id="strip"></div>
+  </main>
+</div>
+<footer id="status">Open images to start. Press ? for help.</footer>
+
+<dialog id="help">
+  <h3>Keyboard and mouse</h3>
+  <table>
+    <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></td><td>mode: CAL points / boxes / strokes</td></tr>
+    <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd> or <kbd>A</kbd> <kbd>D</kbd></td><td>previous / next image (in stroke mode: frame of the window; <kbd>Shift</kbd> = 10 frames)</td></tr>
+    <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>first / last image (frame)</td></tr>
+    <tr><td><kbd>PgUp</kbd> <kbd>PgDn</kbd></td><td>previous / next stroke window</td></tr>
+    <tr><td>wheel, <kbd>+</kbd> <kbd>-</kbd></td><td>zoom (at the cursor)</td></tr>
+    <tr><td><kbd>F</kbd> or <kbd>0</kbd></td><td>fit image to the window</td></tr>
+    <tr><td>right / middle drag, or <kbd>Space</kbd> + drag</td><td>pan</td></tr>
+    <tr><td><kbd>Tab</kbd> / <kbd>Esc</kbd></td><td>select next point or box / deselect (and leave a text field)</td></tr>
+    <tr><td><kbd>Del</kbd> <kbd>Backspace</kbd></td><td>delete the selected point or box</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>undo (current image)</td></tr>
+    <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd></td><td>save the current mode's labels as JSON (download)</td></tr>
+    <tr><td><kbd>P</kbd> <kbd>K</kbd></td><td>boxes: class person / forklift (selected box and new boxes)</td></tr>
+    <tr><td><kbd>C</kbd></td><td>boxes: mark this frame checked / unchecked; strokes: mark this window checked (needed to save a window with 0 strokes)</td></tr>
+    <tr><td><kbd>S</kbd> or <kbd>Enter</kbd></td><td>strokes: toggle a stroke on the current frame</td></tr>
+    <tr><td><kbd>Enter</kbd> in a text field</td><td>back to the image</td></tr>
+  </table>
+  <p class="muted">Labels are also kept in this browser (localStorage) and come back when you reopen the same images.
+    They never leave this computer unless you save the JSON.</p>
+  <form method="dialog"><button>Close</button></form>
+</dialog>
+
+<script>
+"use strict";
+(function () {
+  const TOOL = "intercycle-labeller/1";
+  const COORDS = "continuous image pixels of the original image, origin at the top-left image corner; " +
+                 "centre of pixel column i is i+0.5 (subtract 0.5 for OpenCV pixel-centre coordinates)";
+  const CLASSES = ["person", "forklift"];
+  const LS_KEY = "intercycle_labeller_v1";
+  const DEFAULT_RE = "(?:^|[_\\-])t(\\d+(?:\\.\\d+)?)";
+  const HIT_PX = 9, HANDLE_PX = 7;
+
+  // ---------------------------------------------------------------------------------------------------- state
+  const S = {
+    mode: "cal",
+    images: [],         // {key, name, group, url, w, h, img}
+    idx: -1,
+    view: { s: 1, ox: 0, oy: 0 },
+    cal: {},            // image key -> {framing_id, points: [{u, v, x_m, y_m, relation}], note}
+    box: {},            // image key -> {boxes: [{x0, y0, x1, y1, cls, src, edited}], checked, checked_at, note, deleted_imported}
+    stroke: {},         // group -> {window_id, fps, t0_s, regex, strokes: [image key], note}
+    sel: -1,
+    cls: "person",
+    undo: [],
+    space: false,
+    drag: null,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const cv = $("cv"), ctx = cv.getContext("2d");
+  const basename = (p) => String(p).split(/[\\/]/).pop();
+  const dirname = (p) => { const a = String(p).split(/[\\/]/); a.pop(); return a.join("/"); };
+  const natCmp = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const nowIso = () => new Date().toISOString();
+  const cur = () => (S.idx >= 0 ? S.images[S.idx] : null);
+  const status = (msg) => { $("status").textContent = msg; };
+
+  // ---------------------------------------------------------------------------------------------------- persistence
+  let saveTimer = null;
+  function persist() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try { localStorage.setItem(LS_KEY, JSON.stringify({ cal: S.cal, box: S.box, stroke: S.stroke, cls: S.cls })); }
+      catch (e) { /* private window or quota: labels still live in memory and in the saved JSON */ }
+    }, 250);
+  }
+  function restore() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      S.cal = d.cal || {}; S.box = d.box || {}; S.stroke = d.stroke || {};
+      if (CLASSES.includes(d.cls)) S.cls = d.cls;
+    } catch (e) { /* ignore */ }
+  }
+
+  // Record lookup: exact key first, else a unique record whose basename matches (labels saved from a folder, images
+  // opened as plain files, or the reverse); the record is then moved to this image's key.
+  function findRec(store, im, create, init) {
+    if (store[im.key]) return store[im.key];
+    const hits = Object.keys(store).filter((k) => basename(k) === im.name);
+    if (hits.length === 1) { store[im.key] = store[hits[0]]; delete store[hits[0]]; return store[im.key]; }
+    if (!create) return null;
+    store[im.key] = init();
+    return store[im.key];
+  }
+  const calRec = (im, create) => findRec(S.cal, im, create, () => ({ framing_id: im.name.replace(/\.[^.]+$/, ""), points: [], note: "" }));
+  const boxRec = (im, create) => findRec(S.box, im, create, () => ({ boxes: [], checked: false, checked_at: null, note: "", deleted_imported: 0 }));
+  function stkRec(group) {
+    if (!S.stroke[group]) {
+      S.stroke[group] = { window_id: basename(group) || "window", fps: 12, t0_s: 0, regex: DEFAULT_RE, strokes: [], note: "", checked: false, checked_at: null };
+    }
+    return S.stroke[group];
+  }
+
+  function pushUndo() {
+    const im = cur();
+    if (!im) return;
+    const snap = S.mode === "cal" ? S.cal[im.key] : S.mode === "box" ? S.box[im.key] : S.stroke[im.group];
+    S.undo.push({ mode: S.mode, key: S.mode === "stroke" ? im.group : im.key, snap: snap ? JSON.stringify(snap) : null });
+    if (S.undo.length > 200) S.undo.shift();
+  }
+  function undo() {
+    const u = S.undo.pop();
+    if (!u) { status("Nothing to undo."); return; }
+    const store = u.mode === "cal" ? S.cal : u.mode === "box" ? S.box : S.stroke;
+    if (u.snap === null) delete store[u.key]; else store[u.key] = JSON.parse(u.snap);
+    S.sel = -1;
+    persist(); refresh();
+    status("Undone.");
+  }
+
+  // ---------------------------------------------------------------------------------------------------- images
+  async function addFiles(files) {
+    const imgs = Array.from(files).filter((f) => /^image\//.test(f.type) || /\.(png|jpe?g|bmp|webp|gif)$/i.test(f.name));
+    if (!imgs.length) { status("No image files in the selection."); return; }
+    const known = new Set(S.images.map((i) => i.key));
+    for (const f of imgs) {
+      const key = f.webkitRelativePath || f.name;
+      if (known.has(key)) continue;
+      known.add(key);
+      S.images.push({ key, name: f.name, group: dirname(key) || "(all)", url: URL.createObjectURL(f), w: 0, h: 0, img: null });
+    }
+    S.images.sort((a, b) => natCmp(a.key, b.key));
+    status(`${S.images.length} images loaded.`);
+    if (S.idx < 0) await goto(0, true); else refresh();
+  }
+  function loadImg(im) {
+    if (im.img) return Promise.resolve(im.img);
+    return new Promise((res, rej) => {
+      const el = new Image();
+      el.onload = () => { im.img = el; im.w = el.naturalWidth; im.h = el.naturalHeight; res(el); };
+      el.onerror = () => rej(new Error("cannot decode " + im.key));
+      el.src = im.url;
+    });
+  }
+  async function goto(i, forceFit) {
+    if (!S.images.length) return;
+    i = Math.max(0, Math.min(S.images.length - 1, i));
+    const prev = cur();
+    S.idx = i;
+    S.sel = -1;
+    const im = cur();
+    try { await loadImg(im); } catch (e) { status(e.message); return; }
+    const keepView = !forceFit && S.mode === "stroke" && prev && prev.group === im.group && prev.w === im.w && prev.h === im.h;
+    if (!keepView) fit();
+    refresh();
+  }
+  function groupFrames(group) { return S.images.map((im, i) => ({ im, i })).filter((o) => o.im.group === group); }
+  function stepFrame(d) {
+    const im = cur();
+    if (!im) return;
+    if (S.mode !== "stroke") { goto(S.idx + d); return; }
+    const fr = groupFrames(im.group);
+    const p = fr.findIndex((o) => o.i === S.idx);
+    const q = Math.max(0, Math.min(fr.length - 1, p + d));
+    goto(fr[q].i);
+  }
+  function groups() { return [...new Set(S.images.map((i) => i.group))].sort(natCmp); }
+  function stepGroup(d) {
+    const im = cur();
+    if (!im) return;
+    const g = groups();
+    const k = Math.max(0, Math.min(g.length - 1, g.indexOf(im.group) + d));
+    goto(S.images.findIndex((x) => x.group === g[k]), true);
+  }
+
+  // ---------------------------------------------------------------------------------------------------- view
+  function canvasSize() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    return { w, h, dpr };
+  }
+  function fit() {
+    const im = cur();
+    if (!im || !im.w) return;
+    const { w, h } = canvasSize();
+    const s = Math.min(w / im.w, h / im.h) * 0.98;
+    S.view = { s, ox: (w - im.w * s) / 2, oy: (h - im.h * s) / 2 };
+  }
+  function zoomAt(f, sx, sy) {
+    const v = S.view;
+    const ns = Math.max(0.05, Math.min(64, v.s * f));
+    v.ox = sx - (sx - v.ox) * (ns / v.s);
+    v.oy = sy - (sy - v.oy) * (ns / v.s);
+    v.s = ns;
+    draw();
+  }
+  const toImg = (sx, sy) => [(sx - S.view.ox) / S.view.s, (sy - S.view.oy) / S.view.s];
+  const toScr = (u, v) => [u * S.view.s + S.view.ox, v * S.view.s + S.view.oy];
+
+  // ---------------------------------------------------------------------------------------------------- drawing
+  function draw() {
+    const { w, h, dpr } = canvasSize();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const im = cur();
+    if (!im || !im.img) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = "#9aa1ab"; ctx.font = "15px system-ui";
+      ctx.fillText("Open images (or a folder) to start.  ? = help", 20, 30);
+      return;
+    }
+    const v = S.view;
+    ctx.setTransform(dpr * v.s, 0, 0, dpr * v.s, dpr * v.ox, dpr * v.oy);
+    ctx.imageSmoothingEnabled = v.s < 2;
+    ctx.drawImage(im.img, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);       // overlays in screen pixels
+    if (S.mode === "cal") drawCal(im);
+    else if (S.mode === "box") drawBoxes(im);
+    else drawStroke(im);
+  }
+  function drawCal(im) {
+    const rec = calRec(im, false);
+    if (!rec) return;
+    ctx.font = "bold 13px system-ui";
+    rec.points.forEach((p, i) => {
+      const [x, y] = toScr(p.u, p.v);
+      const sel = i === S.sel;
+      ctx.strokeStyle = sel ? "#ffffff" : "#ffeb3b";
+      ctx.lineWidth = sel ? 2 : 1.5;
+      ctx.beginPath(); ctx.moveTo(x - 10, y); ctx.lineTo(x + 10, y); ctx.moveTo(x, y - 10); ctx.lineTo(x, y + 10); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.stroke();
+      const hasXY = isNum(p.x_m) && isNum(p.y_m);
+      const label = `p${i + 1}` + (hasXY ? ` (${p.x_m}, ${p.y_m})` : p.relation ? " (rel)" : "");
+      ctx.fillStyle = "rgba(0,0,0,.6)";
+      ctx.fillRect(x + 8, y - 22, ctx.measureText(label).width + 6, 16);
+      ctx.fillStyle = hasXY || p.relation ? "#ffeb3b" : "#ff5d5d";
+      ctx.fillText(label, x + 11, y - 9);
+    });
+  }
+  function drawBoxes(im) {
+    const rec = boxRec(im, false);
+    if (rec) {
+      rec.boxes.forEach((b, i) => {
+        const [x0, y0] = toScr(b.x0, b.y0), [x1, y1] = toScr(b.x1, b.y1);
+        const col = b.cls === "forklift" ? "#ffb547" : "#4ea1ff";
+        ctx.strokeStyle = col; ctx.lineWidth = i === S.sel ? 2.5 : 1.5;
+        ctx.setLineDash(b.src === "import" && !b.edited ? [6, 3] : []);
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.setLineDash([]);
+        ctx.font = "12px system-ui";
+        const t = `${i + 1} ${b.cls}`;
+        ctx.fillStyle = col; ctx.fillRect(x0, y0 - 15, ctx.measureText(t).width + 6, 15);
+        ctx.fillStyle = "#000"; ctx.fillText(t, x0 + 3, y0 - 3);
+        if (i === S.sel) handles(b).forEach(([hx, hy]) => { const [sx, sy] = toScr(hx, hy); ctx.fillStyle = "#fff"; ctx.fillRect(sx - 4, sy - 4, 8, 8); });
+      });
+      if (rec.checked) {
+        ctx.font = "bold 13px system-ui"; ctx.fillStyle = "#4cd18a";
+        ctx.fillText("CHECKED", 10, 20);
+      }
+    }
+    const d = S.drag;
+    if (d && d.kind === "new") {
+      const [x0, y0] = toScr(Math.min(d.u0, d.u1), Math.min(d.v0, d.v1)), [x1, y1] = toScr(Math.max(d.u0, d.u1), Math.max(d.v0, d.v1));
+      ctx.strokeStyle = S.cls === "forklift" ? "#ffb547" : "#4ea1ff"; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0); ctx.setLineDash([]);
+    }
+  }
+  function drawStroke(im) {
+    const rec = stkRec(im.group);
+    const fr = groupFrames(im.group);
+    const p = fr.findIndex((o) => o.i === S.idx);
+    const times = frameTimes(im.group);
+    const isStk = rec.strokes.includes(im.key);
+    ctx.font = "bold 14px system-ui";
+    const t = `frame ${p + 1}/${fr.length}   t = ${times.t[p].toFixed(3)} s` + (isStk ? "   STROKE" : "");
+    ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(6, 6, ctx.measureText(t).width + 12, 22);
+    ctx.fillStyle = isStk ? "#ff5d5d" : "#e6e8eb"; ctx.fillText(t, 12, 22);
+    if (isStk) { ctx.strokeStyle = "#ff5d5d"; ctx.lineWidth = 4; ctx.strokeRect(2, 2, cv.clientWidth - 4, cv.clientHeight - 4); }
+  }
+  const isNum = (x) => typeof x === "number" && isFinite(x);
+  function handles(b) {
+    const xm = (b.x0 + b.x1) / 2, ym = (b.y0 + b.y1) / 2;
+    return [[b.x0, b.y0], [xm, b.y0], [b.x1, b.y0], [b.x1, ym], [b.x1, b.y1], [xm, b.y1], [b.x0, b.y1], [b.x0, ym]];
+  }
+
+  // stroke-window frame times: from the file name (regex group 1 = seconds) when every frame matches, else t0 + i / fps
+  function frameTimes(group) {
+    const rec = stkRec(group);
+    const fr = groupFrames(group);
+    let re = null;
+    if (rec.regex) { try { re = new RegExp(rec.regex); } catch (e) { re = null; } }
+    if (re) {
+      const t = fr.map((o) => { const m = o.im.name.match(re); return m && m[1] !== undefined ? parseFloat(m[1]) : NaN; });
+      if (t.length && t.every(isFinite)) return { t, from: "filename" };
+    }
+    const fps = rec.fps > 0 ? rec.fps : 12;
+    const t0 = isNum(rec.t0_s) ? rec.t0_s : 0;
+    return { t: fr.map((_, i) => t0 + i / fps), from: "fps" };
+  }
+
+  // ---------------------------------------------------------------------------------------------------- side panels
+  function refresh() {
+    document.querySelectorAll("#modes button").forEach((b) => b.classList.toggle("on", b.dataset.mode === S.mode));
+    $("panelCal").classList.toggle("hidden", S.mode !== "cal");
+    $("panelBox").classList.toggle("hidden", S.mode !== "box");
+    $("panelStroke").classList.toggle("hidden", S.mode !== "stroke");
+    $("strip").style.display = S.mode === "stroke" && S.images.length ? "block" : "none";
+    renderList();
+    const im = cur();
+    if (S.mode === "cal") renderCal(im);
+    else if (S.mode === "box") renderBox(im);
+    else renderStroke(im);
+    draw();
+  }
+  function renderList() {
+    const ol = $("imgList");
+    $("imgCount").textContent = S.images.length ? `${S.idx + 1}/${S.images.length}` : "";
+    const frag = document.createDocumentFragment();
+    S.images.forEach((im, i) => {
+      const li = document.createElement("li");
+      let tag = "", done = false;
+      if (S.mode === "cal") { const r = calRec(im, false); if (r) { tag = `${r.points.length} pts`; done = r.points.length >= 4; } }
+      else if (S.mode === "box") { const r = boxRec(im, false); if (r) { tag = `${r.boxes.length} box` + (r.checked ? " ✓" : ""); done = r.checked; } }
+      else { const r = S.stroke[im.group]; if (r && r.strokes.includes(im.key)) { tag = "stroke"; done = true; } }
+      li.innerHTML = `<span class="tag"></span>`;
+      li.querySelector(".tag").textContent = tag;
+      li.appendChild(document.createTextNode(im.key));
+      li.title = im.key;
+      if (i === S.idx) li.className = "cur";
+      if (done) li.classList.add("done");
+      li.onclick = () => goto(i, true);
+      frag.appendChild(li);
+    });
+    ol.replaceChildren(frag);
+    const c = ol.querySelector(".cur");
+    if (c) c.scrollIntoView({ block: "nearest" });
+  }
+  function renderCal(im) {
+    const tb = $("calRows");
+    tb.replaceChildren();
+    if (!im) return;
+    const rec = calRec(im, false);
+    $("calFraming").value = rec ? rec.framing_id : im.name.replace(/\.[^.]+$/, "");
+    $("calNote").value = rec ? rec.note : "";
+    const pts = rec ? rec.points : [];
+    pts.forEach((p, i) => {
+      const tr = document.createElement("tr");
+      if (i === S.sel) tr.className = "sel";
+      tr.innerHTML = `<td>p${i + 1}</td><td>${r2(p.u)}, ${r2(p.v)}</td><td><input data-i="${i}" data-f="x_m"></td><td><input data-i="${i}" data-f="y_m"></td>`;
+      tr.querySelector('[data-f="x_m"]').value = isNum(p.x_m) ? p.x_m : "";
+      tr.querySelector('[data-f="y_m"]').value = isNum(p.y_m) ? p.y_m : "";
+      tr.onclick = (e) => { if (e.target.tagName !== "INPUT") { S.sel = i; refresh(); } };
+      tb.appendChild(tr);
+    });
+    tb.querySelectorAll("input").forEach((inp) => {
+      inp.onfocus = () => { if (S.sel !== +inp.dataset.i) { S.sel = +inp.dataset.i; $("calRel").value = pts[S.sel].relation || ""; draw(); } };
+      inp.onchange = () => {
+        const r = calRec(im, true); pushUndo();
+        const v = inp.value.trim() === "" ? null : Number(inp.value.replace(",", "."));
+        r.points[+inp.dataset.i][inp.dataset.f] = v === null || isFinite(v) ? v : null;
+        persist(); draw(); renderCalCheck(r); renderList();
+      };
+    });
+    $("calRel").value = S.sel >= 0 && pts[S.sel] ? pts[S.sel].relation || "" : "";
+    $("calRel").disabled = !(S.sel >= 0 && pts[S.sel]);
+    renderCalCheck(rec);
+  }
+  function renderCalCheck(rec) {
+    const el = $("calCheck");
+    const pts = rec ? rec.points : [];
+    const missing = pts.filter((p) => !(isNum(p.x_m) && isNum(p.y_m)) && !(p.relation || "").trim()).length;
+    const msgs = [];
+    msgs.push(pts.length >= 4 ? `<span class="okc">${pts.length} points</span>` : `<span class="warn">${pts.length}/4 points</span>`);
+    if (missing) msgs.push(`<span class="warn">${missing} point(s) without coordinates or relation</span>`);
+    const dup = rec ? Object.entries(S.cal).filter(([, r]) => r !== rec && r.framing_id === rec.framing_id && r.points.length).length : 0;
+    if (dup) msgs.push(`<span class="bad">framing_id also used on another image</span>`);
+    el.innerHTML = msgs.join(" · ");
+  }
+  function renderBox(im) {
+    $("clsPerson").classList.toggle("on", S.cls === "person");
+    $("clsForklift").classList.toggle("on", S.cls === "forklift");
+    const rec = im ? boxRec(im, false) : null;
+    $("boxNote").value = rec ? rec.note : "";
+    if (!im) { $("boxInfo").textContent = ""; return; }
+    const n = rec ? rec.boxes.length : 0;
+    const nImp = rec ? rec.boxes.filter((b) => b.src === "import").length : 0;
+    const nEd = rec ? rec.boxes.filter((b) => b.src === "import" && b.edited).length : 0;
+    const sel = rec && S.sel >= 0 && rec.boxes[S.sel] ? rec.boxes[S.sel] : null;
+    $("boxInfo").innerHTML =
+      `<p>${n} box(es); imported ${nImp}, edited ${nEd}, imported deleted ${rec ? rec.deleted_imported || 0 : 0}. ` +
+      (rec && rec.checked ? `<span class="okc">checked ${rec.checked_at || ""}</span>` : `<span class="warn">not checked</span>`) + "</p>" +
+      (sel ? `<p>selected ${S.sel + 1}: ${sel.cls} [${r2(sel.x0)}, ${r2(sel.y0)}, ${r2(sel.x1)}, ${r2(sel.y1)}]</p>` : "");
+  }
+  function renderStroke(im) {
+    const sel = $("stkGroup");
+    const gs = groups();
+    sel.replaceChildren(...gs.map((g) => { const o = document.createElement("option"); o.value = g; o.textContent = g; return o; }));
+    const strip = $("strip");
+    if (!im) { strip.replaceChildren(); $("stkInfo").textContent = ""; return; }
+    sel.value = im.group;
+    const rec = stkRec(im.group);
+    $("stkId").value = rec.window_id;
+    $("stkFps").value = rec.fps;
+    $("stkT0").value = rec.t0_s;
+    $("stkRe").value = rec.regex;
+    $("stkNote").value = rec.note;
+    const fr = groupFrames(im.group);
+    const tt = frameTimes(im.group);
+    const order = fr.map((o) => o.im.key);
+    const stk = rec.strokes.filter((k) => order.includes(k)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    $("stkInfo").innerHTML = `<p>${fr.length} frames, times from <b>${tt.from}</b>` +
+      (fr.length ? ` (${tt.t[0].toFixed(3)}-${tt.t[tt.t.length - 1].toFixed(3)} s)` : "") + `; <b>${stk.length}</b> stroke(s)` +
+      (stk.length ? ": " + stk.map((k) => tt.t[order.indexOf(k)].toFixed(2)).join(", ") + " s" : "") + "</p>" +
+      (rec.checked ? `<p class="okc">window checked ${rec.checked_at || ""}</p>` : `<p class="warn">window not checked (C)</p>`);
+    // strip (rebuilt only when the window changes; classes updated otherwise)
+    if (strip.dataset.group !== im.group || strip.children.length !== fr.length) {
+      strip.dataset.group = im.group;
+      const frag = document.createDocumentFragment();
+      fr.forEach((o, j) => {
+        const d = document.createElement("div");
+        d.className = "fr"; d.dataset.i = o.i;
+        const img = document.createElement("img");
+        img.loading = "lazy"; img.src = o.im.url; img.alt = o.im.name; img.draggable = false;
+        const cap = document.createElement("div"); cap.className = "cap";
+        cap.textContent = `${j + 1} · ${tt.t[j].toFixed(2)}s`;
+        d.append(img, cap);
+        d.onclick = () => goto(o.i);
+        d.ondblclick = () => { goto(o.i).then(toggleStroke); };
+        frag.appendChild(d);
+      });
+      strip.replaceChildren(frag);
+    } else {
+      [...strip.children].forEach((d, j) => { d.querySelector(".cap").textContent = `${j + 1} · ${tt.t[j].toFixed(2)}s`; });
+    }
+    [...strip.children].forEach((d) => {
+      const im2 = S.images[+d.dataset.i];
+      d.classList.toggle("cur", +d.dataset.i === S.idx);
+      d.classList.toggle("stk", rec.strokes.includes(im2.key));
+    });
+    const c = strip.querySelector(".fr.cur");
+    if (c) c.scrollIntoView({ block: "nearest", inline: "center" });
+  }
+
+  // ---------------------------------------------------------------------------------------------------- edits
+  function toggleStroke() {
+    const im = cur();
+    if (!im || S.mode !== "stroke") return;
+    pushUndo();
+    const rec = stkRec(im.group);
+    const k = rec.strokes.indexOf(im.key);
+    if (k >= 0) rec.strokes.splice(k, 1); else rec.strokes.push(im.key);
+    persist(); refresh();
+  }
+  function deleteSel() {
+    const im = cur();
+    if (!im || S.sel < 0) return;
+    if (S.mode === "cal") {
+      const r = calRec(im, false); if (!r || !r.points[S.sel]) return;
+      pushUndo(); r.points.splice(S.sel, 1);
+    } else if (S.mode === "box") {
+      const r = boxRec(im, false); if (!r || !r.boxes[S.sel]) return;
+      pushUndo();
+      if (r.boxes[S.sel].src === "import") r.deleted_imported = (r.deleted_imported || 0) + 1;
+      r.boxes.splice(S.sel, 1);
+    } else return;
+    S.sel = -1; persist(); refresh();
+  }
+  function cycleSel(d) {
+    const im = cur();
+    if (!im) return;
+    const n = S.mode === "cal" ? (calRec(im, false) || { points: [] }).points.length : S.mode === "box" ? (boxRec(im, false) || { boxes: [] }).boxes.length : 0;
+    if (!n) return;
+    S.sel = ((S.sel < 0 ? (d > 0 ? -1 : 0) : S.sel) + d + n) % n;
+    refresh();
+  }
+  function setCls(c) {
+    S.cls = c;
+    const im = cur();
+    if (im && S.mode === "box" && S.sel >= 0) {
+      const r = boxRec(im, false);
+      if (r && r.boxes[S.sel] && r.boxes[S.sel].cls !== c) { pushUndo(); r.boxes[S.sel].cls = c; r.boxes[S.sel].edited = true; }
+    }
+    persist(); refresh();
+  }
+  function toggleChecked() {
+    const im = cur();
+    if (!im || S.mode === "cal") return;
+    pushUndo();
+    const r = S.mode === "box" ? boxRec(im, true) : stkRec(im.group);
+    r.checked = !r.checked;
+    r.checked_at = r.checked ? nowIso() : null;
+    persist(); refresh();
+    const what = S.mode === "box" ? im.key : `window ${r.window_id}`;
+    status(r.checked ? `${what} marked checked.` : `${what} unchecked.`);
+  }
+
+  // ---------------------------------------------------------------------------------------------------- mouse
+  function evPos(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+  function hitPoint(rec, sx, sy) {
+    let best = -1, bd = HIT_PX;
+    rec.points.forEach((p, i) => { const [x, y] = toScr(p.u, p.v); const d = Math.hypot(x - sx, y - sy); if (d <= bd) { bd = d; best = i; } });
+    return best;
+  }
+  function hitHandle(b, sx, sy) {
+    const hs = handles(b);
+    for (let k = 0; k < hs.length; k++) { const [x, y] = toScr(hs[k][0], hs[k][1]); if (Math.abs(x - sx) <= HANDLE_PX && Math.abs(y - sy) <= HANDLE_PX) return k; }
+    return -1;
+  }
+  function hitBox(rec, u, v) {
+    let best = -1, ba = Infinity;
+    rec.boxes.forEach((b, i) => { if (u >= b.x0 && u <= b.x1 && v >= b.y0 && v <= b.y1) { const a = (b.x1 - b.x0) * (b.y1 - b.y0); if (a < ba) { ba = a; best = i; } } });
+    return best;
+  }
+  const clampU = (im, u) => Math.max(0, Math.min(im.w, u));
+  const clampV = (im, v) => Math.max(0, Math.min(im.h, v));
+
+  cv.addEventListener("contextmenu", (e) => e.preventDefault());
+  // focus is managed by hand (pointerdown focuses the canvas or a field); the browser's mousedown default would
+  // otherwise pull focus back to the canvas right after a new CAL point focused its x field
+  cv.addEventListener("mousedown", (e) => e.preventDefault());
+  cv.addEventListener("wheel", (e) => { e.preventDefault(); const [sx, sy] = evPos(e); zoomAt(Math.pow(1.0015, -e.deltaY), sx, sy); }, { passive: false });
+  cv.addEventListener("pointerdown", (e) => {
+    cv.focus();
+    const im = cur();
+    if (!im || !im.img) return;
+    const [sx, sy] = evPos(e);
+    cv.setPointerCapture(e.pointerId);
+    if (e.button === 1 || e.button === 2 || S.space) { S.drag = { kind: "pan", sx, sy, ox: S.view.ox, oy: S.view.oy }; return; }
+    if (e.button !== 0) return;
+    const [u, v] = toImg(sx, sy);
+    if (S.mode === "cal") {
+      const r = calRec(im, false);
+      const k = r ? hitPoint(r, sx, sy) : -1;
+      if (k >= 0) { pushUndo(); S.sel = k; S.drag = { kind: "pt", k }; refresh(); return; }
+      if (u < 0 || v < 0 || u > im.w || v > im.h) return;
+      pushUndo();
+      const rr = calRec(im, true);
+      rr.framing_id = rr.framing_id || $("calFraming").value.trim();
+      rr.points.push({ u, v, x_m: null, y_m: null, relation: "" });
+      S.sel = rr.points.length - 1;
+      persist(); refresh();
+      const inp = document.querySelector(`#calRows input[data-i="${S.sel}"][data-f="x_m"]`);
+      if (inp) inp.focus();
+    } else if (S.mode === "box") {
+      const r = boxRec(im, false);
+      if (r && S.sel >= 0 && r.boxes[S.sel]) {
+        const h = hitHandle(r.boxes[S.sel], sx, sy);
+        if (h >= 0) { pushUndo(); S.drag = { kind: "resize", k: S.sel, h }; return; }
+      }
+      const k = r ? hitBox(r, u, v) : -1;
+      if (k >= 0) {
+        pushUndo(); S.sel = k;
+        const b = r.boxes[k];
+        S.drag = { kind: "move", k, u0: u, v0: v, b0: { ...b } };
+        refresh(); return;
+      }
+      S.sel = -1;
+      S.drag = { kind: "new", u0: clampU(im, u), v0: clampV(im, v), u1: clampU(im, u), v1: clampV(im, v) };
+      refresh();
+    }
+  });
+  cv.addEventListener("pointermove", (e) => {
+    const d = S.drag, im = cur();
+    const [sx, sy] = evPos(e);
+    if (im && im.img) {
+      const [u, v] = toImg(sx, sy);
+      if (u >= 0 && v >= 0 && u <= im.w && v <= im.h) status(`${im.key}  ${im.w}x${im.h}  u=${u.toFixed(1)} v=${v.toFixed(1)}  zoom ${(S.view.s * 100).toFixed(0)} %`);
+    }
+    if (!d || !im) return;
+    if (d.kind === "pan") { S.view.ox = d.ox + sx - d.sx; S.view.oy = d.oy + sy - d.sy; draw(); return; }
+    const [u, v] = toImg(sx, sy);
+    if (d.kind === "pt") {
+      const p = calRec(im, false).points[d.k];
+      p.u = clampU(im, u); p.v = clampV(im, v); d.moved = true; draw();
+    } else if (d.kind === "new") {
+      d.u1 = clampU(im, u); d.v1 = clampV(im, v); draw();
+    } else if (d.kind === "move") {
+      const b = boxRec(im, false).boxes[d.k];
+      const w = d.b0.x1 - d.b0.x0, h = d.b0.y1 - d.b0.y0;
+      const nx = Math.max(0, Math.min(im.w - w, d.b0.x0 + u - d.u0)), ny = Math.max(0, Math.min(im.h - h, d.b0.y0 + v - d.v0));
+      b.x0 = nx; b.y0 = ny; b.x1 = nx + w; b.y1 = ny + h; d.moved = true; draw();
+    } else if (d.kind === "resize") {
+      const b = boxRec(im, false).boxes[d.k];
+      const cu = clampU(im, u), cvv = clampV(im, v);
+      if ([0, 6, 7].includes(d.h)) b.x0 = cu;
+      if ([2, 3, 4].includes(d.h)) b.x1 = cu;
+      if ([0, 1, 2].includes(d.h)) b.y0 = cvv;
+      if ([4, 5, 6].includes(d.h)) b.y1 = cvv;
+      d.moved = true; draw();
+    }
+  });
+  function endDrag() {
+    const d = S.drag, im = cur();
+    S.drag = null;
+    if (!d || !im) return;
+    if (d.kind === "new") {
+      const x0 = Math.min(d.u0, d.u1), x1 = Math.max(d.u0, d.u1), y0 = Math.min(d.v0, d.v1), y1 = Math.max(d.v0, d.v1);
+      if (x1 - x0 >= 2 && y1 - y0 >= 2) {
+        pushUndo();
+        const r = boxRec(im, true);
+        r.boxes.push({ x0, y0, x1, y1, cls: S.cls, src: "user", edited: false });
+        S.sel = r.boxes.length - 1;
+        persist();
+      }
+      refresh();
+    } else if (d.kind === "resize" || d.kind === "move") {
+      const b = boxRec(im, false).boxes[d.k];
+      const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1), y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+      Object.assign(b, { x0, x1, y0, y1 });
+      if (d.moved) { if (b.src === "import") b.edited = true; persist(); } else S.undo.pop();
+      refresh();
+    } else if (d.kind === "pt") {
+      if (d.moved) persist(); else S.undo.pop();
+      refresh();
+    }
+  }
+  cv.addEventListener("pointerup", endDrag);
+  cv.addEventListener("pointercancel", endDrag);
+  window.addEventListener("resize", () => draw());
+
+  // ---------------------------------------------------------------------------------------------------- keyboard
+  function inField(e) { const t = e.target; return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT"); }
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); exportMode(S.mode); return; }
+    if (inField(e)) {
+      if (e.key === "Escape" || (e.key === "Enter" && e.target.tagName !== "TEXTAREA")) { e.target.blur(); cv.focus(); e.preventDefault(); }
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); return; }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    const handled = () => e.preventDefault();
+    if (k === "1") { setMode("cal"); return handled(); }
+    if (k === "2") { setMode("box"); return handled(); }
+    if (k === "3") { setMode("stroke"); return handled(); }
+    if (k === "ArrowRight" || k === "d" || k === "D") { stepFrame(e.shiftKey ? 10 : 1); return handled(); }
+    if (k === "ArrowLeft" || k === "a" || k === "A") { stepFrame(e.shiftKey ? -10 : -1); return handled(); }
+    if (k === "Home") { stepFrame(-1e9); return handled(); }
+    if (k === "End") { stepFrame(1e9); return handled(); }
+    if (k === "PageDown") { stepGroup(1); return handled(); }
+    if (k === "PageUp") { stepGroup(-1); return handled(); }
+    if (k === "f" || k === "F" || k === "0") { fit(); draw(); return handled(); }
+    if (k === "+" || k === "=") { zoomAt(1.25, cv.clientWidth / 2, cv.clientHeight / 2); return handled(); }
+    if (k === "-" || k === "_") { zoomAt(0.8, cv.clientWidth / 2, cv.clientHeight / 2); return handled(); }
+    if (k === "Tab") { cycleSel(e.shiftKey ? -1 : 1); return handled(); }
+    if (k === "Escape") { S.sel = -1; refresh(); return handled(); }
+    if (k === "Delete" || k === "Backspace") { deleteSel(); return handled(); }
+    if (k === "?") { $("help").showModal(); return handled(); }
+    if (k === " ") { S.space = true; cv.style.cursor = "grab"; return handled(); }
+    if (S.mode === "box") {
+      if (k === "p" || k === "P") { setCls("person"); return handled(); }
+      if (k === "k" || k === "K") { setCls("forklift"); return handled(); }
+      if (k === "c" || k === "C") { toggleChecked(); return handled(); }
+    }
+    if (S.mode === "stroke" && (k === "s" || k === "S" || k === "Enter")) { toggleStroke(); return handled(); }
+    if (S.mode === "stroke" && (k === "c" || k === "C")) { toggleChecked(); return handled(); }
+  });
+  document.addEventListener("keyup", (e) => { if (e.key === " ") { S.space = false; cv.style.cursor = "crosshair"; } });
+
+  function setMode(m) {
+    S.mode = m; S.sel = -1; S.drag = null;
+    if (cur()) fit();
+    refresh();
+  }
+
+  // ---------------------------------------------------------------------------------------------------- side-panel inputs
+  $("calFraming").addEventListener("change", () => {
+    const im = cur(); if (!im) return;
+    pushUndo(); calRec(im, true).framing_id = $("calFraming").value.trim(); persist(); refresh();
+  });
+  $("calRel").addEventListener("input", () => {
+    const im = cur(); if (!im) return;
+    const r = calRec(im, false); if (!r || !r.points[S.sel]) return;
+    r.points[S.sel].relation = $("calRel").value; persist(); renderCalCheck(r); draw();
+  });
+  $("calNote").addEventListener("input", () => { const im = cur(); if (im) { calRec(im, true).note = $("calNote").value; persist(); } });
+  $("boxNote").addEventListener("input", () => { const im = cur(); if (im) { boxRec(im, true).note = $("boxNote").value; persist(); } });
+  $("clsPerson").onclick = () => setCls("person");
+  $("clsForklift").onclick = () => setCls("forklift");
+  $("btnChecked").onclick = () => toggleChecked();
+  $("stkGroup").addEventListener("change", () => { const g = $("stkGroup").value; goto(S.images.findIndex((x) => x.group === g), true); });
+  const stkField = (id, f, parse) => $(id).addEventListener("change", () => {
+    const im = cur(); if (!im) return;
+    pushUndo(); stkRec(im.group)[f] = parse($(id).value); persist(); refresh();
+  });
+  stkField("stkId", "window_id", (v) => v.trim());
+  stkField("stkFps", "fps", (v) => { const x = Number(v); return x > 0 ? x : 12; });
+  stkField("stkT0", "t0_s", (v) => { const x = Number(v); return isFinite(x) ? x : 0; });
+  stkField("stkRe", "regex", (v) => v);
+  $("stkNote").addEventListener("input", () => { const im = cur(); if (im) { stkRec(im.group).note = $("stkNote").value; persist(); } });
+  document.querySelectorAll("#modes button").forEach((b) => (b.onclick = () => setMode(b.dataset.mode)));
+  $("fileImages").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+  $("fileDir").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+  $("fileJson").addEventListener("change", async (e) => {
+    for (const f of e.target.files) { try { importObj(JSON.parse(await f.text()), f.name); } catch (err) { status(`${f.name}: ${err.message}`); } }
+    e.target.value = "";
+  });
+  $("btnExport").onclick = () => exportMode(S.mode);
+  $("btnHelp").onclick = () => $("help").showModal();
+  $("btnClear").onclick = () => {
+    if (!confirm("Forget every CAL point, box and stroke kept in this browser? (Save JSON first.)")) return;
+    S.cal = {}; S.box = {}; S.stroke = {}; S.undo = []; S.sel = -1; persist(); refresh();
+  };
+
+  // ---------------------------------------------------------------------------------------------------- export / import
+  function imgMeta(key) { const im = S.images.find((i) => i.key === key); return im ? { image_w: im.w || null, image_h: im.h || null } : { image_w: null, image_h: null }; }
+  function buildExport(mode) {
+    const head = { tool: TOOL, created: nowIso(), coords: COORDS };
+    const warnings = [];
+    if (mode === "cal") {
+      const framings = {};
+      for (const [key, r] of Object.entries(S.cal).sort((a, b) => natCmp(a[0], b[0]))) {
+        if (!r.points.length) continue;
+        const fid = r.framing_id || basename(key).replace(/\.[^.]+$/, "");
+        if (framings[fid]) warnings.push(`framing_id ${fid} used on ${framings[fid].image} and ${key}; kept the first`);
+        else {
+          framings[fid] = {
+            image: key, ...imgMeta(key), note: r.note || "",
+            points: r.points.map((p, i) => ({ id: `p${i + 1}`, u: r2(p.u), v: r2(p.v), x_m: isNum(p.x_m) ? p.x_m : null, y_m: isNum(p.y_m) ? p.y_m : null, relation: p.relation || "" })),
+          };
+        }
+        if (r.points.length < 4) warnings.push(`${fid}: ${r.points.length} points (< 4)`);
+      }
+      return { schema: "intercycle.cal_clicks.v1", ...head, framings, warnings };
+    }
+    if (mode === "box") {
+      const images = {};
+      for (const [key, r] of Object.entries(S.box).sort((a, b) => natCmp(a[0], b[0]))) {
+        if (!r.boxes.length && !r.checked && !r.deleted_imported) continue;
+        images[key] = {
+          ...imgMeta(key), checked: !!r.checked, checked_at: r.checked_at || null, note: r.note || "", deleted_imported: r.deleted_imported || 0,
+          boxes: r.boxes.map((b) => ({ x0: r2(b.x0), y0: r2(b.y0), x1: r2(b.x1), y1: r2(b.y1), cls: b.cls, src: b.src || "user", edited: !!b.edited })),
+        };
+      }
+      return { schema: "intercycle.box_labels.v1", ...head, classes: CLASSES, images, warnings };
+    }
+    const windows = {};
+    for (const [group, r] of Object.entries(S.stroke).sort((a, b) => natCmp(a[0], b[0]))) {
+      const fr = groupFrames(group);
+      if (!r.strokes.length && !r.checked) continue;          // never reviewed: not exported (0 strokes needs C = checked)
+      if (!fr.length) { warnings.push(`window ${group}: frames not loaded, skipped`); continue; }
+      const tt = frameTimes(group);
+      const keys = fr.map((o) => o.im.key);
+      const wid = r.window_id || basename(group);
+      if (windows[wid]) { warnings.push(`window_id ${wid} repeated; kept the first`); continue; }
+      windows[wid] = {
+        group, fps: r.fps, t0_s: r.t0_s, regex: r.regex || "", times_from: tt.from, note: r.note || "", checked: !!r.checked, checked_at: r.checked_at || null,
+        frames: keys, t_s: tt.t.map((x) => Math.round(x * 1000) / 1000),
+        strokes: r.strokes.filter((k) => keys.includes(k)).map((k) => ({ frame: keys.indexOf(k), image: k, t_s: Math.round(tt.t[keys.indexOf(k)] * 1000) / 1000 }))
+          .sort((a, b) => a.frame - b.frame),
+      };
+    }
+    return { schema: "intercycle.stroke_clicks.v1", ...head, windows, warnings };
+  }
+  function exportMode(mode) {
+    const obj = buildExport(mode);
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13);
+    const name = { cal: "cal_clicks", box: "box_labels", stroke: "stroke_clicks" }[mode] + `_${stamp}.json`;
+    const blob = new Blob([JSON.stringify(obj, null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    status(`Saved ${name}` + (obj.warnings.length ? `  (warnings: ${obj.warnings.join("; ")})` : ""));
+  }
+  // Boxes from other tools are read leniently: {x0,y0,x1,y1} | {xyxy:[...]} | {bbox:[x,y,w,h]}, class in cls|class|label.
+  function normBox(b) {
+    let x0, y0, x1, y1;
+    if (isNum(b.x0)) ({ x0, y0, x1, y1 } = b);
+    else if (Array.isArray(b.xyxy)) [x0, y0, x1, y1] = b.xyxy;
+    else if (Array.isArray(b.bbox)) { const [x, y, w, h] = b.bbox; x0 = x; y0 = y; x1 = x + w; y1 = y + h; }
+    else return null;
+    if (![x0, y0, x1, y1].every(isNum)) return null;
+    let c = String(b.cls || b.class || b.label || "person").toLowerCase();
+    if (!CLASSES.includes(c)) c = "person";
+    return { x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), cls: c, src: b.src || "import", edited: !!b.edited };
+  }
+  function importObj(d, fname) {
+    let n = 0;
+    if (d.schema === "intercycle.cal_clicks.v1" || d.framings) {
+      for (const [fid, f] of Object.entries(d.framings || {})) {
+        S.cal[f.image] = { framing_id: fid, note: f.note || "", points: (f.points || []).map((p) => ({ u: +p.u, v: +p.v, x_m: isNum(p.x_m) ? p.x_m : null, y_m: isNum(p.y_m) ? p.y_m : null, relation: p.relation || "" })) };
+        n++;
+      }
+      S.mode = "cal";
+    } else if (d.schema === "intercycle.stroke_clicks.v1" || d.windows) {
+      for (const [wid, w] of Object.entries(d.windows || {})) {
+        S.stroke[w.group || wid] = { window_id: wid, fps: w.fps || 12, t0_s: w.t0_s || 0, regex: w.regex || "", note: w.note || "", checked: !!w.checked, checked_at: w.checked_at || null, strokes: (w.strokes || []).map((s) => s.image) };
+        n++;
+      }
+      S.mode = "stroke";
+    } else {
+      // box labels: {images: {key: {...}}} | {images: [{image|file, boxes}]} | [{image|file, boxes}]
+      let entries = [];
+      const imgs = Array.isArray(d) ? d : d.images;
+      if (Array.isArray(imgs)) entries = imgs.map((e) => [e.image || e.file || e.file_name, e]);
+      else if (imgs && typeof imgs === "object") entries = Object.entries(imgs);
+      for (const [key, e] of entries) {
+        if (!key) continue;
+        const boxes = (e.boxes || []).map(normBox).filter(Boolean);
+        S.box[key] = { boxes, checked: !!e.checked, checked_at: e.checked_at || null, note: e.note || "", deleted_imported: e.deleted_imported || 0 };
+        n++;
+      }
+      S.mode = "box";
+    }
+    S.undo = []; S.sel = -1; persist(); refresh();
+    status(`Imported ${n} record(s) from ${fname}.`);
+  }
+
+  // test / automation hook (no side effects)
+  window.__labeller = { state: S, buildExport, importObj, addFiles, goto, setMode, toImg, toScr };
+
+  restore();
+  refresh();
+})();
+</script>
+</body>
+</html>
