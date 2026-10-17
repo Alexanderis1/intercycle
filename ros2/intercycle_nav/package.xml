@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>intercycle_nav</name>
+  <version>0.1.0</version>
+  <description>InterCycle Nav2 configuration, observer_bridge (signed broadcast to costmap-filter masks) and timing_planner (SIPP).</description>
+  <maintainer email="noreply@example.com">InterCycle</maintainer>
+  <license>MIT</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>nav2_simple_commander</exec_depend>
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>nav2_rotation_shim_controller</exec_depend>
+  <exec_depend>nav2_mppi_controller</exec_depend>
+  <exec_depend>nav2_smac_planner</exec_depend>
+  <exec_depend>python3-nacl</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

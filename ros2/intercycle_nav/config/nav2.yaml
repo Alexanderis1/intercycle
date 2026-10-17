@@ -1,0 +1,397 @@
+# InterCycle Nav2 Humble configuration (R2, DIRECTION 5.3), started from R1's gate config (intercycle_sim/config/nav2_gate.yaml).
+#   planner      SmacPlanner2D on the static L0 map + lidar obstacle layer + observer KEEPOUT filter (+ SPEED filter)
+#   controller   RotationShimController -> MPPI (motion_model Omni, vx 0.7 / vy 0.3 / wz 1.0, batch 500 on CPU)
+#   localisation AMCL OmniMotionModel, alphas raised to 0.4 (leg/IMU odometry drifts); slam_toolbox localisation = fallback
+#   safety       collision_monitor between velocity_smoother and /cmd_vel: slowdown + stop polygons (the protective stop)
+#   footprint    ANYmal-D body + leg swing, about 1.0 x 0.64 m
+# Costmap filters (Nav2's documented mechanism) read masks published at runtime by intercycle_nav/observer_bridge:
+#   /intercycle/keepout_filter_info -> /intercycle/keepout_mask   (KeepoutFilter, global + local costmap)
+#   /intercycle/speed_filter_info   -> /intercycle/speed_mask     (SpeedFilter, percent of max speed -> /speed_limit)
+# The collision monitor needs launch/nav.launch.py (it rewires velocity_smoother -> cmd_vel_smoothed -> collision_monitor
+# -> cmd_vel). With nav2_bringup's bringup_launch.py this file still works, minus the collision monitor.
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    alpha1: 0.4
+    alpha2: 0.4
+    alpha3: 0.4
+    alpha4: 0.4
+    alpha5: 0.4
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+    scan_topic: scan
+    laser_model_type: "likelihood_field"
+    laser_max_range: 25.0
+    laser_min_range: 0.1
+    max_beams: 90
+    min_particles: 500
+    max_particles: 3000
+    pf_err: 0.05
+    pf_z: 0.99
+    sigma_hit: 0.2
+    z_hit: 0.5
+    z_rand: 0.5
+    z_max: 0.05
+    z_short: 0.05
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    do_beamskip: false
+    resample_interval: 1
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    save_pose_rate: 0.5
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.1
+    update_min_d: 0.1
+    set_initial_pose: false
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+
+bt_navigator_navigate_through_poses_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+bt_navigator_navigate_to_pose_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 15.0
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.35
+      yaw_goal_tolerance: 0.35          # face the machine at the wait / inspection pose
+    speed_limit_topic: "/speed_limit"
+    FollowPath:
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 0.785
+      forward_sampling_distance: 0.5
+      rotate_to_heading_angular_vel: 0.8
+      max_angular_accel: 2.0
+      simulate_ahead_time: 1.0
+      time_steps: 56
+      model_dt: 0.05
+      batch_size: 500
+      vx_std: 0.2
+      vy_std: 0.2
+      wz_std: 0.4
+      vx_max: 0.7
+      vx_min: -0.35
+      vy_max: 0.3
+      wz_max: 1.0
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.5
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "Omni"
+      visualize: false
+      reset_period: 1.0
+      regenerate_noises: false
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      AckermannConstraints:
+        min_turning_r: 0.2
+      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      ObstaclesCritic:
+        enabled: true
+        cost_power: 1
+        repulsion_weight: 1.5
+        critical_weight: 20.0
+        consider_footprint: false
+        collision_cost: 10000.0
+        collision_margin_distance: 0.1
+        near_goal_distance: 0.5
+        inflation_radius: 0.75
+        cost_scaling_factor: 3.0
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 3
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        forward_preference: true
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: True
+      update_frequency: 10.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width: 8
+      height: 8
+      resolution: 0.05
+      footprint: "[[0.5, 0.32], [0.5, -0.32], [-0.5, -0.32], [-0.5, 0.32]]"
+      footprint_padding: 0.02
+      transform_tolerance: 0.5
+      plugins: ["obstacle_layer", "inflation_layer"]
+      filters: ["keepout_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/intercycle/keepout_filter_info"
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+          inf_is_valid: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.75
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: True
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      footprint: "[[0.5, 0.32], [0.5, -0.32], [-0.5, -0.32], [-0.5, 0.32]]"
+      resolution: 0.1
+      track_unknown_space: true
+      transform_tolerance: 0.5
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      filters: ["keepout_filter", "speed_filter"]
+      keepout_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/intercycle/keepout_filter_info"
+      speed_filter:
+        plugin: "nav2_costmap_2d::SpeedFilter"
+        enabled: True
+        filter_info_topic: "/intercycle/speed_filter_info"
+        speed_limit_topic: "/speed_limit"
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 15.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 12.0
+          obstacle_min_range: 0.0
+          inf_is_valid: true
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.75
+      always_send_full_costmap: True
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    yaml_filename: ""
+
+map_saver:
+  ros__parameters:
+    use_sim_time: True
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: True
+
+planner_server:
+  ros__parameters:
+    use_sim_time: True
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_smac_planner/SmacPlanner2D"
+      tolerance: 0.25
+      downsample_costmap: false
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      cost_travel_multiplier: 2.0
+      use_final_approach_orientation: false
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: True
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: True
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: True
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 0.5
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.3
+    rotational_acc_lim: 2.0
+
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: True
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: True
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.7, 0.3, 1.0]
+    min_velocity: [-0.35, -0.3, -1.0]
+    max_accel: [1.2, 1.2, 2.0]
+    max_decel: [-1.5, -1.5, -2.0]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+# Protective stop (launch/nav.launch.py only): velocity_smoother -> cmd_vel_smoothed -> collision_monitor -> cmd_vel.
+# Polygons are in base_link; the footprint is +-0.50 x +-0.32 m. Advisory planning layer only: the robot's certified
+# safety scanner stays the safety function (BRIEF).
+collision_monitor:
+  ros__parameters:
+    use_sim_time: True
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    transform_tolerance: 0.5
+    source_timeout: 2.0
+    base_shift_correction: True
+    stop_pub_timeout: 2.0
+    polygons: ["PolygonStop", "PolygonSlow"]
+    PolygonStop:
+      type: "polygon"
+      points: [0.75, 0.45, 0.75, -0.45, -0.65, -0.45, -0.65, 0.45]
+      action_type: "stop"
+      max_points: 3
+      visualize: True
+      polygon_pub_topic: "polygon_stop"
+    PolygonSlow:
+      type: "polygon"
+      points: [1.3, 0.7, 1.3, -0.7, -0.9, -0.7, -0.9, 0.7]
+      action_type: "slowdown"
+      max_points: 3
+      slowdown_ratio: 0.4
+      visualize: True
+      polygon_pub_topic: "polygon_slowdown"
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "/scan"
