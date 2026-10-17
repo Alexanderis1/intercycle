@@ -17,10 +17,12 @@
 | 17 Oct ~17:15 | Modal | R1 image build (CPU builders) + bridge/Nav2 CPU test with a kinematic test double | CPU | < 0.06 | Isaac ≈ 1.51 |
 | 17 Oct ~17:30 | Modal | R1 ANYmal-D `/cmd_vel` smoke, Isaac headless physics-only | L4, ~100 s | ≈ 0.04 | Isaac ≈ 1.55 |
 
+**Lead item done (1671f9e): the learned observer replaces ShimObserver in the event sim.** Robot B's broadcast = models learned by `learn_cycles` on a separate training day (seed 99, 06:10–10:00) + `line_nowcast`/`nowcast` on the episode's own camera signal (past samples only). C uses the scenario's true models. Dev seeds 0–19 (6 h): B 39.9 insp/h, 0 trips, 0.5 holds/shift, 1.5 s lost; A 50.4 insp/h, 5.0 trips, 568 s lost; C 46.7; A0 7.6. Gain retained 99.7 %, B/C throughput 0.854. With the shim (old): B 35.5, 0.05 holds, gain 99.9 %. A/C/A0 also moved since the shim run because the layout changed (S50/S60, dock, routes) and C now uses true models; A0 now shows 0.25 trips/shift from the walkway crossing (not observer-related; to check). Fault-injection tests 10/10 pass.
+
 **Sat 20:00 checkpoint (R1): met early, ~17:30.** Modal image `intercycle-isaac-robot`: Isaac Sim 5.1, IsaacLab 2.3, torch 2.7.0 pinned, Humble + Nav2. Pretrained FLAT ANYmal-D policy. `/cmd_vel` 0.6 m/s goes through a Unix-socket lockstep bridge (Isaac py3.11 ↔ rclpy py3.10, `/clock` from Isaac). Result: 11.34 m in 20 s sim, heading drift 0.007 rad, RTF 0.78 on an L4. The CPU test double reached a 16 m Nav2 goal (SmacPlanner2D + MPPI Omni + AMCL Omni). Next: the 22:30 gate in the factory scene.
 
 ### Proposed (needs the user's OK)
-- **From the monitor session `amd-ce` (17 Oct ~17:35), relayed as user-approved; awaiting the user's direct confirmation:**
+- **APPROVED by the user directly (17 Oct ~17:40); scheduled after R3 and G are running.** From the monitor session `amd-ce`:
   1. Workstream V: a cross-camera **fused** tracker on SmartSpaces (floor point per box → per-frame cross-camera clustering → one world-frame tracker → offline tracklet stitching). L2/L3 = occupied / observed frames, unseen = UNKNOWN. HOTA + IDF1 before/after. No BEV training. ~6–8 h, Modal L4 (inside the $4 perception cap).
   2. Workstream C: a camera **placement planner** on the plant layout (≥2 views everywhere, ≥3 near machines, 40–90° ray angle, occlusion). Coverage heatmap, camera-count curve, recommended layout. CPU only, ~2–3 h.
   - Positioning notes for README/MAP_RESULTS: closest prior art Robinson et al. arXiv 2606.06762; keep "advisory"; licence traps (DUSt3R family non-commercial, etc.).
