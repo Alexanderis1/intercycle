@@ -10,6 +10,8 @@ AISLE_N, AISLE_S = 32.0, 16.0
 CROSS_X = 52.5                      # walkway across the line between S50 and S60
 SOUTH_ACCESS = {"S20", "S40", "S70"}
 TRANSFER_S = 8.0                    # skids move for this long after every line index
+WAIT_OFFSET = 0.7                   # wait point distance outside the hazard boundary (robot body fully outside)
+INSPECT_DEPTH = 1.0                 # robot centre this far inside the boundary while inspecting
 
 
 @dataclass(frozen=True)
@@ -71,13 +73,13 @@ class SiteGraph:
             x0, z0, x1, z1 = m.rect
             if m.id in SOUTH_ACCESS:
                 n, aisle = f"W_{m.id}", f"S{m.x:g}"
-                self._node(n, m.x, z0 - 0.1)
+                self._node(n, m.x, z0 - WAIT_OFFSET)
             elif m.on_line:
                 n, aisle = f"W_{m.id}", f"N{m.x:g}"
-                self._node(n, m.x, z1 + 0.1)
+                self._node(n, m.x, z1 + WAIT_OFFSET)
             else:                                       # closures cells north of the north aisle
                 n, aisle = f"W_{m.id}", f"N{m.x:g}"
-                self._node(n, m.x, z0 - 0.1)
+                self._node(n, m.x, z0 - WAIT_OFFSET)
             self._edge(aisle, n, v)
             self.targets.append(Target(m.id, "machine", n, m.id, scn.inspection.dwell_s))
         # data-hall rack rows (no machine hazard)
@@ -88,6 +90,14 @@ class SiteGraph:
                 self._node(n, x, 16.0 + r * 8.0)
                 self._edge("DH", n, v)
                 self.targets.append(Target(n, "rack", n, None, 6.0))
+
+    def inspect_pose(self, target: Target) -> tuple[float, float]:
+        """Robot centre while inspecting: INSPECT_DEPTH inside the boundary, straight in from the wait node."""
+        m = self.scn.machine(target.machine)
+        x, z = self.pos[target.node]
+        dz = 1.0 if m.z > z else -1.0
+        edge = m.rect[1] if dz > 0 else m.rect[3]
+        return x, edge + dz * INSPECT_DEPTH
 
     def mission(self) -> list[Target]:
         """One inspection tour in walking order."""

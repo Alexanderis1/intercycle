@@ -1,6 +1,6 @@
-"""Bit-exact wire layout of the two broadcast layers. Big-endian, MSB-first, no padding.
+"""Bit-exact wire layout of the three broadcast layers (slow, fast, live). Big-endian, MSB-first, no padding.
 
-Common header (12 B): magic 0x4943 "IC" 16 | version 4 (=1) | layer 4 (0 slow, 1 fast) | site_id 24 | key_id 16 | issue_time 32 (unix s)
+Common header (12 B): magic 0x4943 "IC" 16 | version 4 (=1) | layer 4 (0 slow, 1 fast, 2 live) | site_id 24 | key_id 16 | issue_time 32 (unix s)
   slow header (14 B): + zone_count 8 | machine_count 8
   fast header (16 B): + issue_ms 16 (0..999) | seq 16
 Slow body: traffic [zone][24 h] 4 bit (12 B/zone), then 8 B per machine:
@@ -8,6 +8,8 @@ Slow body: traffic [zone][24 h] 4 bit (12 B/zone), then 8 B per machine:
   | stops_per_h 4 (log) | confidence 4 | x10 flag 1 | reserved 16
 Fast body: 8 B per machine (count = body length / 8):
   index 6 | state 2 | next_idle_in 17 (ms) | next_idle_len 11 (0.1 s) | ttl 8 (2 s, floor) | confidence 4 | reserved 16
+Live header (17 B) = fast header + mover_count 8. Live body: 5 B (40 bit) per mover, at most 32 per 251 B frame:
+  track_id 8 | cls 3 | x 11 (0.1 m, 0..204.7) | z 9 (0.1 m, 0..51.1) | heading 5 (2pi/32 steps, 0 = +z, clockwise) | speed 4 (0.25 m/s, saturates 3.75)
 Signature (Ed25519, 64 B) is appended by sign.py. Fast MachineNow.seq is the layer seq (not stored per machine).
 """
 from __future__ import annotations
@@ -15,13 +17,16 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from intercycle.types import FastLayer, MachineModel, MachineNow, SlowLayer, State
+from intercycle.types import FastLayer, LiveLayer, MachineModel, MachineNow, Mover, MoverClass, SlowLayer, State
 
 MAGIC = 0x4943
 VERSION = 1
-SLOW, FAST = 0, 1
-HDR_LEN, SLOW_HDR_LEN, FAST_HDR_LEN = 12, 14, 16
-REC_LEN, ZONE_LEN, HOURS = 8, 12, 24
+SLOW, FAST, LIVE = 0, 1, 2
+HDR_LEN, SLOW_HDR_LEN, FAST_HDR_LEN, LIVE_HDR_LEN = 12, 14, 16, 17
+REC_LEN, ZONE_LEN, HOURS, MOVER_LEN = 8, 12, 24, 5
+LIVE_MAX_MOVERS = 32                     # (251 AdvData - 9 frame overhead - 64 sig - 17 header) // 5; split into more messages above this
+HEADING_STEP = 2 * math.pi / 32
+X_MAX_CODE, Z_MAX_CODE = (1 << 11) - 1, (1 << 9) - 1
 PERIOD_MAX_MS = (1 << 17) - 1            # 131.071 s; x10 flag extends to 1310.71 s at 10 ms
 IDLE_IN_MAX_MS = (1 << 17) - 1
 IDLE_LEN_MAX = (1 << 11) - 1             # x 0.1 s = 204.7 s
@@ -41,6 +46,9 @@ TOL = {
     "fast_issue_s": 1e-6,
     "next_idle_in_s": 0.0005,
     "next_idle_len_s": 0.05,
+    "mover_xz_m": 0.05,                  # positions outside 0..204.7 x 0..51.1 m clip to the edge
+    "mover_heading_rad": math.pi / 32,   # circular, 5.6 degrees
+    "mover_speed_mps": 0.125,            # in range; above 3.75 m/s saturates at 3.75, negative -> 0
     "ttl_s": 2.0,                        # one-sided: decoded in (true - 2 s, true] because ttl rounds down
 }
 
@@ -167,6 +175,31 @@ def _split_ms(t: float) -> tuple[int, int]:
     return divmod(round(t * 1000), 1000)
 
 
+def _cls_code(c: int) -> int:
+    if not 0 <= int(c) < 8:
+        raise CodecError(f"mover class {c} does not fit 3 bits")
+    return int(c)
+
+
+def _cls_val(c: int) -> MoverClass:
+    try:
+        return MoverClass(c)
+    except ValueError:
+        return MoverClass.OTHER          # unknown future class
+
+
+def heading_code(h: float) -> int:
+    return round((h % (2 * math.pi)) / HEADING_STEP) % 32
+
+
+def heading_val(c: int) -> float:
+    return c * HEADING_STEP
+
+
+def speed_code(v: float) -> int:
+    return _clip(round(v / 0.25), 0, 15)
+
+
 def quantize_model(m: MachineModel) -> MachineModel:
     """What the robot sees for this machine after a trip through the wire format."""
     return MachineModel(
@@ -181,6 +214,11 @@ def quantize_now(m: MachineNow, seq: int | None = None) -> MachineNow:
         ttl_code(m.ttl_s) * 2.0, _conf(m.confidence), m.seq if seq is None else seq)
 
 
+def quantize_mover(m: Mover) -> Mover:
+    return Mover(m.track_id & 0xFF, _cls_val(_cls_code(m.cls)), _clip(round(m.x * 10), 0, X_MAX_CODE) / 10,
+                 _clip(round(m.z * 10), 0, Z_MAX_CODE) / 10, heading_val(heading_code(m.heading)), speed_code(m.speed) * 0.25)
+
+
 def quantize_slow(s: SlowLayer) -> SlowLayer:
     return SlowLayer(s.site_id, s.key_id, float(round(s.issue_time)), [list(r) for r in s.traffic],
                      [quantize_model(m) for m in s.machines])
@@ -191,6 +229,11 @@ def quantize_fast(f: FastLayer) -> FastLayer:
     return FastLayer(f.site_id, f.key_id, sec + ms / 1000, f.seq, [quantize_now(m, f.seq) for m in f.machines])
 
 
+def quantize_live(l: LiveLayer) -> LiveLayer:
+    sec, ms = _split_ms(l.issue_time)
+    return LiveLayer(l.site_id, l.key_id, sec + ms / 1000, l.seq, [quantize_mover(m) for m in l.movers])
+
+
 # ---- sizes ---------------------------------------------------------------------------------------------
 
 def slow_len(zones: int, machines: int) -> int:
@@ -199,6 +242,10 @@ def slow_len(zones: int, machines: int) -> int:
 
 def fast_len(machines: int) -> int:
     return FAST_HDR_LEN + REC_LEN * machines
+
+
+def live_len(movers: int) -> int:
+    return LIVE_HDR_LEN + MOVER_LEN * movers
 
 
 # ---- header --------------------------------------------------------------------------------------------
@@ -319,3 +366,41 @@ def decode_fast(b: bytes) -> FastLayer:
         r.get(16)
         machines.append(MachineNow(idx, State(st), nin / 1000, nlen / 10, ttl * 2.0, conf, seq))
     return FastLayer(h.site_id, h.key_id, h.issue_s + ms / 1000, seq, machines)
+
+
+# ---- live ----------------------------------------------------------------------------------------------
+
+def encode_live(l: LiveLayer) -> bytes:
+    if len(l.movers) > LIVE_MAX_MOVERS:
+        raise CodecError(f"{len(l.movers)} movers exceed one frame ({LIVE_MAX_MOVERS}); split into separate messages")
+    sec, ms = _split_ms(l.issue_time)
+    w = BitWriter()
+    _put_hdr(w, LIVE, l.site_id, l.key_id, sec)
+    w.put(ms, 16)
+    w.put(l.seq, 16)
+    w.put(len(l.movers), 8)
+    for m in l.movers:
+        w.put(m.track_id & 0xFF, 8)
+        w.put(_cls_code(m.cls), 3)
+        w.put(_clip(round(m.x * 10), 0, X_MAX_CODE), 11)
+        w.put(_clip(round(m.z * 10), 0, Z_MAX_CODE), 9)
+        w.put(heading_code(m.heading), 5)
+        w.put(speed_code(m.speed), 4)
+    return w.to_bytes()
+
+
+def decode_live(b: bytes) -> LiveLayer:
+    r = BitReader(b)
+    h = _get_hdr(r)
+    if h.layer != LIVE:
+        raise CodecError("not a live layer")
+    ms, seq, n = r.get(16), r.get(16), r.get(8)
+    if ms > 999:
+        raise CodecError("issue_ms > 999")
+    if len(b) != live_len(n) or n > LIVE_MAX_MOVERS:
+        raise CodecError(f"live length {len(b)} != {live_len(n)} (max {LIVE_MAX_MOVERS} movers)")
+    movers = []
+    for _ in range(n):
+        tid, cls, x, z, hd, sp = r.get(8), r.get(3), r.get(11), r.get(9), r.get(5), r.get(4)
+        movers.append(Mover(tid, _cls_val(cls), x / 10, z / 10, heading_val(hd), sp * 0.25))
+    return LiveLayer(h.site_id, h.key_id, h.issue_s + ms / 1000, seq, movers)

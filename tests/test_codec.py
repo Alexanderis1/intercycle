@@ -7,7 +7,7 @@ import pytest
 from intercycle.codec import layout as L
 from intercycle.codec.sign import SIG_LEN, demo_key, keyring_from, sign, verify
 from intercycle.scenario import load
-from intercycle.types import DAY0_UNIX, FastLayer, MachineModel, MachineNow, SlowLayer, State
+from intercycle.types import DAY0_UNIX, FastLayer, LiveLayer, MachineModel, MachineNow, Mover, MoverClass, SlowLayer, State
 
 SC = load()
 T0 = DAY0_UNIX + 8 * 3600
@@ -31,6 +31,13 @@ def fast_layer(t: float = T0 + 0.123, seq: int = 41, ttl: float = 30.0) -> FastL
     ms = [MachineNow(i, State(i % 4), float(rng.uniform(0, 60)), float(rng.uniform(1, 30)), ttl,
                      int(rng.integers(0, 16)), seq) for i in range(len(SC.machines))]
     return FastLayer(SC.site_id, SC.key_id, t, seq, ms)
+
+
+def live_layer(n: int = 12, t: float = T0 + 0.456, seq: int = 7) -> LiveLayer:
+    rng = np.random.default_rng(5)
+    ms = [Mover(i, MoverClass(i % 5), float(rng.uniform(0, 120)), float(rng.uniform(0, 48)),
+                float(rng.uniform(0, 2 * math.pi)), float(rng.uniform(0, 3.75))) for i in range(n)]
+    return LiveLayer(SC.site_id, SC.key_id, t, seq, ms)
 
 
 def rel(a: float, b: float) -> float:
@@ -199,3 +206,92 @@ def test_unknown_key_wrong_key_and_short_blob():
     assert verify(blob, keyring_from({SC.key_id: demo_key(1)}))[3] == "bad_signature"
     assert verify(b"\0" * 20, {})[3] == "malformed"
     assert verify(b"\0" * 100, keyring_from({SC.key_id: sk}))[3] == "malformed"   # bad magic
+
+
+# ---- live layer ----------------------------------------------------------------------------------------
+
+def circ(a: float, b: float) -> float:
+    d = (a - b) % (2 * math.pi)
+    return min(d, 2 * math.pi - d)
+
+
+def test_live_roundtrip_within_quantization():
+    lv = live_layer(20)
+    b = L.encode_live(lv)
+    assert len(b) == L.live_len(20) == 17 + 5 * 20
+    d = L.decode_live(b)
+    assert (d.site_id, d.key_id, d.seq) == (lv.site_id, lv.key_id, lv.seq)
+    assert abs(d.issue_time - lv.issue_time) <= L.TOL["fast_issue_s"]
+    for a, m in zip(d.movers, lv.movers):
+        assert (a.track_id, a.cls) == (m.track_id, m.cls)
+        assert abs(a.x - m.x) <= L.TOL["mover_xz_m"] + 1e-9 and abs(a.z - m.z) <= L.TOL["mover_xz_m"] + 1e-9
+        assert circ(a.heading, m.heading) <= L.TOL["mover_heading_rad"] + 1e-9
+        assert abs(a.speed - m.speed) <= L.TOL["mover_speed_mps"] + 1e-9
+    assert d == L.quantize_live(lv)                                  # bit path == arithmetic path
+    assert L.decode_live(L.encode_live(LiveLayer(1, 1, T0, 0, []))).movers == []
+
+
+def test_live_wire_bytes_and_bit_exact_mover():
+    lv = LiveLayer(SC.site_id, SC.key_id, T0 + 0.987, 0xBEEF,
+                   [Mover(200, MoverClass.FORKLIFT, 123.4, 45.6, math.pi / 2, 2.0)])
+    b = L.encode_live(lv)
+    assert len(b) == 22 and b[:2] == b"IC" and b[2] == 0x12          # version 1, layer 2 (live)
+    assert int.from_bytes(b[12:14], "big") == 987 and b[14:16] == b"\xbe\xef" and b[16] == 1
+    want = (200 << 32) | (3 << 29) | (1234 << 18) | (456 << 9) | (8 << 4) | 8
+    assert b[17:] == want.to_bytes(5, "big")
+    m = L.decode_live(b).movers[0]
+    assert (m.track_id, m.cls, m.x, m.z, m.speed) == (200, MoverClass.FORKLIFT, 123.4, 45.6, 2.0)
+    assert m.heading == pytest.approx(math.pi / 2)                   # code 8 of 32, 0 = +z
+
+
+def test_live_saturation_wrap_and_unknown_class():
+    wild = [Mover(300, MoverClass.PERSON, -5.0, 99.0, -math.pi / 2, 9.0),
+            Mover(1, MoverClass.AGV, 250.0, -1.0, 7 * math.pi, -2.0),
+            Mover(2, MoverClass.OTHER, 0.04, 0.06, 2 * math.pi - 0.01, 3.9)]
+    d = L.decode_live(L.encode_live(LiveLayer(1, 1, T0, 0, wild))).movers
+    assert d[0].track_id == 300 & 0xFF == 44 and (d[0].x, d[0].z) == (0.0, 51.1) and d[0].speed == 3.75
+    assert d[0].heading == pytest.approx(1.5 * math.pi)              # -90 degrees -> 270 degrees
+    assert (d[1].x, d[1].z, d[1].speed) == (204.7, 0.0, 0.0) and d[1].heading == pytest.approx(math.pi)
+    assert (d[2].x, d[2].z, d[2].heading, d[2].speed) == (0.0, 0.1, 0.0, 3.75)   # 2pi-0.01 rounds to step 32 -> 0
+    b = bytearray(L.encode_live(LiveLayer(1, 1, T0, 0, [Mover(9, MoverClass.PERSON, 1, 1, 0, 0)])))
+    b[18] |= 0b111 << 5                                              # class bits = 7: unknown to this version
+    assert L.decode_live(bytes(b)).movers[0].cls == MoverClass.OTHER
+    with pytest.raises(L.CodecError):
+        L.encode_live(LiveLayer(1, 1, T0, 0, [Mover(1, 9, 1, 1, 0, 0)]))   # class does not fit 3 bits
+
+
+def test_live_32_movers_fill_one_frame_and_33_raise(capsys):
+    from intercycle.codec import ble as B
+    payload = L.encode_live(live_layer(32))
+    b = sign(payload, demo_key())
+    frames = B.frame(b)
+    with capsys.disabled():
+        print(f"\n[codec sizes] live 32 movers = 17 + 160 + 64 = {len(b)} B -> {len(frames)} frame, {len(frames[0])} B AdvData")
+    assert L.LIVE_MAX_MOVERS == 32 == (B.FRAG_DATA - SIG_LEN - L.LIVE_HDR_LEN) // L.MOVER_LEN
+    assert (len(payload), len(b)) == (177, 241)
+    assert len(frames) == 1 and len(frames[0]) == 250 <= B.ADV_MAX
+    assert L.live_len(33) + SIG_LEN > B.FRAG_DATA                    # a 33rd mover would not fit
+    with pytest.raises(L.CodecError):
+        L.encode_live(live_layer(33))
+
+
+def test_live_decode_rejects_malformed():
+    good = L.encode_live(live_layer(5))
+    for bad in (good[:-1], good + b"\0", good[:16] + b"\x06" + good[17:], b"XX" + good[2:], good[:2] + b"\x20" + good[3:]):
+        with pytest.raises(L.CodecError):
+            L.decode_live(bad)
+    with pytest.raises(L.CodecError):
+        L.decode_live(L.encode_fast(fast_layer()))                   # wrong layer
+    with pytest.raises(L.CodecError):
+        L.decode_fast(good)
+    n33 = good[:16] + bytes([33]) + bytes(5 * 33)
+    with pytest.raises(L.CodecError):
+        L.decode_live(n33)                                           # more movers than one frame may carry
+
+
+def test_sign_verify_live_layer():
+    sk = demo_key()
+    ring = keyring_from({SC.key_id: sk})
+    blob = sign(L.encode_live(live_layer()), sk)
+    assert verify(blob, ring)[0]
+    assert verify(blob[:20] + bytes([blob[20] ^ 1]) + blob[21:], ring)[3] == "bad_signature"

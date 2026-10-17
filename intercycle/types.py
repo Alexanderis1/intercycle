@@ -80,6 +80,34 @@ class FastLayer:
     machines: list[MachineNow]
 
 
+class MoverClass(IntEnum):
+    PERSON = 0
+    AGV = 1
+    TUGGER = 2
+    FORKLIFT = 3
+    OTHER = 4
+
+
+@dataclass(frozen=True)
+class Mover:
+    """Live layer: one tracked person or vehicle as the observer sees it at issue time."""
+    track_id: int          # 8-bit, wraps
+    cls: MoverClass
+    x: float               # metres, site frame
+    z: float
+    heading: float         # radians, 0 = +z, clockwise towards +x
+    speed: float           # m/s
+
+
+@dataclass(frozen=True)
+class LiveLayer:
+    site_id: int
+    key_id: int
+    issue_time: float      # unix seconds, millisecond precision
+    seq: int
+    movers: list[Mover]
+
+
 @dataclass
 class Decoded:
     """What the robot ends up with after receiving and verifying a broadcast."""
@@ -87,4 +115,5 @@ class Decoded:
     reason: str = ""                      # "", "bad_signature", "expired", "unknown_key", "malformed", "stale_seq"
     slow: SlowLayer | None = None
     fast: FastLayer | None = None
+    live: LiveLayer | None = None
     extra: dict = field(default_factory=dict)

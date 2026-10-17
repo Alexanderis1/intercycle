@@ -44,3 +44,24 @@ Sim time `t` = seconds since 00:00 local of sim day 0; unix = `DAY0_UNIX + t` (s
 
 ## Licences
 MIT repo. Avoid AGPL (no Ultralytics). Use RF-DETR (Apache-2.0), roboflow `trackers` (Apache-2.0), supervision (MIT). SmartSpaces data is CC-BY-4.0 (attribute). Every synthetic element is labelled synthetic.
+
+## v3: the observer builds a layered map of dynamics (17 Oct 12:15, user requirement)
+The observer does not just say busy/idle. Over days it builds **layers on top of the real (static) map**, each holding
+**dynamic collision volumes** conditioned on **time of day** and **production phase**:
+
+| Layer | Content | Indexed by |
+|---|---|---|
+| L0 static | walls, conveyor, racks, robot bases, posts (CAD/SLAM) | — |
+| L1 machine envelopes | per machine, per **cycle-phase bin** (e.g. 16 bins of the takt): floor cells swept by moving parts (weld arms incl. tip-dress excursions, skids during transfer, lifter carriage, hemming head, sealer robot) | machine, phase bin, production state |
+| L2 vehicle flows | per 1 m cell: occupancy probability + dominant heading (8 dirs) for AGVs, tuggers, forklifts | time-of-day bin (30 min), production state |
+| L3 people flows | same for people (break crowds, shift change, operators at cells, data-hall techs) | time-of-day bin, production state |
+Production state ∈ {running, andon, break, shift_change} (from the line learner + public calendar).
+
+Broadcast:
+- **map layer** (layer 3): L1–L3 compressed, chunked over BLE periodic advertising, signed manifest + chunks. Valid for hours.
+- **fast layer**: adds each machine's **phase-in-cycle** and the **production state** → the robot indexes L1–L3.
+- **live layer**: tracked movers every 0.5 s.
+
+Robot: projects L1 envelopes forward with the predicted phase (uncertainty-inflated), uses L2/L3 as soft costs and live movers as hard short-horizon obstacles, and plans in **space-time on a 0.5 m grid** (SIPP over cells). Light-curtain/zone safety semantics stay the final layer. Real-robot mapping: an extra Nav2 costmap layer (like the spatio-temporal voxel layer) fed by the decoded map.
+
+Ownership (v3): truth/kinematics.py (moving-part bodies by phase), observer/mapping.py + codec/maplayer.py (learned layers + BLE chunking), robot/stplan.py (space-time grid planner, lead), sim/physics.py (lead).

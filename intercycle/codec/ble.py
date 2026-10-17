@@ -13,10 +13,10 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from intercycle.codec.layout import FAST, SLOW, CodecError, decode_fast, decode_slow, peek_header
+from intercycle.codec.layout import FAST, LIVE, SLOW, CodecError, decode_fast, decode_live, decode_slow, peek_header
 from intercycle.codec.sign import Keyring, verify
 from intercycle.scenario import Ble
-from intercycle.types import DAY0_UNIX, Decoded, FastLayer, MachineNow, SlowLayer, State
+from intercycle.types import DAY0_UNIX, Decoded, FastLayer, LiveLayer, MachineNow, SlowLayer, State
 
 AD_MFR = 0xFF
 COMPANY = 0xFFFF
@@ -25,6 +25,7 @@ FRAG_OVERHEAD = 4 + 5                    # AD len/type/company + frag header (ms
 FRAG_DATA = ADV_MAX - FRAG_OVERHEAD      # 242 B of signed blob per frame
 MAX_FRAGS = 15
 SLOW_MAX_AGE_S = 8 * 3600
+LIVE_MAX_AGE_S = 1.5
 
 
 def _crc8_table() -> list[int]:
@@ -213,15 +214,18 @@ def _expire(f: FastLayer | None, now: float) -> tuple[FastLayer | None, list[int
 
 
 class Receiver:
-    """Verifies and tracks the newest slow and fast layers heard. Rejections never touch the accepted state."""
+    """Verifies and tracks the newest slow, fast and live layers heard (each layer has its own seq stream).
+    Rejections never touch the accepted state."""
 
     def __init__(self, keyring: Keyring, site_id: int, timeout_s: float = 5.0,
-                 slow_max_age_s: float = SLOW_MAX_AGE_S) -> None:
+                 slow_max_age_s: float = SLOW_MAX_AGE_S, live_max_age_s: float = LIVE_MAX_AGE_S) -> None:
         self.keyring, self.site_id, self.slow_max_age_s = keyring, site_id, slow_max_age_s
+        self.live_max_age_s = live_max_age_s
         self.reasm = Reassembler(timeout_s)
         self.stats: Counter[str] = Counter()
         self._slow: SlowLayer | None = None
         self._fast: FastLayer | None = None
+        self._live: LiveLayer | None = None
 
     def ingest(self, t_rx: float, frame_: bytes) -> Decoded | None:
         """None while a message is incomplete (or the frame is junk); a Decoded once a whole blob has been judged."""
@@ -229,7 +233,7 @@ class Receiver:
         return None if blob is None else self.accept(t_rx, blob)
 
     def accept(self, t_rx: float, blob: bytes) -> Decoded:
-        """Judge one reassembled signed blob. Order: signature, parse, site, freshness (slow age / seq)."""
+        """Judge one reassembled signed blob. Order: signature, parse, site, freshness (slow/live age, seq)."""
         ok, payload, key_id, reason = verify(blob, self.keyring)
         if not ok:
             return self._rej(reason, key_id=key_id)
@@ -258,12 +262,24 @@ class Receiver:
                 view, gone = _expire(f, now)
                 return Decoded(True, fast=view, extra={"layer": "fast", "key_id": key_id, "t_rx": t_rx,
                                                        "expired_fast": gone})
+            if h.layer == LIVE:
+                lv = decode_live(payload)
+                age = now - lv.issue_time
+                if age > self.live_max_age_s:
+                    return self._rej("expired", layer="live", age_s=age)
+                if self._live is not None and not _newer16(lv.seq, self._live.seq):
+                    return self._rej("stale_seq", layer="live", seq=lv.seq, last_seq=self._live.seq,
+                                     duplicate=lv.seq == self._live.seq)
+                self._live = lv
+                self.stats["ok_live"] += 1
+                return Decoded(True, live=lv, extra={"layer": "live", "key_id": key_id, "t_rx": t_rx})
         except CodecError as e:
             return self._rej("malformed", error=str(e))
         return self._rej("malformed", error=f"unknown layer {h.layer}")
 
     def latest(self, t_now: float) -> Decoded:
-        """Best current view: newest verified slow (None once older than 8 h) and fast (expired entries -> UNKNOWN)."""
+        """Best current view: newest verified slow (None once older than 8 h), fast (expired entries -> UNKNOWN) and
+        live (None once older than 1.5 s)."""
         now = DAY0_UNIX + t_now
         slow, extra = self._slow, {}
         if slow is not None:
@@ -274,9 +290,15 @@ class Receiver:
         if fast is not None:
             extra["fast_age_s"] = now - fast.issue_time
             extra["expired_fast"] = gone
-        if slow is None and fast is None:
-            return Decoded(False, "expired" if extra.get("slow_expired") else "no_data", extra=extra)
-        return Decoded(True, slow=slow, fast=fast, extra=extra)
+        live = self._live
+        if live is not None:
+            extra["live_age_s"] = now - live.issue_time
+            if extra["live_age_s"] > self.live_max_age_s:
+                live, extra["live_expired"] = None, True
+        if slow is None and fast is None and live is None:
+            expired = extra.get("slow_expired") or extra.get("live_expired")
+            return Decoded(False, "expired" if expired else "no_data", extra=extra)
+        return Decoded(True, slow=slow, fast=fast, live=live, extra=extra)
 
     def _rej(self, reason: str, **extra) -> Decoded:
         self.stats[reason] += 1

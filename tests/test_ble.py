@@ -9,7 +9,7 @@ from intercycle.codec import layout as L
 from intercycle.codec import seal
 from intercycle.codec.sign import demo_key, keyring_from, sign
 from intercycle.scenario import load
-from intercycle.types import DAY0_UNIX, FastLayer, MachineModel, MachineNow, SlowLayer, State
+from intercycle.types import DAY0_UNIX, FastLayer, LiveLayer, MachineModel, MachineNow, Mover, MoverClass, SlowLayer, State
 
 SC = load()
 SK = demo_key(0)
@@ -32,6 +32,11 @@ def fast_layer(t: float = T, seq: int = 1, ttls: tuple[float, ...] = (30.0,) * 1
                key_id: int = SC.key_id) -> FastLayer:
     ms = [MachineNow(i, State(i % 3), 5.0 + i, 8.0, ttl, 12, seq) for i, ttl in enumerate(ttls)]
     return FastLayer(site, key_id, unix(t), seq, ms)
+
+
+def live_layer(t: float = T, seq: int = 1, n: int = 6, site: int = SC.site_id, key_id: int = SC.key_id) -> LiveLayer:
+    ms = [Mover(i, MoverClass(i % 5), 3.0 + 4 * i, 20.0 + i, 0.3 * i, 0.25 * i) for i in range(n)]
+    return LiveLayer(site, key_id, unix(t), seq, ms)
 
 
 def blob(layer, sk=SK) -> bytes:
@@ -342,3 +347,90 @@ def test_robot_out_of_range_hears_nothing():
     frames = B.frame(blob(fast_layer()))
     assert not any(rx.ingest(t, f) for t, f in ch.receive((300, 300), T, T + 30, {b: frames for b in range(9)}))
     assert rx.latest(T + 30).reason == "no_data"
+
+
+# ---- live layer ----------------------------------------------------------------------------------------
+
+def test_live_frames_and_split_messages():
+    one = B.frame(blob(live_layer(n=32)))
+    assert len(one) == 1 and len(one[0]) == 250 and B.parse_frame(one[0]).layer == L.LIVE
+    with pytest.raises(L.CodecError):
+        blob(live_layer(n=33))
+    a, b = live_layer(seq=1, n=20), live_layer(seq=2, n=13)          # caller-side split: two messages, own msg_id each
+    fa, fb = B.frame(blob(a)), B.frame(blob(b))
+    assert len(fa) == len(fb) == 1 and B.parse_frame(fa[0]).msg_id != B.parse_frame(fb[0]).msg_id
+
+
+def test_receiver_accepts_live_and_each_layer_has_its_own_seq():
+    rx = B.Receiver(RING, SC.site_id)
+    lv = live_layer(seq=3)
+    d = feed(rx, T + 0.1, blob(lv))
+    assert d.ok and d.live == L.quantize_live(lv) and d.fast is None and d.extra["layer"] == "live"
+    assert feed(rx, T + 0.1, blob(fast_layer(seq=3))).ok             # same seq number on another layer is fine
+    assert feed(rx, T + 0.1, blob(fast_layer(seq=2))).reason == "stale_seq"
+    assert feed(rx, T + 0.5, blob(live_layer(T + 0.4, seq=4))).ok
+    now = rx.latest(T + 0.6)
+    assert now.ok and now.live.seq == 4 and now.fast.seq == 3 and now.slow is None
+    assert now.extra["live_age_s"] == pytest.approx(0.2) and "live_expired" not in now.extra
+    assert rx.stats["ok_live"] == 2 and rx.stats["ok_fast"] == 1
+
+
+def test_receiver_live_tamper_replay_and_wrap():
+    rx = B.Receiver(RING, SC.site_id)
+    b5, b6 = blob(live_layer(T, seq=5)), blob(live_layer(T + 0.5, seq=6))
+    assert feed(rx, T, b5).ok and feed(rx, T + 0.5, b6).ok
+    for i in (14, 18, 30, len(b6) - 1):
+        d = feed(rx, T + 0.6, b6[:i] + bytes([b6[i] ^ 0x04]) + b6[i + 1:])
+        assert d.reason == "bad_signature", i
+    d = feed(rx, T + 0.7, b5)
+    assert not d.ok and d.reason == "stale_seq" and d.extra["layer"] == "live" and d.extra["duplicate"] is False
+    assert feed(rx, T + 0.7, b6).extra["duplicate"] is True
+    assert rx.latest(T + 0.8).live.seq == 6
+    wrap = B.Receiver(RING, SC.site_id)
+    assert feed(wrap, T, blob(live_layer(T, seq=65535))).ok
+    assert feed(wrap, T + 0.5, blob(live_layer(T + 0.5, seq=0))).ok
+    assert feed(wrap, T + 0.6, blob(live_layer(T + 0.6, seq=65535))).reason == "stale_seq"
+    forged = feed(rx, T + 0.8, blob(live_layer(T + 0.8, seq=9), demo_key(5)))
+    assert forged.reason == "bad_signature" and rx.latest(T + 0.8).live.seq == 6
+
+
+def test_receiver_live_expires_after_1_5_seconds():
+    rx = B.Receiver(RING, SC.site_id)
+    lv = live_layer(T, seq=1)
+    assert feed(rx, T + 0.05, blob(lv)).ok
+    d = rx.latest(T + 1.4)
+    assert d.ok and d.live == L.quantize_live(lv) and "live_expired" not in d.extra
+    d = rx.latest(T + 1.6)
+    assert not d.ok and d.reason == "expired" and d.live is None and d.extra["live_expired"] is True
+    assert feed(rx, T + 1.6, blob(fast_layer(T + 1.6, seq=1))).ok   # other layers keep working
+    d = rx.latest(T + 1.7)
+    assert d.ok and d.live is None and d.fast is not None and d.extra["live_expired"] is True
+    stale = B.Receiver(RING, SC.site_id)                            # already too old on arrival: rejected, seq not consumed
+    d = feed(stale, T + 2.0, blob(live_layer(T, seq=9)))
+    assert not d.ok and d.reason == "expired" and d.extra["layer"] == "live"
+    assert feed(stale, T + 2.0, blob(live_layer(T + 2.0, seq=1))).ok
+
+
+def test_live_stream_over_channel():
+    """Observer re-issues the live layer every 0.5 s; a robot in range of two broadcasters keeps a fresh view."""
+    ch = B.BleChannel(SC.ble, seed=2)
+    issued = {}
+
+    def src(b, t):
+        k = int((t - T) // 0.5)
+        if k not in issued:
+            issued[k] = B.frame(blob(live_layer(T + 0.5 * k, seq=k + 1, n=10)))
+        return issued[k]
+
+    rx = B.Receiver(RING, SC.site_id)
+    ages = []
+    for step in range(100):
+        t0 = T + 0.1 * step
+        for t_rx, f in ch.receive((36, 24), t0, t0 + 0.1, src):
+            rx.ingest(t_rx, f)
+        d = rx.latest(t0 + 0.1)
+        if step >= 20:
+            assert d.ok and d.live is not None, step                 # never goes stale despite 10 % loss
+            ages.append(d.extra["live_age_s"])
+    assert max(ages) < 1.5 and rx.latest(T + 10).live.seq >= 18
+    assert rx.stats["ok_live"] >= 18
