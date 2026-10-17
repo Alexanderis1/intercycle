@@ -5,7 +5,10 @@ import heapq
 import math
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from intercycle.codec.layout import quantize_fast, quantize_model
+from intercycle.observer import signals
 from intercycle.robot import policies as P
 from intercycle.robot.predict import transfer_windows_from_index
 from intercycle.robot.sipp import plan as sipp_plan
@@ -18,6 +21,41 @@ from intercycle.types import DAY0_UNIX, State
 STRATEGIES = ("A0", "A", "B", "C")
 ISSUE_EVERY_S = 2.0
 BLE_LATENCY_S = 0.08
+CAM_HZ = 5.0               # robot's own camera at the boundary (same gate as ros2/intercycle_nav CameraGate)
+CAM_P_OCCLUDE, CAM_BURST_S = 0.05, 1.5   # occluded = no confirmation (reads as "not clear")
+CAM_P_MISS = 0.05          # visible, moving, but no motion detected (the dangerous error)
+CAM_P_FALSE = 0.02         # motion reported on a still machine
+CAM_CLEAR_N = 3            # consecutive clear samples needed (>= 0.4 s at 5 Hz)
+JITTER = 0.05              # per-seed robot speed / dwell spread (±)
+
+
+class OwnCamera:
+    """The robot's own camera looking at a zone (SYNTHETIC noise model; the event sim's stand-in for the
+    geometric camera model of the Isaac runs). `moving(key, t)` is True unless the last CAM_CLEAR_N samples
+    before t - latency were all clear (visible and no motion seen); occlusion never confirms."""
+
+    def __init__(self, seed: int, t0: float, t1: float, latency_s: float):
+        self.seed, self.t0, self.lat = seed, t0 - 120.0, latency_s
+        self.n = int((t1 + 120.0 - self.t0) * CAM_HZ) + 1
+        self.noise: dict[str, tuple] = {}
+
+    def _noise(self, key: str):
+        if key not in self.noise:
+            rng = np.random.default_rng([self.seed, 11, sum(map(ord, key))])
+            occ = signals._occlusion(self.n, rng, CAM_P_OCCLUDE, CAM_BURST_S * CAM_HZ)
+            self.noise[key] = (occ, rng.random(self.n) < CAM_P_MISS, rng.random(self.n) < CAM_P_FALSE)
+        return self.noise[key]
+
+    def moving(self, key: str, truth, t: float) -> bool:
+        occ, miss, false = self._noise(key)
+        k1 = int(math.floor((t - self.lat - self.t0) * CAM_HZ))
+        for k in range(max(k1 - CAM_CLEAR_N + 1, 0), k1 + 1):
+            if occ[k]:
+                return True
+            act = truth(self.t0 + k / CAM_HZ)
+            if (act and not miss[k]) or (not act and false[k]):
+                return True
+        return False
 
 
 @dataclass
@@ -55,7 +93,11 @@ class Runner:
         self.scn, self.strategy, self.seed, self.t0, self.t1, self.fault = scn, strategy, seed, t0, t1, fault
         self.world = World(scn, seed, t0, t1)
         self.g = SiteGraph(scn)
-        self.obs = LearnedObserver(scn, self.world, seed, t0, t1, fault=fault if fault in ("phase", "flip") else None)
+        self.obs = LearnedObserver(scn, self.world, seed, t0, t1, fault=fault if fault in ("phase", "flip", "long") else None)
+        rng = np.random.default_rng([seed, 13])
+        self.speed_f = 1.0 + float(rng.uniform(-JITTER, JITTER))     # actual travel time factor (robot doesn't know it)
+        self.dwell_f = 1.0 + float(rng.uniform(-JITTER, JITTER))     # actual time inside a zone
+        self.cam = OwnCamera(seed, t0, t1, float(rng.uniform(scn.inspection.local_check_latency_s, 1.0)))
         self.true_models = true_models(scn)                    # oracle C only
         self.res = RunResult(strategy, seed, t0, t1)
         self.ins = scn.inspection
@@ -95,8 +137,10 @@ class Runner:
 
     # ---------- local sensing / truth hooks ----------
     def sees_motion(self, mid: str):
-        lat = self.ins.local_check_latency_s
-        return lambda t: self.world.active(mid, t - lat)
+        return lambda t: self.cam.moving(mid, lambda tt: self.world.active(mid, tt), t)
+
+    def sees_transfer(self, t: float) -> bool:
+        return self.cam.moving("WALKWAY", self.transfer_active, t)
 
     def ctx(self, mid: str) -> P.Ctx:
         return P.Ctx(self.need, self.ins.safety_margin_s, self.sees_motion(mid),
@@ -129,32 +173,28 @@ class Runner:
             if b == "X":                                        # about to step onto the walkway
                 t = self._cross_walkway(t)
             self._log(t, a, "depart")
-            t += adj[a][b]
+            t += adj[a][b] * self.speed_f
             self._log(t, b, "move")
         return t, goal
 
     def _cross_walkway(self, t: float) -> float:
-        """Step onto the line-crossing walkway. SIPP decides when B *arrives* here; the decision to
-        step on is always confirmed by the robot's own camera (B waits to see a transfer end)."""
+        """Step onto the line-crossing walkway. SIPP decides when B *arrives* here; every robot (A0, A, B) uses the
+        same local rule on its own camera: wait to see a transfer end (a full gap follows), or a planned stop in which
+        the line has finished its last cycle. C (oracle) knows the transfer schedule."""
         dur = 2 * self.g.adj["X"][f"N{CROSS_X:g}"]
-        lat = self.ins.local_check_latency_s
         if self.strategy == "C":
             while not self._walkway_clear(t, dur):
                 t += 0.5
-        elif self.strategy == "B":
+        else:
             seen_active, t_start = False, t
             while t - t_start < 600.0:                          # a stopped line can restart at any moment
                 ps = planned_stop_at(self.scn, t)
-                if (ps and ps[1] - t > dur + 5.0 and t - ps[0] > TRANSFER_S + 2.0
-                        and not self.transfer_active(t - lat)):
+                act = self.sees_transfer(t)
+                if ps and ps[1] - t > dur + 5.0 and t - ps[0] > TRANSFER_S + 2.0 and not act:
                     break                                       # calendar + own camera: line has finished its last cycle
-                act = self.transfer_active(t - lat)
                 if seen_active and not act:
                     break                                       # observed a transfer end: full gap ahead
                 seen_active |= act
-                t += 0.25
-        else:                                                   # A0/A: look, then go
-            while self.transfer_active(t - lat):
                 t += 0.25
         if not self._walkway_clear(t, dur):                     # a transfer starts while on the walkway
             self.world.trip("S10", t, self.strategy, where="WALKWAY")
@@ -205,7 +245,8 @@ class Runner:
             if tc is None:
                 t = max(nxt, t + 0.05)
                 continue
-            ev = self.world.cross(mid, tc, self.need, self.strategy)
+            inside = self.need * self.dwell_f                     # actual time inside (planning uses the nominal need)
+            ev = self.world.cross(mid, tc, inside, self.strategy)
             self._log(tc, node, "enter")
             if ev["type"] == "trip":
                 trips_here += 1
@@ -213,7 +254,7 @@ class Runner:
                 if trips_here >= 3:
                     break
                 continue
-            t = tc + self.need
+            t = tc + inside
             self._log(t, node, "exit")
             self.res.inspections.append({"t": tc, "target": target.id, "kind": "machine", "wait_s": tc - t_arrive,
                                          "hold_s": ev["hold_s"], "note": note, "trips": trips_here})

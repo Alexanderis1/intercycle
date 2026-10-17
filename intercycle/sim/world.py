@@ -7,6 +7,7 @@ While frozen, every zone in the group is idle and the group's machine time does 
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -28,15 +29,23 @@ class Freeze:
 class Group:
     name: str
     freezes: list[Freeze] = field(default_factory=list)
+    anchors: list[float] = field(default_factory=list)   # planned-stop starts (actual time), sorted
 
     def frozen_before(self, t: float) -> float:
         return sum(max(0.0, min(t, f.t1) - f.t0) for f in self.freezes if f.t0 < t)
+
+    def anchor(self, t: float) -> float:
+        """Latest planned-stop start <= t. Planned stops run on the wall clock: time the robot froze the group
+        before it is not carried past it (the lost production is not made up, the break starts on time)."""
+        i = bisect_right(self.anchors, t) - 1
+        return self.anchors[i] if i >= 0 else -float("inf")
 
     def is_frozen(self, t: float) -> bool:
         return any(f.t0 <= t < f.t1 for f in self.freezes)
 
     def mt(self, t: float) -> float:
-        return t - self.frozen_before(t)
+        a = self.anchor(t)
+        return t - (self.frozen_before(t) - (self.frozen_before(a) if a > -float("inf") else 0.0))
 
     def frozen_until(self, t: float) -> float | None:
         return max((f.t1 for f in self.freezes if f.t0 <= t < f.t1), default=None)
@@ -49,10 +58,12 @@ class World:
         self.W: dict[str, list[Window]] = all_windows(scn, seed, t0 - 3600, t1 + 3600)
         self.groups: dict[str, Group] = {}
         self.group_of: dict[str, str] = {}
+        days = range(int((t0 - 3600) // 86400), int((t1 + 3600) // 86400) + 1)
+        anchors = sorted(d * 86400.0 + a for d in days for a, _, _ in scn.line_stops())
         for m in scn.machines:
             g = "line" if m.on_line else m.id
             self.group_of[m.id] = g
-            self.groups.setdefault(g, Group(g))
+            self.groups.setdefault(g, Group(g, anchors=list(anchors)))
         self.events: list[dict] = []
 
     # ---- state queries (actual time) ----
@@ -74,8 +85,12 @@ class World:
         ts = np.asarray(ts, float)
         g, ws = self.group(mid), self.W[mid]
         mt, frozen = ts.copy(), np.zeros(len(ts), bool)
+        anc = np.asarray(g.anchors, float)
+        k = np.searchsorted(anc, ts, side="right") - 1
+        a = np.where(k >= 0, anc[np.maximum(k, 0)] if len(anc) else -np.inf, -np.inf)
         for f in g.freezes:
-            mt -= np.clip(ts, f.t0, f.t1) - f.t0
+            lo = np.maximum(f.t0, a)
+            mt -= np.clip(ts, lo, np.maximum(lo, f.t1)) - lo
             frozen |= (f.t0 <= ts) & (ts < f.t1)
         if not ws:
             return np.zeros(len(ts), bool)

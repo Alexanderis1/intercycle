@@ -125,11 +125,12 @@ class _Clock:
     once and cached; if time goes backwards (or the freeze list shrinks) the cache is bypassed / reset. While the
     freeze list is sorted by start time (it is, in a run) the scan stops at the first freeze that starts after t.
     """
-    __slots__ = ("g", "n", "base", "hi", "seen", "ok", "sig")
+    __slots__ = ("g", "n", "base", "hi", "seen", "ok", "sig", "_ak", "_av")
 
     def __init__(self, g):
         self.g, self.n, self.base, self.hi = g, 0, 0.0, -math.inf
         self.seen, self.ok, self.sig = 0, True, (0,)
+        self._ak, self._av = None, 0.0
 
     def changed(self) -> bool:
         """Has the freeze list changed since the last query? (count and the last freeze, which physics extends)."""
@@ -196,7 +197,20 @@ class _Clock:
             elif srt:
                 break
         fr = (t - k0) / (k1 - k0) if kind is not None and k1 > k0 else 0.0
-        return t - fro, kind, fr
+        return t - fro + self._before_anchor(t), kind, fr
+
+    def _before_anchor(self, t: float) -> float:
+        """Frozen time before the latest planned-stop start <= t: not carried past it (`Group.mt`)."""
+        anc = getattr(self.g, "anchors", None)
+        if not anc:
+            return 0.0
+        a = self.g.anchor(t)
+        if a == -math.inf:
+            return 0.0
+        key = (a, self.sig)
+        if getattr(self, "_ak", None) != key:
+            self._ak, self._av = key, self.g.frozen_before(a)
+        return self._av
 
 
 # ------------------------------------------------------------------------------------------ arm tables

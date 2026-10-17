@@ -142,6 +142,9 @@ class LearnedObserver:
             T = self.models[mn.index].period_s
             return MachineNow(mn.index, mn.state, max(0.0, mn.next_idle_in_s + float(self.rng.uniform(-T / 2, T / 2))),
                               mn.next_idle_len_s, mn.ttl_s, mn.confidence, mn.seq)
+        if self.fault == "long" and mn.state in (State.ACTIVE, State.IDLE):   # idle predicted half a period too long
+            T = self.models[mn.index].period_s
+            return MachineNow(mn.index, mn.state, mn.next_idle_in_s, mn.next_idle_len_s + 0.5 * T, mn.ttl_s, mn.confidence, mn.seq)
         if self.fault == "flip" and mn.state in (State.ACTIVE, State.IDLE):
             st = State.IDLE if mn.state == State.ACTIVE else State.ACTIVE
             return MachineNow(mn.index, st, mn.next_idle_in_s, mn.next_idle_len_s, mn.ttl_s, mn.confidence, mn.seq)
