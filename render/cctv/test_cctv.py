@@ -232,3 +232,15 @@ def test_cli_single_png(tmp_path):
     cv2.imwrite(str(src), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     assert cli_main(["--in", str(src), "--out", str(tmp_path / "o"), "--cam", "CAM03", "--cam-label", "X", "--size", "1280x720"]) == 0
     assert cv2.imread(str(tmp_path / "o" / "a.png")).shape == (720, 1280, 3)
+
+
+def test_wall_tiles_in_order_with_seams_and_label():
+    from render.cctv.wall import GUTTER, compose
+    cols = [(200, 0, 0), (0, 200, 0), (0, 0, 200), (200, 200, 0)]
+    tiles = [np.full((540, 960, 3), c, np.uint8) for c in cols]
+    w = compose(tiles, 640, 360)
+    assert w.shape == (360, 640, 3) and w.dtype == np.uint8
+    for (r, c), col in zip([(90, 160), (90, 480), (270, 160), (270, 480)], cols):
+        assert tuple(w[r, c]) == col                       # TL, TR, BL, BR
+    assert (w[180, 50] < 20).all() and (w[50, 320] < 20).all() and GUTTER >= 2
+    assert (w[340:356, 300:340] > 230).all(axis=2).any()   # white label text bottom-centre

@@ -54,6 +54,19 @@ def test_schedule_dwells_walks_and_loops():
     assert e.state(t0 + 1.0) == e.state(t0 + 1.0 + e.period)
     _, _, yaw, _, _ = e.state(t0 + extras.TURN_S + 0.01)
     assert math.isclose(yaw, e.face_a)
+    go = math.atan2(e.b[1] - e.a[1], e.b[0] - e.a[0])                  # turned to the walk before leaving
+    _, _, yaw, _, _ = e.state(t0 + e.dwell_a - 0.001)
+    assert abs(math.sin((yaw - go) / 2)) < 0.01
+
+
+def test_heading_never_jumps_between_frames():
+    for e in _cands("STOPPED"):
+        prev = None
+        for k in range(int(e.period * 25) + 1):
+            yaw = e.state(36000.0 + k / 25)[2]
+            if prev is not None:                            # wrapped difference: at most a turn step per frame
+                assert abs((yaw - prev + math.pi) % (2 * math.pi) - math.pi) < math.pi / (extras.TURN_S * 25) + 1e-6, (e.role, e.cell, k)
+            prev = yaw
 
 
 def _all_in_view(p):

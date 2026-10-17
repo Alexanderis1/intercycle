@@ -72,6 +72,24 @@ Rules are tested in `render/blender/test_extras.py`. `--extras 0` renders the tr
 Second V sequence: `--cctv-seq cctv_4 --t 36245` (north ceiling camera at (6, 46)). It shows weld cells S10, S20 and S30, all
 ACTIVE, and forklift FL0 on the north aisle for the whole 10 s.
 
+Final video shots (build lead, 17 Oct). There is no robot/AMR in any of them.
+- **Cinematic shots:** 1080p, 24 fps, 64 spp, motion blur on the moving camera too, no extras.
+  - Every frame is labelled "SYNTHETIC REPLAY OF OUR SIMULATION". The paths are in `scene_real.film_cam`.
+  - Output goes to `<out>/<shot>/frames/` and `<out>/<shot>.mp4`.
+  - Commands:
+```powershell
+& $B ... scene_real.py --trace <trace> --synth-bodies --out D:\icdata\renders\film --film establishing --t 36560 --seconds 8 --fps 24 --samples 64 --res 1920x1080
+#   --film flyalong --seconds 12  (3.5 m over aisle S, x 10 -> 58, looking into the cells)
+#   --film weldclose --seconds 6  (push-in through the S30 north opening onto the weld_close framing, 28 -> 35 mm, sparks)
+```
+- **CCTV wall:** one shared clock, 36560-36570 at 25 fps.
+  - Tiles: `cctv_0`, `cctv_1`, `cctv_5`, `cctv_6`.
+  - `cctv_1` is the 1080p V sequence, downscaled. The other three are rendered at 960x540.
+  - The 960x540 tiles are post-processed with `--size 960x540 --sensor-scale 1.0`, because the half-size render already does
+    the softening. Their extras follow the per-view rule.
+  - `python -m render.cctv.wall --tiles <TL> <TR> <BL> <BR> --out D:\icdata\renders\wall\out` tiles them 2x2, keeps each
+    tile's burned-in text, and adds one label.
+
 # Photoreal render tier: decision, research, shot list
 
 *Written 2026-10-17 12:40 CEST for the 18 Oct 16:00 submission. Owner: render pipeline. Everything here is
