@@ -74,9 +74,20 @@ URL parameters:
   machine spawned → Gemma phase names).
 * **Machine list and phase strip:**
   * The machine list shows phase-now (16 bins + STOP) and the learned period.
-  * The phase strip shows the selected machine's L1 envelope area per phase bin, a moving phase-now marker, and the named
-    sub-phases. These come from `meta.phases[mid]` or from `phase_discovered` / `phase_named` events (`start` / `end` cycle
-    fractions, or `bin`; `name`).
+  * The phase strip shows the selected machine's L1 envelope area per equal-slice phase bin (bars), a moving phase-now
+    marker, and a band of **discovered sub-phases**. The band comes from `meta.phases[mid]` if the run has it, else from
+    `dashboard/phases.json`: workstream P's model (`export_static.py phases` reads `out/phases/model_final_train.pkl`),
+    with names `p0..`, `idle` and cycle fractions.
+  * **Gemma names:** `dashboard/gemma_names.json` holds Gemma's names per P bin. It is a copy of G's
+    `out/gemma/phase_names.json` made by `export_static.py gemma`, with the shape
+    `{model, provider, machines: {mid: {bin: {bin_name, name, confidence, notes}}}, line_clusters}`. The strip title
+    then says "named by Gemma 4 on AMD", and the note names the model and Token Factory.
+  * Until G's file exists, the same command writes a **labelled FIXTURE** (`fixture: true`, names `[fixture] p3`,
+    strip title "FIXTURE names"). Re-run `export_static.py gemma` and rebuild the bundle once the real file lands.
+  * A `phase_named` event with `machine` and `bin` (P's bin index) also renames a segment; `start` / `end` fractions
+    work too.
+  * When a run streams no `phase_now` (week1), the marker is a cycle preview from phase 0 at the learned period, and the
+    note says so.
 
 ## Data contract: `intercycle.stream/1`
 
@@ -129,7 +140,8 @@ The relay is the only backend: an asyncio `websockets` server in a daemon thread
 | Run | What it is |
 |---|---|
 | `build_map_72h` (`export_static.py npz`) | **Skeleton stand-in:** the final `out/layered_map.npz` from `scripts/build_map.py` (72 h observed), replayed over one day: 48 snapshots every 30 min (+2 min, so the 5-min shift-change stops are hit). It does **not** grow. L2/L3 follow the time-of-day slice; the production state comes from the public calendar; phase-now is projected from the learned period (line stations STOP in breaks). Metrics are map statistics only (slice observations, hot area, mean occupancy, UNKNOWN share), not accuracy |
-| M's `map_timeline.py` runs (1 h → 1 week; new machine) | Wiring: Sun 00:30–01:30 |
+| `week1` (M, `scripts/map_timeline.py replay`) | The map growing: cumulative maps at checkpoints from 15 min to 1 week (log axis). Metrics on held-out day 7: `l1_iou`, `unsafe_free`, `false_occupied_share`, `l2/l3_auroc`, `l2/l3_brier`, ... No `phase_now` (the replay merges parallel window counts, so no tracker state exists; the phase strip runs a labelled cycle preview) and no events |
+| `newmachine` (M, `scripts/new_machine.py`) | A new machine installed at `meta.t_install`; `t_obs` = time since install (negative before). The axis is sim time shown as T±h relative to install, with an install marker. Events, each with its own caption: `change_detected` / `change_cleared` / `change_explained` (candidates, `rect`), `camera_bump`, `machine_spawned` (`period_s`, `n_cycles`), `machine_converged`. It streams the observed `phase_now` every 5 sim-min, so use this run for the phase-strip scene. Metrics: `unsafe_free_{pre_detection, transition, learned}` |
 | `_fixture_feed` / `_fixture_live` (`fake_feed.py`) | **TEST FIXTURE, fake numbers.** Exercises the log axis, events, UNKNOWN, a new machine and live mode. Not registered, never a result |
 
 ## Recording (video scene)

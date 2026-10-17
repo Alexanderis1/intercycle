@@ -9,6 +9,7 @@
     python dashboard/export_static.py register --run week1 --title "1 week"   # add a run to dashboard/runs.json
     python dashboard/export_static.py phases [--model out/phases/model_final_train.pkl]
         # dashboard/phases.json: workstream P's discovered sub-phases per machine (cycle fractions, names p0.., idle)
+    python dashboard/export_static.py gemma     # dashboard/gemma_names.json from out/gemma/phase_names.json (else a FIXTURE)
 
 Light job (loads one .npz, no simulation).
 """
@@ -72,6 +73,29 @@ def cmd_phases(args) -> None:
     p = DASH / "phases.json"
     p.write_text(json.dumps(out, indent=1), encoding="utf-8")
     print(f"wrote {p}: " + ", ".join(f"{k} {len(v['segments'])} sub-phases" for k, v in out["machines"].items()))
+
+
+def cmd_gemma(args) -> None:
+    """dashboard/gemma_names.json from G's out/gemma/phase_names.json; a clearly labelled FIXTURE of the same shape
+    (placeholder names, no Gemma call) until that file exists."""
+    src = ROOT / args.src
+    dst = DASH / "gemma_names.json"
+    if src.exists():
+        d = json.loads(src.read_text(encoding="utf-8"))
+        d["fixture"] = False
+        print(f"copied {src} ({sum(len(v) for v in d.get('machines', {}).values())} named bins)")
+    else:
+        ph = json.loads((DASH / "phases.json").read_text(encoding="utf-8"))
+        d = {"label": "FIXTURE: placeholder names, NOT Gemma output (out/gemma/phase_names.json does not exist yet)",
+             "fixture": True, "model": None, "provider": "runs on AMD GPUs via Token Factory", "generated_at": None,
+             "source": ph.get("source"), "machines": {}, "line_clusters": {}}
+        for mid, m in ph["machines"].items():
+            for sg in m["segments"]:
+                d["machines"].setdefault(mid, {})[str(sg["bin"])] = {"bin_name": sg["name"], "name": f"[fixture] {sg['name']}",
+                                                                    "confidence": None, "notes": "placeholder"}
+        print(f"{src} missing: wrote a labelled FIXTURE")
+    dst.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    print(f"wrote {dst}")
 
 
 def register(run: str, title: str, note: str = "") -> None:
@@ -152,6 +176,11 @@ def cmd_bundle(args) -> None:
             print(f"skip {r['id']}: no {d / 'index.json'}")
             continue
         idx = json.loads((d / "index.json").read_text(encoding="utf-8"))
+        L = idx["snapshots"]
+        if args.max_snaps and len(L) > args.max_snaps:     # thin evenly (the artifact page is capped at 16 MB)
+            keep = sorted(set(np.linspace(0, len(L) - 1, args.max_snaps).round().astype(int).tolist()))
+            idx = dict(idx, snapshots=[L[k] for k in keep], thinned_from=len(L))
+            print(f"{r['id']}: kept {len(keep)} of {len(L)} snapshots")
         snaps = {s["file"]: json.loads((d / s["file"]).read_text(encoding="utf-8")) for s in idx["snapshots"]}
         runs.append(dict(meta=r, index=idx, snaps=snaps))
     html = (DASH / "index.html").read_text(encoding="utf-8")
@@ -159,7 +188,8 @@ def cmd_bundle(args) -> None:
     js = (DASH / "app.js").read_text(encoding="utf-8")
     layout = (DASH / "layout.json").read_text(encoding="utf-8")
     phases = json.loads((DASH / "phases.json").read_text(encoding="utf-8")) if (DASH / "phases.json").exists() else None
-    bundle = json.dumps(dict(layout=json.loads(layout), phases=phases, runs=runs), separators=(",", ":")).replace("</", "<\\/")
+    gemma = json.loads((DASH / "gemma_names.json").read_text(encoding="utf-8")) if (DASH / "gemma_names.json").exists() else None
+    bundle = json.dumps(dict(layout=json.loads(layout), phases=phases, gemma=gemma, runs=runs), separators=(",", ":")).replace("</", "<\\/")
     html = html.replace('<link rel="stylesheet" href="style.css">', f"<style>\n{css}\n</style>")
     html = html.replace('<script src="app.js"></script>', f"<script>window.__IC_BUNDLE__={bundle};</script>\n<script>\n{js}\n</script>")
     if args.artifact:                     # claude.ai artifact: the publisher adds doctype/head/body itself; <title> first
@@ -182,10 +212,13 @@ def main() -> None:
     a.add_argument("--max-boxes", type=int, default=8)
     b = sub.add_parser("bundle")
     b.add_argument("--runs", default="")
+    b.add_argument("--max-snaps", type=int, default=100, help="per run; 0 = keep all")
     b.add_argument("--out", default="out/stream/dashboard_bundle.html")
     b.add_argument("--artifact", action="store_true", help="strip doctype/html/head/body for a claude.ai artifact publish")
     ph = sub.add_parser("phases")
     ph.add_argument("--model", default="out/phases/model_final_train.pkl")
+    gm = sub.add_parser("gemma")
+    gm.add_argument("--src", default="out/gemma/phase_names.json")
     r = sub.add_parser("register")
     r.add_argument("--run", required=True)
     r.add_argument("--title", required=True)
@@ -194,7 +227,7 @@ def main() -> None:
     if args.cmd == "register":
         register(args.run, args.title, args.note)
     else:
-        dict(layout=cmd_layout, npz=cmd_npz, bundle=cmd_bundle, phases=cmd_phases)[args.cmd](args)
+        dict(layout=cmd_layout, npz=cmd_npz, bundle=cmd_bundle, phases=cmd_phases, gemma=cmd_gemma)[args.cmd](args)
 
 
 if __name__ == "__main__":

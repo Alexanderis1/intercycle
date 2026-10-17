@@ -1,0 +1,511 @@
+{
+ "label": "FIXTURE: placeholder names, NOT Gemma output (out/gemma/phase_names.json does not exist yet)",
+ "fixture": true,
+ "model": null,
+ "provider": "runs on AMD GPUs via Token Factory",
+ "generated_at": null,
+ "source": "out/phases/model_final_train.pkl",
+ "machines": {
+  "S10": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "S20": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "S30": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "S40": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "S50": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "S60": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "S70": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "S80": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "HEM1": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  },
+  "SEAL1": {
+   "0": {
+    "bin_name": "p0",
+    "name": "[fixture] p0",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "1": {
+    "bin_name": "p1",
+    "name": "[fixture] p1",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "2": {
+    "bin_name": "p2",
+    "name": "[fixture] p2",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "3": {
+    "bin_name": "p3",
+    "name": "[fixture] p3",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "4": {
+    "bin_name": "p4",
+    "name": "[fixture] p4",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "5": {
+    "bin_name": "p5",
+    "name": "[fixture] p5",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "6": {
+    "bin_name": "p6",
+    "name": "[fixture] p6",
+    "confidence": null,
+    "notes": "placeholder"
+   },
+   "7": {
+    "bin_name": "idle",
+    "name": "[fixture] idle",
+    "confidence": null,
+    "notes": "placeholder"
+   }
+  }
+ },
+ "line_clusters": {}
+}

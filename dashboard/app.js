@@ -10,7 +10,7 @@ const Q = new URLSearchParams(location.search);
 const BUNDLE = window.__IC_BUNDLE__ || null;
 const $ = (id) => document.getElementById(id);
 const PROD_COLOR = { running: "#0ca30c", andon: "#d03b3b", break: "#fab219", shift_change: "#ec835a" };
-const KIND_LABEL = { machine_converged: "envelope converged", change_cleared: "change cleared", change_detected: "change detected", machine_spawned: "machine spawned", phase_discovered: "phase discovered",
+const KIND_LABEL = { change_explained: "change explained", camera_bump: "camera bump", machine_converged: "envelope converged", change_cleared: "change cleared", change_detected: "change detected", machine_spawned: "machine spawned", phase_discovered: "phase discovered",
                      phase_named: "phase named (Gemma)", camera_offline: "camera offline", production_state: "production state", note: "note" };
 const METRIC_PREF = ["l1_iou", "iou", "unsafe_free", "unsafe_free_rate", "false_occupied", "false_occupied_share", "l2_auroc", "l3_auroc",
                      "unsafe_free_pre_detection", "unsafe_free_transition", "unsafe_free_learned",
@@ -435,6 +435,8 @@ function evText(ev) {
   if (ev.kind === "change_cleared") return `Candidate ${ev.candidate ?? ""} cleared: the motion did not persist, cells released`;
   if (ev.kind === "machine_spawned") return `${ev.machine || "new machine"}: cycle learned${ev.period_s ? ` (period ${fmtNum(ev.period_s)} s)` : ""}${(ev.cycles ?? ev.n_cycles) ? ` after ${ev.cycles ?? ev.n_cycles} stable cycles` : ""} → L1 model spawned, cells stay UNKNOWN until it converges`;
   if (ev.kind === "machine_converged") return `${ev.machine || "new machine"}: period converged${ev.period_s ? ` (${fmtNum(ev.period_s)} s)` : ""} → envelope settles, UNKNOWN released`;
+  if (ev.kind === "change_explained") return `Candidate ${ev.candidate ?? ""} explained${ev.reason || ev.explanation || ev.by ? `: ${ev.reason || ev.explanation || ev.by}` : ""}, not a new machine`;
+  if (ev.kind === "camera_bump") return `Camera ${ev.camera ?? ""} bumped${ev.shift_m != null ? ` (${fmtNum(ev.shift_m)} m shift)` : ""}: detected as a camera move, not a new machine`;
   if (ev.kind === "camera_offline") return `Camera ${ev.camera ?? ""} offline → its cells UNKNOWN (= occupied)`;
   const f = { ...ev }; delete f.schema; delete f.seq; delete f.kind; delete f.t_sim; delete f.t_obs;
   if (ev.kind === "phase_named" && ev.name) return `${ev.machine || ""} phase ${ev.bin ?? ev.phase ?? ""} named “${ev.name}”`;
@@ -587,6 +589,11 @@ function namedPhases(mid) {
   const meta = S.index && S.index.meta, out = [];
   if (meta && meta.phases && meta.phases[mid]) for (const p of meta.phases[mid]) out.push({ ...p });
   else if (S.phases && S.phases.machines[mid]) for (const p of S.phases.machines[mid].segments) out.push({ ...p });
+  const gm = S.gemma && S.gemma.machines && S.gemma.machines[mid];    // Gemma's names per P bin (G2)
+  if (gm) for (const p of out) {
+    const g = p.bin != null ? gm[String(p.bin)] : null;
+    if (g && g.name) { p.name = g.name; p.named = true; p.gemma = true; p.conf = g.confidence; }
+  }
   const v = uToVal(S.u) + 1e-6;
   for (const ev of (S.index && S.index.events) || []) {
     if ((ev.kind !== "phase_discovered" && ev.kind !== "phase_named") || ev.machine !== mid || evAxis(ev) > v) continue;
@@ -603,7 +610,9 @@ function drawStrip() {
   const { w, h, dpr } = resizeCanvas(scv), c = sctx; c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, w, h);
   const mid = S.machine; if (!mid || !S.index) { $("stripTitle").textContent = "select a machine"; return; }
   const per = periodOf(mid), A = binAreas(mid), nb = 16, stopW = Math.max(0.07 * w, 34 * dpr), gap = 6 * dpr, cw = w - stopW - gap;
-  $("stripTitle").textContent = `${mid} · cycle ${per ? per.toFixed(1) + " s" : "unknown"}`;
+  const gtag = S.gemma && S.gemma.machines && S.gemma.machines[mid]
+    ? (S.gemma.fixture ? " · FIXTURE names" : " · named by Gemma 4 on AMD") : "";
+  $("stripTitle").textContent = `${mid} · cycle ${per ? per.toFixed(1) + " s" : "unknown"}${gtag}`;
   const maxA = Math.max(...A, 1e-9), top = 26 * dpr, base = h - 16 * dpr, H = base - top;
   const named = namedPhases(mid), f0 = machinePhase(mid);
   // named / discovered segments band
@@ -633,7 +642,8 @@ function drawStrip() {
   if (f != null) { const x = f * cw; c.strokeStyle = "#e6ebf1"; c.lineWidth = 2 * dpr; c.beginPath(); c.moveTo(x, top - 4 * dpr); c.lineTo(x, base); c.stroke();
     c.fillStyle = "#e6ebf1"; c.beginPath(); c.moveTo(x - 5 * dpr, top - 8 * dpr); c.lineTo(x + 5 * dpr, top - 8 * dpr); c.lineTo(x, top - 1 * dpr); c.fill(); }
   const streamed = S.cur && S.cur.phase_now && S.cur.phase_now[mid] != null;
-  $("stripNote").textContent = `Top band: sub-phases discovered by the observer (workstream P; Gemma names them later). Bars: L1 envelope area per equal-slice bin (m², max ${fmtNum(maxA)}). ` +
+  const gnote = !gtag ? "Gemma names them later" : S.gemma.fixture ? "names are a FIXTURE placeholder until Gemma's output exists" : `names by Gemma 4 on AMD GPUs via Token Factory${S.gemma.model ? " (" + S.gemma.model + ")" : ""}, advisory captions`;
+  $("stripNote").textContent = `Top band: sub-phases discovered by the observer (workstream P; ${gnote}). Bars: L1 envelope area per equal-slice bin (m², max ${fmtNum(maxA)}). ` +
     (S.layers.cycle ? (streamed ? `Marker: phase now, advanced at ${CYCLE_RATE}× real time.` : `Marker: cycle preview at ${CYCLE_RATE}× (phase not streamed in this run).`) : "Marker: phase now at the snapshot.");
 }
 
@@ -796,6 +806,7 @@ async function init() {
   try {
     S.layout = BUNDLE ? BUNDLE.layout : await getJSON("layout.json");
     S.phases = BUNDLE ? BUNDLE.phases : await getJSON("phases.json").catch(() => null);
+    S.gemma = BUNDLE ? BUNDLE.gemma : await getJSON("gemma_names.json").catch(() => null);
   } catch (e) { showErr(e); return; }
   if (Q.has("layers")) { const on = new Set(Q.get("layers").split(",")); for (const k of Object.keys(S.layers)) S.layers[k] = on.has(k); }
   document.querySelectorAll("#toggles .tog").forEach((b) => b.setAttribute("aria-pressed", String(S.layers[b.dataset.layer])));
