@@ -144,6 +144,121 @@ def test_forgetting_absorbs_a_newly_occupied_cell_and_lifts_unknown():
     assert t_nodecay / HZ / 3600 > 8.0 and t_decay_24h < t_nodecay / 3
 
 
+def test_lift_never_broadcasts_free_while_the_cell_is_still_occupied():
+    """Audit S7a #1. The lift used to be decided on the decayed counts while the broadcast could use undecayed ones: a
+    newly always-occupied cell was lifted once its decayed p reached p_min, while its undecayed p (10 x longer empty
+    history) was still far below p_min, i.e. FREE. The layer now owns the broadcast: `state()` is never FREE for that
+    cell from the alarm on, before or after the lift."""
+    hl = 2000.0
+    cfg = ChangeConfig(half_life_ticks=hl, clear_ticks=600)
+    L = ChangeLayer(1, cfg=cfg)
+    rng = np.random.default_rng(3)
+    for _ in range(int(10 * hl)):                        # empty history 10 half-lives long (undecayed denominator)
+        L.step(0, np.array([rng.random() < 0.002]), np.ones(1, bool))
+    t_unknown = t_lift = None
+    free_after_alarm = 0
+    p_life_at_lift = math.nan
+    for t in range(int(4 * hl)):                          # always occupied from now on
+        r = L.step(0, np.array([rng.random() < DET]), np.ones(1, bool))
+        if t_unknown is None and L.unknown[0]:
+            t_unknown = t
+        if len(r.lifted):
+            t_lift = t
+            p_life_at_lift = float(L.p_lifetime(0)[0])
+        if t_unknown is not None and L.state(0)[0] == CD.FREE:
+            free_after_alarm += 1
+    print(f"\nlift: UNKNOWN after {t_unknown}, lifted after {t_lift} ticks; undecayed p at the lift {p_life_at_lift:.3f} "
+          f"(p_min {cfg.p_min}); ticks broadcast FREE after the alarm: {free_after_alarm}")
+    assert t_unknown is not None and t_lift is not None, "the cycle change -> UNKNOWN -> lifted must complete"
+    assert p_life_at_lift < cfg.p_min, "scenario check: the undecayed counts alone still say FREE at the lift"
+    assert free_after_alarm == 0, "the cell was broadcast FREE while it is occupied"
+    assert L.state(0)[0] == CD.OCCUPIED
+
+
+def test_lift_waits_for_the_cells_its_dilation_protects():
+    """A change occupies cell 2 always and its neighbour cell 3 only 5 % of the time (in 10-tick runs: below the CUSUM
+    floor, and 0.68 x 5 % < p_min so the counts never absorb it). Cell 3 is protected only by cell 2's UNKNOWN dilation,
+    so cell 2 must not be lifted while cell 3 keeps showing hits: cell 3 is never broadcast FREE while occupied."""
+    cfg = ChangeConfig(half_life_ticks=2000.0, clear_ticks=300, dilate=1)
+    L = ChangeLayer(5, cfg=cfg, shape=(1, 5))
+    rng = np.random.default_rng(8)
+    obs = np.ones(5, bool)
+    for _ in range(16000):
+        L.step(0, rng.random(5) < 0.002, obs)
+    free_while_occupied = 0
+    alarmed = False
+    for t in range(8000):
+        truth = np.array([False, False, True, (t % 200) < 10, False])
+        L.step(0, (truth & (rng.random(5) < DET)) | (rng.random(5) < 0.002), obs)
+        alarmed |= bool(L.unknown[2])
+        if alarmed and truth[3] and L.state(0)[3] == CD.FREE:
+            free_while_occupied += 1
+    print(f"\ndilation ring: cell 2 UNKNOWN {alarmed}, still UNKNOWN at the end {bool(L.unknown[2])}, decayed p of cell 3 "
+          f"{L.p(0)[3]:.3f}; ticks cell 3 occupied but broadcast FREE: {free_while_occupied}")
+    assert alarmed and L.p(0)[3] < cfg.p_min
+    assert free_while_occupied == 0
+
+
+def test_weekly_program_variant_cells_stay_occupied_after_their_decayed_p_falls():
+    """Audit S7a #2. Forgetting may only ADD occupancy. A program variant that runs 2 'days' a 'week' (1 day = one
+    half-life, as with the 24 h default) sweeps its cells 50 % of the time in slice 2; after 5 days without it the
+    decayed p has fallen below p_min (a decayed-only broadcast would say FREE), but the undecayed p holds the cells
+    OCCUPIED, they are not monitored, and when the variant comes back they are never FREE and raise no alarm."""
+    day = 1000.0                                          # observed ticks of one slice per 'day' = the half-life
+    cfg = ChangeConfig(half_life_ticks=day)
+    nsl, N = 4, 20
+    var = np.arange(5, 10)                                # the variant's cells
+    L = ChangeLayer(N, nsl, cfg)
+    rng = np.random.default_rng(5)
+    obs = np.ones(N, bool)
+
+    def run(days, variant):
+        free_while_used = 0
+        for t in range(int(days * day * nsl)):
+            s = t % nsl
+            truth = np.zeros(N, bool)
+            if variant and s == 2:
+                truth[var] = (t // nsl) % 20 < 10
+            hits = (rng.random(N) < 0.005) | (truth & (rng.random(N) < DET))
+            L.step(s, hits, obs)
+            if variant:
+                free_while_used += int((L.state(2)[var] == CD.FREE).sum())
+        return free_while_used
+
+    for _ in range(2):                                    # two weeks of history: variant on days 1-2, off days 3-7
+        run(2, True)
+        run(5, False)
+    p_dec, p_life = L.p(2)[var], L.p_lifetime(2)[var]
+    print(f"\nweekly variant after 5 days off: decayed p {p_dec.round(4)}, undecayed p {p_life.round(4)}; "
+          f"state {L.state(2)[var]}")
+    assert (p_dec < cfg.p_min).all(), "scenario check: a decayed-only broadcast would say FREE"
+    assert (p_life >= cfg.p_min).all()
+    assert (L.state(2)[var] == CD.OCCUPIED).all() and not L.monitored(2)[var].any()
+    assert run(2, True) == 0, "a variant cell was broadcast FREE while the variant used it"
+    assert not L.unknown[var].any(), "the returning variant is known envelope, not a change"
+
+
+def test_state_codes_untrusted_cells_are_unknown_and_config_is_checked():
+    L = ChangeLayer(3, n_slices=2, cfg=ChangeConfig(min_visits=10, half_life_ticks=1000.0))
+    assert (L.state(0) == CD.UNKNOWN).all(), "nothing learned yet: UNKNOWN, not FREE"
+    for _ in range(20):
+        L.step(0, np.array([True, False, False]), np.array([True, True, False]))
+    assert L.state(0).tolist() == [CD.OCCUPIED, CD.FREE, CD.UNKNOWN]
+    assert (L.state(1) == CD.UNKNOWN).all(), "a slice never observed stays UNKNOWN"
+    assert L.monitored(0).tolist() == [False, True, False]
+    with pytest.raises(ValueError):                       # decayed visits saturate at hl / ln 2 < min_visits: never trusted
+        ChangeLayer(1, cfg=ChangeConfig(min_visits=60, half_life_ticks=30.0))
+
+
+def test_sensitivity_floor_10pct_sweep_is_not_detected_in_2h():
+    """Disclosed limitation (module docstring): a cell occupied ~10 % of the time by a change not locked to the slices
+    is below the CUSUM's sensitivity floor and is not (all) detected within 2 h; only the forgetting absorbs it (hours).
+    This test pins the disclosed number; if it fails, the detector got more sensitive and the disclosure must change."""
+    d, fa, _ = _run_change("arm", 0.1, N=120, learn=3 * 3600 * 2, after=2 * 3600 * 2)
+    print(f"\n10 % sweep: {np.isfinite(d).sum()} of {len(d)} cells UNKNOWN within 2 h; false-alarm cells {fa}")
+    assert not np.isfinite(d).all()
+
+
 def test_unknown_is_never_lifted_and_cusum_frozen_while_unobserved():
     cfg = ChangeConfig(clear_ticks=100)
     L = ChangeLayer(1, cfg=cfg)

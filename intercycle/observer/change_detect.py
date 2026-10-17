@@ -2,9 +2,11 @@
 
 The defect (docs/WEAKNESSES.md M-W4, safety direction). The map's occupancy is p = hits / visits per cell and slice, and
 a cell with p < p_min is broadcast FREE. `observer/change.py` only watches static space outside every known zone + 1 m,
-so a new arm 0.5-1 m from a zone, a robot program change or a newly always-occupied cell inside a zone is absorbed into
-the counts. The counts never decay, so against a week of visits such a cell needs about 9 h (a 30 %-swept cell about
-30 h) to reach p_min, and until then it is broadcast FREE.
+so a new arm whose detections stay inside zone + 1 m (with the measured sigma 0.285 m: an arm inside the zone or hugging
+its edge; an arm 0.5 m or more outside the edge spills past the margin and change.py catches it, see
+tests/test_change_detect_l1.py), a robot program change or a newly always-occupied cell inside zone + 1 m is absorbed
+into the counts. The counts never decay, so against a week of visits such a cell needs about 9 h (a 30 %-swept cell
+about 30 h) to reach p_min, and until then it is broadcast FREE.
 
 The fix, as one small object per grid (`ChangeLayer`):
 
@@ -13,10 +15,15 @@ The fix, as one small object per grid (`ChangeLayer`):
    of the current slice are multiplied by lam = 2 ** (-1 / half_life_ticks) and then incremented. Cells that are not
    observed (camera down, occluded, outside the frustum) and the other slices are not touched: forgetting runs on
    coverage, never on wall time, so a camera outage or an unvisited slice does not erase what the map knows.
-   p = k / n is the map's occupancy with forgetting (`p()`); the caller may broadcast it instead of undecayed counts.
+   The layer also keeps the undecayed visits N and hits K of the same ticks (the map's counts without forgetting).
+   p = k / n is the occupancy with forgetting (`p()`), P = K / N the undecayed one (`p_lifetime()`).
+   Forgetting may only ADD occupancy: a cell is OCCUPIED in a slice when p >= p_min OR P >= p_min. So a cell that a
+   robot uses only now and then (a weekly or maintenance program variant, a rare reach) and whose decayed p has fallen
+   below p_min during its days of non-use is still held by its undecayed P; forgetting never broadcasts it FREE.
+   (A cell whose undecayed P is below p_min too is FREE, exactly as in the map without this module: not a new mode.)
 
-2. CUSUM on in-zone hits in cells with p < p_min. A cell is MONITORED in the current slice when n >= min_visits and
-   p < p_min there (the map would broadcast it FREE). Per monitored, observed cell a one-sided CUSUM
+2. CUSUM on in-zone hits in FREE cells. A cell is MONITORED in the current slice when n >= min_visits and it is not
+   OCCUPIED there (p < p_min AND P < p_min: it is broadcast FREE). Per monitored, observed cell a one-sided CUSUM
    S = clip(S + llr, 0, cap) runs on its hit sequence. Camera hits come in runs (one arm pass covers a cell for several
    ticks, a rare excursion is one burst), so the log-likelihood ratio is the one of a two-state Markov chain, not of iid
    Bernoulli draws: llr depends on the cell's previous observed state (miss/hit) and its current one,
@@ -34,10 +41,34 @@ The fix, as one small object per grid (`ChangeLayer`):
    with its own cycle) and Ss[s, c] per slice (a change in some slices only, e.g. a program change that puts the arm in
    cells at phases where they used to be free). max(S, Ss) >= h  ->  the cell is UNKNOWN at once (that very tick).
 
-3. Lifting UNKNOWN. An UNKNOWN cell is lifted after `clear_ticks` OBSERVED ticks without an unexplained hit (a hit on the
-   cell while it is monitored). This covers both ends: the change went away (no hits), or the decayed counts absorbed it
-   (p >= p_min in every slice where it now shows hits, so the map itself broadcasts it occupied). An unobserved cell is
-   never lifted, and its S is frozen.
+3. Lifting UNKNOWN. An unexplained hit is a hit on a cell that the broadcast shows FREE (point 4). An UNKNOWN cell is
+   lifted after `clear_ticks` of its OBSERVED ticks without an unexplained hit on itself or on any cell within `dilate`
+   cells of it (its UNKNOWN dilation is what protects such a neighbour, e.g. a cell the change occupies too rarely for
+   its own CUSUM). This covers both ends: the change went away (no hits), or the broadcast took it in (its hits are no
+   longer on FREE cells). An unobserved cell is never lifted, and its S is frozen.
+   Availability cost: detection noise around a persistent change (sigma 0.285 m) keeps hitting FREE fringe cells, so
+   the dilated UNKNOWN blob around it usually stays as long as the change does.
+
+4. The lift is decided against what is BROADCAST, never against counts the broadcast does not use (audit S7a #1).
+   Standalone (a twin grid, lane S6), the broadcast is the layer's own `state(slice)`: per cell FREE / OCCUPIED /
+   UNKNOWN; UNKNOWN where the cell is UNKNOWN (dilated) or its slice is not trusted yet (n < min_visits: fail closed,
+   costs the first min_visits observed ticks of each (slice, cell) after a start, since nothing is persisted), OCCUPIED
+   by the rule of point 1, FREE otherwise. The caller broadcasts `state()` (`not_free()`), never its own undecayed
+   counts: a cell lifted because the decayed counts absorbed the change is OCCUPIED in `state()` from that tick on.
+   When the broadcast is someone else's (the body-shop LayeredMap's undecayed envelope), the caller passes it to
+   `step(..., free=)`: the CUSUM monitors and the lift is judged on those FREE cells, so a lift happens only once that
+   broadcast covers the change (`change_detect_l1.L1ChangeDetector` does this itself; forgetting then serves the
+   CUSUM's null only, and the UNKNOWN box stays until the map's undecayed counts take the change in, e.g. ~13 h for a
+   newly always-occupied cell against a week of history).
+
+Sensitivity floor (disclosed, M-W4): a change that occupies a cell only ~10 % of the observed ticks, not locked to the
+slices (e.g. 10 % of a new arm's own cycle), is below the CUSUM's floor: the pooled CUSUM drifts down at that rate, and
+in the synthetic test 10 % sweeps are not (all) detected within 2 h (tests/test_change_detect.py::
+test_sensitivity_floor_10pct_sweep_is_not_detected_in_2h). Such cells stay FREE until the forgetting absorbs them:
+the decayed p tends to 0.68 x the occupied share, so a 10 % cell reaches p_min after ~1.9 half-lives (~2 days at the
+default 24 h), and a cell occupied less than p_min / 0.68 = 7.4 % of the time never does. On the body-shop map (where
+the broadcast is the undecayed envelope, point 4) only the map's own counts take it in. In the same synthetic test 30 %
+and 50 % sweeps are detected within 5 min (max 294 s and 239 s).
 
 What the caller decides (and is documented by the caller, e.g. twin/observer_live.py):
 - the grid (a machine's 0.25 m L1 envelope grid, the twin's floor grid) and the slices (phase bins, time-of-day bins;
@@ -46,14 +77,18 @@ What the caller decides (and is documented by the caller, e.g. twin/observer_liv
   2 Hz spread over the slices: 172800 / n_slices observed ticks (the 24 h half-life of WEAKNESSES M-W4);
 - which detections are hits ("in-zone hits": e.g. machine parts inside the zone + margin; people are not machine
   changes);
-- that an untrusted slice (n < min_visits) is shown conservatively by the map (it is not monitored here).
+- which cells are observed on a tick: from Observation v2 (cam_floor_ok via mapping.floor_ok_of, zone_vis), never
+  "all cells" by default (an occluded cell that counts as observed would decay towards FREE and could be lifted).
 
 API (all arrays flat over the grid, length n_cells):
     layer = ChangeLayer(n_cells, n_slices=1, cfg=ChangeConfig(), shape=None)
-    res = layer.step(slice_idx, hits, observed)       # StepResult(alarmed=idx, lifted=idx)
+    res = layer.step(slice_idx, hits, observed, free=None)   # StepResult(alarmed=idx, lifted=idx); free: point 4
+    layer.state(slice_idx)                            # int8 FREE / OCCUPIED / UNKNOWN: what to broadcast
+    layer.not_free(slice_idx)                         # state != FREE
     layer.unknown_mask()                              # bool[n_cells], dilated by cfg.dilate cells when shape is given
-    layer.p(slice_idx)                                # decayed occupancy of a slice (NaN where never observed)
-    layer.visits(slice_idx), layer.S, layer.Ss, layer.unknown, layer.monitored(slice_idx)
+    layer.p(slice_idx), layer.p_lifetime(slice_idx)   # decayed / undecayed occupancy (NaN where never observed)
+    layer.occupied(slice_idx), layer.trusted(slice_idx), layer.monitored(slice_idx)
+    layer.visits(slice_idx), layer.S, layer.Ss, layer.unknown
     CD.half_life_for(wall_hours, n_slices)            # half_life_ticks for a wall-clock half-life
     CD.drift_per_tick(cfg, a0, b0, q, r)              # expected llr per tick (analytic detection delay ~ h / drift)
 State is in-process only (numpy arrays on the object); nothing is persisted.
@@ -67,6 +102,7 @@ import numpy as np
 
 HZ = 2.0
 DAY_TICKS = 24 * 3600 * HZ          # 172800 observed ticks = 24 h at 2 Hz
+FREE, OCCUPIED, UNKNOWN = 0, 1, 2   # `ChangeLayer.state` codes
 
 
 @dataclass(frozen=True)
@@ -107,9 +143,14 @@ class ChangeLayer:
             raise ValueError("half_life_ticks must be > 0")
         self.half_life_ticks = float(hl)
         self.lam = 2.0 ** (-1.0 / self.half_life_ticks)
+        if 1.0 / (1.0 - self.lam) < cfg.min_visits:
+            raise ValueError(f"half_life_ticks {hl:g}: decayed visits saturate at {1.0 / (1.0 - self.lam):.0f} < "
+                             f"min_visits {cfg.min_visits:g}, no cell would ever be trusted")
         z = (self.n_slices, self.n_cells)
         self.n = np.zeros(z)            # decayed observed ticks
-        self.k = np.zeros(z)            # decayed hit ticks (the map's occupancy p = k / n)
+        self.k = np.zeros(z)            # decayed hit ticks (occupancy with forgetting p = k / n)
+        self.N = np.zeros(z)            # undecayed observed ticks
+        self.K = np.zeros(z)            # undecayed hit ticks (occupancy without forgetting P = K / N)
         self.kx = np.zeros(z)           # decayed run-state ticks (x = 1)
         self.e = np.zeros(z)            # decayed run entries (x: 0 -> 1)
         self.prev = np.zeros(self.n_cells, bool)       # run state x at the cell's last observed tick
@@ -128,13 +169,40 @@ class ChangeLayer:
         with np.errstate(invalid="ignore", divide="ignore"):
             return np.where(n > 0, self.k[slice_idx] / np.where(n > 0, n, 1.0), np.nan)
 
+    def p_lifetime(self, slice_idx: int = 0) -> np.ndarray:
+        N = self.N[slice_idx]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(N > 0, self.K[slice_idx] / np.where(N > 0, N, 1.0), np.nan)
+
     def visits(self, slice_idx: int = 0) -> np.ndarray:
         return self.n[slice_idx].copy()
 
-    def monitored(self, slice_idx: int = 0) -> np.ndarray:
-        """Cells the map would broadcast FREE in this slice and whose null is trusted."""
-        n, k = self.n[slice_idx], self.k[slice_idx]
-        return (n >= self.cfg.min_visits) & (k < self.cfg.p_min * n)
+    def trusted(self, slice_idx: int = 0) -> np.ndarray:
+        """Cells whose decayed visits in this slice are enough to trust their counts (and the CUSUM's null)."""
+        return self.n[slice_idx] >= self.cfg.min_visits
+
+    def occupied(self, slice_idx: int = 0) -> np.ndarray:
+        """Occupied by the counts: decayed p >= p_min OR undecayed P >= p_min (forgetting only adds occupancy)."""
+        pm = self.cfg.p_min
+        return ((self.n[slice_idx] > 0) & (self.k[slice_idx] >= pm * self.n[slice_idx])) | \
+               ((self.N[slice_idx] > 0) & (self.K[slice_idx] >= pm * self.N[slice_idx]))
+
+    def monitored(self, slice_idx: int = 0, free: np.ndarray | None = None) -> np.ndarray:
+        """Cells broadcast FREE in this slice (by the counts, or the given `free` broadcast) whose null is trusted: the
+        CUSUM runs on them."""
+        fr = ~self.occupied(slice_idx) if free is None else np.asarray(free, bool).reshape(-1)
+        return self.trusted(slice_idx) & fr
+
+    def state(self, slice_idx: int = 0, unknown: np.ndarray | None = None) -> np.ndarray:
+        """int8[n_cells] FREE / OCCUPIED / UNKNOWN in this slice: what is broadcast (module docstring, point 4).
+        `unknown` = a precomputed unknown_mask() (to share one dilation across slices)."""
+        U = self.unknown_mask() if unknown is None else unknown
+        out = np.where(self.occupied(slice_idx), OCCUPIED, FREE).astype(np.int8)
+        out[U | ~self.trusted(slice_idx)] = UNKNOWN
+        return out
+
+    def not_free(self, slice_idx: int = 0, unknown: np.ndarray | None = None) -> np.ndarray:
+        return self.state(slice_idx, unknown) != FREE
 
     def unknown_mask(self) -> np.ndarray:
         U = self.unknown.copy()
@@ -163,35 +231,47 @@ class ChangeLayer:
                         np.where(hit, np.log(a1 / a0), np.log((1.0 - a1) / (1.0 - a0))),
                         np.where(hit, np.log(b1 / b0), np.log((1.0 - b1) / (1.0 - b0))))
 
-    def step(self, slice_idx: int, hits: np.ndarray, observed: np.ndarray) -> StepResult:
-        """One tick. hits / observed: bool[n_cells]. A cell that is not observed is left exactly as it was."""
+    def step(self, slice_idx: int, hits: np.ndarray, observed: np.ndarray, free: np.ndarray | None = None) -> StepResult:
+        """One tick. hits / observed: bool[n_cells]. A cell that is not observed is left exactly as it was.
+        `free` (bool[n_cells], optional): the cells the BROADCAST shows FREE in this slice right now, when the broadcast
+        is not this layer's `state()` (the body-shop LayeredMap's undecayed envelope, see change_detect_l1). Default:
+        FREE by this layer's counts (not `occupied`). The CUSUM runs on trusted FREE cells, and a hit on a FREE cell is
+        an unexplained hit (it blocks the lift of every UNKNOWN cell within `dilate` cells of it)."""
         if not 0 <= slice_idx < self.n_slices:
             raise IndexError(f"slice {slice_idx} outside 0..{self.n_slices - 1}")
         hits = np.asarray(hits, bool).reshape(-1)
         obs = np.asarray(observed, bool).reshape(-1)
         if hits.shape[0] != self.n_cells or obs.shape[0] != self.n_cells:
             raise ValueError("hits / observed must have n_cells entries")
+        s = slice_idx
+        fr = ~self.occupied(s) if free is None else np.asarray(free, bool).reshape(-1)
+        if fr.shape[0] != self.n_cells:
+            raise ValueError("free must have n_cells entries")
         hits = hits & obs
         idx = np.flatnonzero(obs)
         empty = np.zeros(0, np.int64)
         if not len(idx):
             return StepResult(empty, empty)
-        s = slice_idx
         h = hits[idx]
         pv = self.prev[idx]
         self.since[idx] = np.where(h, 0, self.since[idx] + 1)
         x = self.since[idx] <= self.cfg.hold                        # run state (gap-filled hits)
         # ---- CUSUM on monitored cells (null from the counts BEFORE this tick)
-        mon = self.monitored(s)[idx]
+        mon = (self.trusted(s) & fr)[idx]
         alarmed, lifted = empty, empty
         self.obs_ticks[idx] += 1
+        unexpl = idx[h & fr[idx]]
+        if len(unexpl):                                  # also blocks the lift of UNKNOWN cells whose dilation covers it
+            u = np.zeros(self.n_cells, bool)
+            u[unexpl] = True
+            if self.cfg.dilate > 0 and self.shape is not None:
+                u = _dilate(u.reshape(self.shape), self.cfg.dilate).reshape(-1)
+            self.last_unexpl[u] = self.obs_ticks[u]
         if mon.any():
             im = idx[mon]
             r = self.llr(s, im, pv[mon], x[mon])
             self.S[im] = np.clip(self.S[im] + r, 0.0, self.cap)
             self.Ss[s, im] = np.clip(self.Ss[s, im] + r, 0.0, self.cap)
-            unexpl = im[h[mon]]
-            self.last_unexpl[unexpl] = self.obs_ticks[unexpl]
             new = im[((self.S[im] >= self.cfg.h) | (self.Ss[s, im] >= self.cfg.h)) & ~self.unknown[im]]
             if len(new):
                 self.unknown[new] = True
@@ -210,6 +290,8 @@ class ChangeLayer:
         lam = self.lam
         self.n[s, idx] = self.n[s, idx] * lam + 1.0
         self.k[s, idx] = self.k[s, idx] * lam + h
+        self.N[s, idx] += 1.0
+        self.K[s, idx] += h
         self.kx[s, idx] = self.kx[s, idx] * lam + x
         self.e[s, idx] = self.e[s, idx] * lam + (x & ~pv)
         self.prev[idx] = x
