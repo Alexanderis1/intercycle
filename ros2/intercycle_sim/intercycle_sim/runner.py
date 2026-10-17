@@ -150,7 +150,7 @@ def main() -> None:
                 gap = _min_gap(st["pos_w"][0], st["pos_w"][1], prims)
                 if gap < min_gap:
                     min_gap, min_gap_t = gap, t
-            cs = be.contacts()
+            cs = be.contacts() if t >= 0.5 else []          # ignore the spawn settle (first 0.5 s)
             if cs:
                 fr["contacts"] = cs
                 ev = {"t": round(t, 3), "contacts": cs, "x": st["pos_w"][0], "y": st["pos_w"][1],

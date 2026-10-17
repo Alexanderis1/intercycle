@@ -14,6 +14,7 @@ is also set for Iron+ tooling).
 run_episode(cfg, world_files, vol_root) -> summary dict; logs go to <vol_root>/<tag>/.
 cfg: tag, mode ("cmdvel" | "nav"), sim ("isaac" | "fake"), start [x,y,psi], seconds, cmd [vx,vy,wz] (cmdvel),
 goal [x,y,psi] + timeout_s (nav), nav2 (bool), nav2_params (path inside the container; default config/nav2_gate.yaml),
+nav2_cmd (replaces the stock Nav2 bringup), goal_cmd (replaces send_goal.py; must write $IC_WORK/goal.json),
 max_rtf, seed, movers / mover_source (see movers.py), extra_launch (list of shell commands R2/R3 add, run in the
 ROS env after Nav2 starts).
 """
@@ -29,6 +30,7 @@ import time
 PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # .../intercycle_sim (package dir parent)
 ROS2_ROOT = os.path.dirname(PKG_ROOT)                                         # the repo's ros2/ tree (all packages)
 ROS_SETUP = "/opt/ros/humble/setup.bash"
+REPO_ROOT = os.environ.get("INTERCYCLE_REPO", "/root/repo")          # mounted intercycle/ + scenario/ (ROS env only)
 
 
 def _pkg_paths() -> str:
@@ -65,8 +67,11 @@ def ros_env(work: str) -> dict:
     env.update(RMW_IMPLEMENTATION="rmw_cyclonedds_cpp", CYCLONEDDS_URI=f"file://{xml}",
                ROS_AUTOMATIC_DISCOVERY_RANGE="LOCALHOST", ROS_DOMAIN_ID="17", PYTHONUNBUFFERED="1",
                RCUTILS_COLORIZED_OUTPUT="0")
-    env["PYTHONPATH"] = _pkg_paths() + ":" + env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = _pkg_paths() + ":" + REPO_ROOT + ":" + env.get("PYTHONPATH", "")
     env["INTERCYCLE_ROS2"] = ROS2_ROOT
+    env["INTERCYCLE_REPO"] = REPO_ROOT
+    # `python3` in the ROS env must be the system 3.10 (rclpy), not Modal's 3.11 in /usr/local/bin
+    env["PATH"] = "/opt/ros/humble/bin:/usr/bin:/bin:" + env.get("PATH", "")
     return env
 
 
@@ -118,6 +123,21 @@ class Procs:
                 return f.read()[-n:]
         except FileNotFoundError:
             return ""
+
+
+def _start_cmd(procs: "Procs", name: str, cmd, env: dict) -> None:
+    """A user command: a shell string, or a list whose items get $VAR expansion from env; cwd = the ros2/ tree."""
+    if isinstance(cmd, str):
+        procs.start(name, cmd, env, cwd=ROS2_ROOT, shell=True)
+    else:
+        old = dict(os.environ)
+        try:
+            os.environ.update(env)
+            argv = [os.path.expandvars(str(c)) for c in cmd]
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+        procs.start(name, argv, env, cwd=ROS2_ROOT)
 
 
 def _read_json(path: str):
@@ -181,19 +201,26 @@ def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
             procs.start("cmdvel", ["ros2", "topic", "pub", "-r", "20", "/cmd_vel", "geometry_msgs/msg/Twist", twist],
                         renv)
         if cfg.get("nav2"):
-            params = cfg.get("nav2_params") or os.path.join(PKG_ROOT, "config", "nav2_gate.yaml")
-            procs.start("nav2", ["ros2", "launch", "nav2_bringup", "bringup_launch.py", "use_sim_time:=True",
-                                 "autostart:=True", "use_composition:=False", "slam:=False",
-                                 f"map:={os.path.join(wdir, 'map.yaml')}", f"params_file:={params}"], renv)
+            icenv = dict(renv, IC_WORK=work, IC_WORLD=wdir, IC_OUT=out_dir)
+            if cfg.get("nav2_cmd"):                      # R2: replaces the stock bringup (e.g. a collision_monitor chain)
+                _start_cmd(procs, "nav2", cfg["nav2_cmd"], icenv)
+            else:
+                params = cfg.get("nav2_params") or os.path.join(PKG_ROOT, "config", "nav2_gate.yaml")
+                procs.start("nav2", ["ros2", "launch", "nav2_bringup", "bringup_launch.py", "use_sim_time:=True",
+                                     "autostart:=True", "use_composition:=False", "slam:=False",
+                                     f"map:={os.path.join(wdir, 'map.yaml')}", f"params_file:={params}"], icenv)
             for k, cmd in enumerate(cfg.get("extra_launch", [])):
-                procs.start(f"extra{k}", cmd, dict(renv, IC_WORK=work, IC_WORLD=wdir, IC_OUT=out_dir), cwd=ROS2_ROOT,
-                            shell=True)
-            g = cfg["goal"]
-            s = cfg.get("start", [4.0, 32.0, 0.0])
-            procs.start("goal", ["/usr/bin/python3", "-u", os.path.join(PKG_ROOT, "intercycle_sim", "send_goal.py"),
-                                 "--init", ",".join(str(v) for v in s), "--goal", ",".join(str(v) for v in g),
-                                 "--timeout", str(cfg.get("timeout_s", 300)),
-                                 "--out", os.path.join(work, "goal.json")], renv)
+                _start_cmd(procs, f"extra{k}", cmd, icenv)
+            if cfg.get("goal_cmd"):                      # R2: timing_planner runs the mission, writes $IC_WORK/goal.json
+                _start_cmd(procs, "goal", cfg["goal_cmd"], icenv)
+            else:
+                g = cfg["goal"]
+                s = cfg.get("start", [4.0, 32.0, 0.0])
+                procs.start("goal", ["/usr/bin/python3", "-u",
+                                     os.path.join(PKG_ROOT, "intercycle_sim", "send_goal.py"),
+                                     "--init", ",".join(str(v) for v in s), "--goal", ",".join(str(v) for v in g),
+                                     "--timeout", str(cfg.get("timeout_s", 300)),
+                                     "--out", os.path.join(work, "goal.json")], icenv)
         # wait for the sim to finish (time limit) or the goal client to finish
         limit = float(cfg.get("seconds", 60)) / max(float(cfg.get("max_rtf", 1.0)) or 1.0, 0.05) * 3 + 600
         t0 = time.time()

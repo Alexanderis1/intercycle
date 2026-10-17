@@ -34,6 +34,7 @@ VOL_NAME = "intercycle-robot"
 VOL = "/vol"
 REMOTE_ROS2 = "/root/ros2"                      # the whole repo ros2/ tree (intercycle_sim, intercycle_nav, intercycle_eval)
 REMOTE_PKG = f"{REMOTE_ROS2}/intercycle_sim"
+REMOTE_REPO = "/root/repo"                      # intercycle/ + scenario/ for the ROS-side nodes (on the ROS PYTHONPATH)
 ISAACLAB_TAG = "v2.3.0"
 CU128 = "https://download.pytorch.org/whl/cu128"
 
@@ -86,7 +87,16 @@ image = (
         "bash -c 'source /opt/ros/humble/setup.bash && ros2 pkg list | grep -E \"^nav2_(bringup|mppi_controller|smac_planner|amcl)$\"'",
     )
     .env({"LANG": "en_US.UTF-8", "PYTHONUNBUFFERED": "1"})
+    # ROS-side (py3.10) deps for R2's observer_bridge / timing_planner (intercycle.codec, observer.mapping, robot.*)
+    .apt_install("python3-pip")
+    .run_commands(
+        "/usr/bin/python3 -m pip install --no-cache-dir 'pynacl==1.5.0' 'pydantic>=2,<3'",
+        "bash -c 'source /opt/ros/humble/setup.bash && /usr/bin/python3 -c \"import numpy, nacl, pydantic, yaml, rclpy;"
+        " print(numpy.__version__, nacl.__version__, pydantic.VERSION)\"'",
+    )
     .add_local_dir(str(REPO / "ros2"), REMOTE_ROS2, ignore=["**/__pycache__", "**/*.pyc", "**/test/**"])
+    .add_local_dir(str(REPO / "intercycle"), f"{REMOTE_REPO}/intercycle", ignore=["**/__pycache__", "**/*.pyc"])
+    .add_local_dir(str(REPO / "scenario"), f"{REMOTE_REPO}/scenario")
 )
 
 
@@ -116,6 +126,9 @@ def check() -> dict:
         "ros": sh("source /opt/ros/humble/setup.bash && ros2 pkg list | grep -cE '^nav2_' && "
                   "ros2 pkg list | grep -E '^(nav2_mppi_controller|nav2_smac_planner|rmw_cyclonedds_cpp)$'"),
         "rclpy": sh("source /opt/ros/humble/setup.bash && /usr/bin/python3 -c 'import rclpy, nav2_simple_commander; print(\"rclpy ok\")'"),
+        "ros_py_deps": sh("source /opt/ros/humble/setup.bash && cd /tmp && PYTHONPATH=/root/repo:$PYTHONPATH /usr/bin/python3 -c"
+                          " 'import numpy, nacl, pydantic, intercycle.scenario as s; print(numpy.__version__,"
+                          " pydantic.VERSION, len(s.load(\"/root/repo/scenario/bodyshop.yaml\").machines))'"),
         "nproc": sh("nproc; free -g | head -2"),
     }
 
@@ -162,7 +175,8 @@ def pull(tag: str) -> Path:
 @app.local_entrypoint()
 def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: float = 0.0, wz: float = 0.0,
          goal: str = "20,32", start: str = "4,32,0", tag: str = "", gpu: str = "L4", empty: bool = False,
-         max_rtf: float = 1.0, timeout_s: float = 300.0, movers: str = "", nav2_params: str = ""):
+         max_rtf: float = 1.0, timeout_s: float = 300.0, movers: str = "", nav2_params: str = "",
+         cfg_json: str = ""):
     import time
 
     if action == "check":
@@ -181,6 +195,8 @@ def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: floa
         cfg["movers"] = [{"id": "P1", "cls": "person", "x": 11.0, "y": 32.2, "psi": 0.0, "v": 0.0},
                          {"id": "AGV1", "cls": "agv", "x": 16.0, "y": 33.0, "psi": 0.0, "v": 0.0},
                          {"id": "P2", "cls": "person", "x": 22.0, "y": 36.0, "psi": -1.5708, "v": 0.4}]
+    elif movers == "bump":   # contact smoke: with --action cmdvel the robot walks blindly into a parked AGV at x=9
+        cfg["movers"] = [{"id": "AGV1", "cls": "agv", "x": 9.0, "y": 32.0, "psi": 1.5708, "v": 0.0}]
     if action == "cmdvel":
         cfg.update(mode="cmdvel", seconds=seconds, cmd=[vx, vy, wz], nav2=False)
         world = build_world_bytes(empty=True)
@@ -189,6 +205,8 @@ def main(action: str = "check", seconds: float = 20.0, vx: float = 0.6, vy: floa
         world = build_world_bytes(empty=empty)
     else:
         raise SystemExit(f"unknown action {action!r}")
+    if cfg_json:           # extra/override cfg keys (nav2_cmd, goal_cmd, extra_launch, seed, ...): JSON text or @file
+        cfg.update(json.loads(Path(cfg_json[1:]).read_text() if cfg_json.startswith("@") else cfg_json))
     fn = fake_episode if action == "fake" else (isaac_episode_l40s if gpu.upper() == "L40S" else isaac_episode_l4)
     t0 = time.time()
     res = fn.remote(cfg, world)

@@ -68,8 +68,24 @@ The world frame is ROS `map`, with x = plan x (along the line) and y = plan z (a
   `IC_OUT` (episode output dir on the Volume). Example:
   `["ros2 launch /root/ros2/intercycle_nav/launch/observer.launch.py use_sim_time:=True"]` or
   `["python3 -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true"]`.
-- Instead of `send_goal.py`, a timing planner can drive the goals itself. Set `cfg["goal"]` to the first target, or
-  propose a `cfg["goal_cmd"]` hook to R1/the lead.
+- **`cfg["nav2_cmd"]`** (a shell string, or a list with `$VAR` expansion) **replaces** the stock
+  `ros2 launch nav2_bringup bringup_launch.py ...`. Use it, for example, to chain velocity_smoother -> collision_monitor
+  -> `/cmd_vel`:
+  `"ros2 launch /root/ros2/intercycle_nav/launch/nav.launch.py map:=$IC_WORLD/map.yaml use_sim_time:=True ..."`.
+  When it is unset, the default above is used. Whatever it launches must end in `/cmd_vel` (geometry_msgs/Twist), which
+  is the only command the bridge reads.
+- **`cfg["goal_cmd"]`** (same forms) **replaces** `send_goal.py`. The episode ends when this process exits, after a
+  2 s settle. It must set the initial pose (the dock, `cfg["start"]`) itself and write `$IC_WORK/goal.json` in the
+  `send_goal.py` shape: `{"goal", "init", "result": "SUCCEEDED|FAILED|CANCELED", "time_to_goal_s", "t_goal_sent",
+  "t_done", ...}`. Extra keys are kept, so a multi-target mission can add e.g. `"targets": [...]`.
+- ROS-side python: in every ROS-env command, `python3` is the system **3.10** (`/usr/bin` comes first on PATH).
+  `/usr/bin/python3` also has `pynacl==1.5.0` and `pydantic 2`. The repo's `intercycle/` and `scenario/` are mounted
+  at `/root/repo` and are on the ROS `PYTHONPATH` (verified: `import intercycle.codec` and
+  `intercycle.scenario.load("/root/repo/scenario/bodyshop.yaml")`). R2's nodes must not import `intercycle.truth` or
+  `intercycle.sim`.
+- Extra cfg keys from the CLI: `--cfg-json '{"nav2_cmd": "...", "goal_cmd": [...]}'` or `--cfg-json @file.json`.
+  This was tested on CPU with the test double: `nav2_cmd`, `goal_cmd` and `extra_launch` all ran, and the goal
+  SUCCEEDED.
 
 ## Movers (R3): kinematic bodies that Isaac collides with and the lidar sees
 
@@ -89,7 +105,13 @@ The world frame is ROS `map`, with x = plan x (along the line) and y = plan z (a
   3. `cfg["movers"] = [{"id", "cls", "x", "y", "psi", "v"}]`: constant-velocity scripted movers (smoke tests).
 - Contact events go to `contacts.json` in the episode dir: `{t, contacts: [{body, force_n}], x, y,
   nearest_mover, nearest_mover_gap_m}`. They are also published on `/intercycle/contacts`.
+  Contacts in the first 0.5 s (spawn settle) are ignored.
 - The evaluation-only truth clearance `min_mover_gap_m` is in `sim_summary.json`.
+- Both behaviours were verified on an L4 (17 Oct):
+  - `--movers demo`: Nav2 walked past a standing person and a parked AGV (goal SUCCEEDED, min truth gap 0.31 m,
+    0 contacts).
+  - `--action cmdvel --movers bump`: the robot walked blindly into a parked AGV. Its base contact was logged at
+    t = 8.18 s (`nearest_mover` AGV1, gap -0.03 m); the robot was stopped by the body and did not fall.
 - Camera model (stub for the inspection/no-motion checks): `sensors.CameraModel.observe(t, cam_xyz, yaw, pitch,
   targets, prims)` returns frustum, occlusion (Warp static + mover primitives), range, incidence, px/m and a detection
   with noise and latency.
@@ -126,6 +148,8 @@ and call `.remote` / `.starmap` inside its app.
 | `nav2` | Bool |
 | `nav2_params` | Params file path |
 | `extra_launch` | List of shell commands |
+| `nav2_cmd` | Replaces the stock Nav2 bringup |
+| `goal_cmd` | Replaces `send_goal.py`; must write `$IC_WORK/goal.json` |
 | `max_rtf` | Pacing limit (default 1.0) |
 | `seed` | Sensor noise seed |
 | `mover_source` / `mover_tracks` / `movers` | See "Movers" |
