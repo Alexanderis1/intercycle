@@ -27,6 +27,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import assets  # noqa: E402
 import fanuc  # noqa: E402
 import humans  # noqa: E402
 import plant  # noqa: E402
@@ -34,6 +35,7 @@ import replay_bpy as rb  # noqa: E402
 
 core = rb.core
 CCTV_Z = 9.0
+FORKLIFT_YAW_DEG = 90.0       # forklift_c forks point to -Y in the library; +90 deg turns them to +X
 ARM_REACH_STANDOFF = 2.65    # m, line centre -> FANUC base for on-line cells
 STACK = {"ACTIVE": "g", "IDLE": "g", "STOPPED": "y", "HELD": "y", "TRIPPED": "r"}
 
@@ -290,14 +292,41 @@ class RealScene(rb.BScene):
         flash = self.light(f"flash_{mid}", "POINT", (0, 0, -50), 0.0, (1.0, 0.85, 0.65), 0.05)
         self.sparks[mid] = (pool, flash, glow)
 
-    # ----- traffic: rigged MakeHuman workers instead of capsules -----
+    # ----- traffic: SimReady body-in-white + forklift, rigged MakeHuman workers instead of capsules -----
+    def _asset_copy(self, root, name: str, yaw_deg: float = 0.0) -> None:
+        """Parent local objects that share the library's linked meshes to `root`. Not a collection instance: each
+        entity's own objects carry its pass_index for the ground-truth pass, like every other entity."""
+        bpy, mu = self.bpy, self.mu
+        col = bpy.data.collections.get(name) or assets.load_library(names=[name])[0]
+        rot = mu.Matrix.Rotation(math.radians(yaw_deg), 4, "Z")
+        for src in col.all_objects:
+            if src.type != "MESH":
+                continue
+            o = bpy.data.objects.new(f"{root.name}.{src.name}", src.data)
+            self.col_real.objects.link(o)
+            o.parent = root
+            o.matrix_parent_inverse = mu.Matrix.Identity(4)
+            o.matrix_basis = rot @ src.matrix_world
+
+    def _biw(self, root, eid, biw, skid):                       # replay_bpy hook: real BIW (+X = car front)
+        self._asset_copy(root, "BIW")
+
+    def _forklift(self, eid):
+        """forklift_c with its forks turned to +X, the heading of the replay's procedural forklift."""
+        r = self.empty(f"ent_{eid}", (0, 0, -50), col=self.col_real)
+        self._asset_copy(r, "forklift_c", FORKLIFT_YAW_DEG)
+        return r
+
     def _traffic(self):
         persons = sorted(eid for eid, tr in self.ctx.tracks.items() if tr.cls == "person")
-        saved = {eid: self.ctx.tracks.pop(eid) for eid in persons}
+        forklifts = sorted(eid for eid, tr in self.ctx.tracks.items() if tr.cls == "forklift")
+        saved = {eid: self.ctx.tracks.pop(eid) for eid in persons + forklifts}
         try:
             super()._traffic()
         finally:
             self.ctx.tracks.update(saved)
+        for eid in forklifts:
+            self.prims[eid] = self._forklift(eid)
         self.workers: dict[str, object] = {}
         if not persons or not Path(humans.LIB_PATH).exists():
             if persons:
@@ -357,12 +386,15 @@ class RealScene(rb.BScene):
         if not weld:
             return
         self.bpy.context.view_layer.update()
-        _, _, tip = self.arms[mid][fi % len(self.arms[mid])]
+        joints, _, tip = self.arms[mid][fi % len(self.arms[mid])]
         p = tip.matrix_world.translation.copy()
-        rng = random.Random(fi * 131 + len(mid))
         mu = self.mu
+        out = joints["a1"].matrix_world.translation - p      # spatter leaves the electrode gap on the robot's (open) side,
+        out.z = 0.0                                          # not into the panel the gun is clamped on
+        out = out.normalized() if out.length > 1e-6 else mu.Vector((0.0, 0.0, 0.0))
+        rng = random.Random(fi * 131 + len(mid))
         for o in pool[: rng.randint(len(pool) // 3, len(pool))]:
-            d = mu.Vector((rng.gauss(0, 1), rng.gauss(0, 1), rng.gauss(-0.4, 0.8))).normalized()
+            d = (out * 1.3 + mu.Vector((rng.gauss(0, 0.8), rng.gauss(0, 0.8), rng.gauss(-0.3, 0.7)))).normalized()
             ln = rng.uniform(0.05, 0.35)
             o.location = p + d * (rng.uniform(0.02, 0.4) + ln / 2)
             o.rotation_euler = d.to_track_quat("Z", "Y").to_euler()

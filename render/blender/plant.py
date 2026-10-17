@@ -7,8 +7,8 @@ joints and painted aisle markings, overhead services (cable trays, spiral ducts,
 floor clutter (pallets, bins, carts, extinguishers, bollards, signage). Functions take the BScene `bs`
 (render/blender/replay_bpy.py) and use its helpers (box/cyl/light/material).
 
-Materials: procedural, world-space mapped (so scaled unit cubes need no UVs). When render/blender/materials.py
-(CC0 PBR library) is present, `mat()` prefers its PLANT entries of the same key.
+Materials: world-space mapped (so scaled unit cubes need no UVs). `mat()` takes the keys in PBR_KEYS from the
+CC0 PBR library (render/blender/materials.py, coords="world"); the rest are procedural.
 Seeded RNG: the same YAML always gives the same plant.
 """
 from __future__ import annotations
@@ -276,17 +276,21 @@ def skylight_mat(bs, name="skylight"):
     return m
 
 
+# plant key -> CC0 PBR key in render/blender/materials.py PLANT (world-mapped). Keys not listed stay procedural:
+# glows, thin markings, wire mesh/grating (need alpha), and finishes with no matching scan.
+PBR_KEYS = {
+    "floor": "floor_epoxy", "safety_yellow": "safety_yellow", "ral7035": "painted_grey", "steel_grey": "machine_grey",
+    "galv": "galvanized", "rubber": "rubber_black", "wood": "wood_pallet", "cardboard": "cardboard",
+    "cladding": "cladding", "hazard": "guard_hazard",
+}
+USE_PBR = True            # False: every key procedural (offline / A-B comparison)
+
+
 def mat(bs, key):
-    """Named plant material. Prefers the CC0 PBR library (render/blender/materials.py) when it exists."""
-    try:
-        import materials  # type: ignore  (render/blender/materials.py)
-        lib = getattr(materials, "PLANT", {})
-        if key in lib:
-            m = materials.get(key) if hasattr(materials, "get") else None
-            if m is not None:
-                return m
-    except Exception:  # noqa: BLE001  (library missing or failed: procedural fallback)
-        pass
+    """Named plant material: the CC0 PBR library entry in PBR_KEYS when USE_PBR, else procedural."""
+    if USE_PBR and key in PBR_KEYS:
+        import materials  # render/blender/materials.py; a failure here is a real error, not a silent fallback
+        return materials.plant(PBR_KEYS[key], coords="world")
     table = {
         "steel_grey": lambda: proc_mat(bs, "steel_grey", (0.30, 0.32, 0.34), rough=0.5, metal=0.6),
         "ral7035": lambda: proc_mat(bs, "ral7035", (0.70, 0.71, 0.69), rough=0.45, var=0.08, grime=0.3),
