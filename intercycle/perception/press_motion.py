@@ -141,11 +141,12 @@ def _box_hits(mask: np.ndarray, boxes: Sequence[Sequence[float]], scale: float) 
 
 def roi_signals(frames: np.ndarray, t: np.ndarray, mask: np.ndarray, scale: float,
                 person_boxes: Sequence[Sequence[Sequence[float]]] | None = None,
-                params: PressParams | None = None) -> pd.DataFrame:
+                params: PressParams | None = None, missing_mask: np.ndarray | None = None) -> pd.DataFrame:
     """Per frame: t, flow_v (full-res px/s, + = down), roi_energy, missing. Frame 0 has no flow (NaN, missing).
 
     ``person_boxes[i]`` lists full-resolution (x1, y1, x2, y2) person boxes of frame i; a frame whose ROI touches a
-    box is missing (NaN signals).
+    box is missing (NaN signals). ``missing_mask`` (optional, (N,) bool) is an external MISSING flag (e.g. the T-W6
+    occlusion rule ``intercycle.observer.occlusion.roi_missing_series``), OR-ed with the person-box rule.
     """
     p = params or PressParams()
     ys, xs = np.nonzero(mask)
@@ -163,6 +164,11 @@ def roi_signals(frames: np.ndarray, t: np.ndarray, mask: np.ndarray, scale: floa
         if len(person_boxes) != n:
             raise ValueError("person_boxes must have one entry per frame")
         missing = np.array([_box_hits(mask, b, scale) for b in person_boxes], bool)
+    if missing_mask is not None:
+        mm = np.asarray(missing_mask, bool)
+        if mm.shape != (n,):
+            raise ValueError(f"missing_mask has shape {mm.shape}, expected ({n},)")
+        missing = missing | mm
     for i in range(1, n):
         if missing[i]:
             continue
@@ -274,16 +280,22 @@ def intervals(strokes_t: np.ndarray, duration: float) -> tuple[np.ndarray, float
 
 def ingest_clip(path: str | Path, clip_id: str, split: str, press: str, framing: str,
                 roi_poly_px: Sequence[Sequence[float]], person_boxes=None, width: int = 640,
-                params: PressParams | None = None, clip: Clip | None = None) -> ClipResult:
+                params: PressParams | None = None, clip: Clip | None = None,
+                missing_mask: np.ndarray | None = None) -> ClipResult:
     """Full per-clip press ingest: decode -> ECC -> ROI flow -> strokes, plus the lamp-beat check.
 
-    ``person_boxes`` (optional) is one list of full-resolution boxes per decoded frame.
+    ``person_boxes`` (optional) is one list of full-resolution boxes per decoded frame; ``missing_mask`` (optional) is
+    an external per-frame MISSING flag (see ``roi_signals``). A frame without a flow value (frame 0, a repeated PTS) is
+    MISSING too: NaN always means MISSING (MachineRow contract, T-W6), never "no motion".
     """
     p = params or PressParams()
     c = clip if clip is not None else decode_gray(path, width=width)
     mask = roi_mask(roi_poly_px, c.frames.shape[1:], c.scale)
     stab, max_shift = stabilise(c, exclude=mask)
-    sig = roi_signals(stab, c.t, mask, c.scale, person_boxes, p)
+    sig = roi_signals(stab, c.t, mask, c.scale, person_boxes, p, missing_mask=missing_mask)
+    nan = ~(np.isfinite(sig["flow_v"].to_numpy()) & np.isfinite(sig["roi_energy"].to_numpy()))
+    sig["missing"] = sig["missing"].to_numpy() | nan
+    sig.loc[sig["missing"], ["flow_v", "roi_energy"]] = np.nan
     idx, thr = detect_strokes(c.t, sig["flow_v"].to_numpy(), p)
     stroke = np.zeros(len(c.t), bool)
     stroke[idx] = True
