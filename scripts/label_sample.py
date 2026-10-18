@@ -14,7 +14,14 @@ SampleList (twin/schemas/labels.py) plus its hash file:
 
 Only the dev split is accepted (fail closed); clips are listed through esk.load("dev").
 
-    python scripts/label_sample.py --out labels/dev/sample.json      (GPU env: needs PyAV for the PTS lists)
+Reproduce the committed, hashed lists (GPU env: needs PyAV for the PTS lists; nothing is written):
+
+    python scripts/label_sample.py --legacy-base --check labels/dev/sample.json
+    python scripts/label_sample.py --supplement labels/dev/sample.json --check labels/dev/sample_s1.json
+
+labels/dev/sample.json was drawn before the fix-round-1 dedupe (dedupe=False, `--legacy-base`); without that flag the
+base draw dedupes by sha256 and gives a DIFFERENT list. A new list is written only with `--out` to a path that does not
+exist yet: an existing hashed list is never overwritten.
 """
 from __future__ import annotations
 
@@ -279,29 +286,74 @@ def press_framings(rois_path: Path = ROIS, keep: tuple[str, ...] = ("P9a", "P9b"
     return {p["id"]: sorted(p["rois"]) for p in d["presses"] if p["id"] in keep}
 
 
+def dump_list(sl: SampleList) -> bytes:
+    return (json.dumps(sl.model_dump(mode="json"), indent=1) + "\n").encode("utf-8")
+
+
+def build_committed(inv: pd.DataFrame, pts_fn: PtsFn, *, which: str, seed: int = DEFAULT_SEED,
+                    base: SampleList | None = None) -> SampleList:
+    """Rebuild a committed DEV list. `which`: "legacy-base" = labels/dev/sample.json (drawn before the fix-round-1
+    dedupe, i.e. dedupe=False); "base" = the same draw with dedupe (NOT the committed list); "s1" = sample_s1.json
+    against `base` (the committed base list)."""
+    if which == "s1":
+        if base is None:
+            raise ValueError("the supplement needs the committed base list")
+        return build_supplement(inv, pts_fn, S1_PRESSES, base, split="dev", seed=seed, n_windows=S1_WINDOWS,
+                                n_reserve=S1_RESERVE, n_frames=S1_FRAMES, tag="s1")
+    if which not in ("legacy-base", "base"):
+        raise ValueError(f"unknown list {which!r}")
+    return build_sample_list(inv, pts_fn, press_framings(), split="dev", seed=seed, n_frames=DEFAULT_FRAMES,
+                             n_windows=DEFAULT_WINDOWS, n_reserve=DEFAULT_RESERVE, dedupe=which == "base")
+
+
+def check_against(sl: SampleList, data: bytes, committed: Path) -> str | None:
+    """None if `sl` (serialised as `data`) equals the committed list file byte for byte, else what differs."""
+    want = SampleList.model_validate(json.loads(committed.read_text(encoding="utf-8")))
+    if want.items_sha256 != sl.items_sha256:
+        return f"items_sha256 {sl.items_sha256} != committed {want.items_sha256}"
+    if committed.read_bytes() != data:
+        return "same items, but the file bytes differ (rule text or format)"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Reproduce the committed lists (no file is written):
+        python scripts/label_sample.py --legacy-base --check labels/dev/sample.json
+        python scripts/label_sample.py --supplement labels/dev/sample.json --check labels/dev/sample_s1.json
+    Writing a list needs --out to a path that does not exist yet: a hashed sample list is never overwritten."""
     from intercycle import esk
 
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--out", default=None, help="write the list here (refused if the file already exists)")
+    ap.add_argument("--check", default=None, metavar="COMMITTED_JSON",
+                    help="rebuild and compare with this committed list; writes nothing; exit 1 on a difference")
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    ap.add_argument("--legacy-base", action="store_true",
+                    help="the base list as committed (labels/dev/sample.json, drawn before the dedupe fix)")
     ap.add_argument("--supplement", default=None, metavar="BASE_SAMPLE_JSON",
                     help="draw the fix-round-1 supplementary list (S1_*) against this base sample list")
     a = ap.parse_args(argv)
+    if bool(a.out) == bool(a.check):
+        ap.error("give exactly one of --out (a new file) or --check (a committed list)")
+    if a.supplement and a.legacy_base:
+        ap.error("--legacy-base and --supplement exclude each other")
+    if a.out and (Path(a.out).exists() or Path(a.out).with_suffix(".sha256").exists()):
+        raise SystemExit(f"refusing to overwrite {a.out} (or its .sha256): a hashed sample list is never redrawn in "
+                         f"place; use --check to reproduce a committed list")
     inv = esk.load("dev")
     pts_fn: PtsFn = lambda c: container_pts(esk.clip_path(c))  # noqa: E731
     if a.supplement:
         base = SampleList.model_validate(json.loads(Path(a.supplement).read_text(encoding="utf-8")))
-        sl = build_supplement(inv, pts_fn, S1_PRESSES, base, split="dev", seed=a.seed, n_windows=S1_WINDOWS,
-                              n_reserve=S1_RESERVE, n_frames=S1_FRAMES, tag="s1")
-        default_out = ROOT / "labels" / "dev" / "sample_s1.json"
+        sl = build_committed(inv, pts_fn, which="s1", seed=a.seed, base=base)
     else:
-        sl = build_sample_list(inv, pts_fn, press_framings(), split="dev", seed=a.seed, n_frames=DEFAULT_FRAMES,
-                               n_windows=DEFAULT_WINDOWS, n_reserve=DEFAULT_RESERVE)
-        default_out = ROOT / "labels" / "dev" / "sample.json"
-    out = Path(a.out) if a.out else default_out
+        sl = build_committed(inv, pts_fn, which="legacy-base" if a.legacy_base else "base", seed=a.seed)
+    data = dump_list(sl)
+    if a.check:
+        diff = check_against(sl, data, Path(a.check))
+        print(f"{a.check}: " + ("reproduced (items_sha256 " + sl.items_sha256 + ")" if diff is None else diff))
+        return 0 if diff is None else 1
+    out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    data = (json.dumps(sl.model_dump(mode="json"), indent=1) + "\n").encode("utf-8")
     out.write_bytes(data)
     out.with_suffix(".sha256").write_text(hash_text(sl, data, out.name), encoding="utf-8", newline="\n")
     fr = [i for i in sl.items if i.kind == "frame"]

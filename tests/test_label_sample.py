@@ -201,3 +201,57 @@ def test_supplement_refuses_short_supply_and_test_split():
     with pytest.raises(ValueError, match="dev"):
         LS.build_supplement(inv, _pts(inv), PRESSES, base, split="test", seed=1, n_windows={"P9a": 1},
                             n_reserve={}, n_frames={})
+
+
+# ---- fix round 2: the committed lists are reproducible and never overwritten ------------------------------------
+
+def test_main_refuses_to_overwrite_a_hashed_list_and_needs_out_or_check(tmp_path):
+    p = tmp_path / "sample.json"
+    p.write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        LS.main(["--out", str(p)])
+    q = tmp_path / "other.json"
+    (tmp_path / "other.sha256").write_text("x", encoding="utf-8")
+    with pytest.raises(SystemExit, match="refusing to overwrite"):
+        LS.main(["--out", str(q)])
+    with pytest.raises(SystemExit):                         # neither --out nor --check
+        LS.main([])
+    with pytest.raises(SystemExit):
+        LS.main(["--legacy-base", "--supplement", str(p), "--check", str(p)])
+
+
+def test_check_against_reports_item_and_byte_differences(tmp_path):
+    a, b = _build(seed=7), _build(seed=8)
+    p = tmp_path / "a.json"
+    p.write_bytes(LS.dump_list(a))
+    assert LS.check_against(a, LS.dump_list(a), p) is None
+    assert "items_sha256" in (LS.check_against(b, LS.dump_list(b), p) or "")
+    assert "bytes differ" in (LS.check_against(a, LS.dump_list(a) + b" ", p) or "")
+
+
+DEV_DIR = Path(__file__).resolve().parents[1] / "labels" / "dev"
+
+
+def test_committed_lists_are_rebuilt_from_the_dev_inventory():
+    """Gated: needs PyAV (GPU env) and the local dev clips. Rebuilds both committed hashed lists byte for byte."""
+    pytest.importorskip("av")
+    from intercycle import esk
+
+    try:
+        inv = esk.load("dev")
+        missing = [c for c in inv["clip_id"] if not esk.clip_path(c).exists()]
+    except Exception as e:                                   # no local data store
+        pytest.skip(f"dev inventory not available: {e}")
+    if missing:
+        pytest.skip(f"{len(missing)} dev clips are not local")
+    pts_fn = lambda c: LS.container_pts(esk.clip_path(c))  # noqa: E731
+    base = LS.build_committed(inv, pts_fn, which="legacy-base")
+    assert LS.check_against(base, LS.dump_list(base), DEV_DIR / "sample.json") is None
+    deduped = LS.build_committed(inv, pts_fn, which="base")
+    assert deduped.items_sha256 != base.items_sha256          # why --legacy-base exists
+    committed_base = S.SampleList.model_validate_json((DEV_DIR / "sample.json").read_text(encoding="utf-8"))
+    s1 = LS.build_committed(inv, pts_fn, which="s1", base=committed_base)
+    assert LS.check_against(s1, LS.dump_list(s1), DEV_DIR / "sample_s1.json") is None
+    for name, sl in (("sample.json", base), ("sample_s1.json", s1)):
+        first = (DEV_DIR / name).with_suffix(".sha256").read_text(encoding="utf-8").split()[0]
+        assert first == sl.items_sha256
