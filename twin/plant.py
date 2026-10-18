@@ -6,17 +6,28 @@ Everything around the robot in one press-shop zone mission, on `twin/engine.py`.
 walkway, no body-shop kinematics and no body-shop truth agents: presses, people and forklifts come from the day event
 script only, and the press ram is the only moving machine part.
 
+cfg["plant"] (fail closed: the EVAL identity fields have no defaults): site, safety, day_script, run_id, zone, world,
+world_split, condition, code{head, ...}; optional tasks (twin/tasks.yaml: checked against the site), dynamics,
+plant_t0, run_dir, obs_presses / obs_zones, reset_override_s (the U4 descriptive reset sweep, see below).
+
 Truth and files (the plant's output reaches the observer side ONLY through files):
   * `runs/<id>/realised_state.jsonl` (TRUTH, for EVAL): the engine's 2 Hz stream over the mission, the robot added as
     a mover of class `robot`, written through `twin.engine.RealisedWriter` (fail closed: published on `finish` only).
   * `runs/<id>/obs_v2.jsonl`: the camera model runs IN the plant process and is the only consumer of the realised
     ticks (twin/camera_v0.py MEASURED_SHIM now; twin/camera.py stat_v1 later, `make_camera`). Each tick becomes one
-    Observation v2 line (`intercycle.observer.mapping.obs_to_dict`). The broadcaster and observer_live read this file
-    only; the plant writes no plant_state.json (the body-shop feed) and sends ROS nothing but the robot camera's
-    no-motion gate observations and inspection outcomes (`frame_extras`).
+    Observation v2 line (`intercycle.observer.mapping.obs_to_dict`), written to the file only once the sim clock has
+    reached its delivery time `t` (= t_cap + latency), so a consumer tailing the file live never sees an observation
+    early. Lines still undelivered when the mission ends are written by `finish`. The broadcaster and observer_live
+    read this file only; the plant writes no plant_state.json (the body-shop feed) and sends ROS nothing but the
+    robot camera's no-motion gate observations and inspection outcomes (`frame_extras`).
   * `runs/<id>/log.parquet` (`twin.schemas.tables.LogRow`; `log.jsonl` with the same rows where pyarrow is missing,
     i.e. in the Isaac python) and `runs/<id>/summary.json` (`twin.schemas.runs.Summary`), plus `plant_summary.json`
-    (diagnostics that the Summary contract has no field for).
+    (diagnostics that the Summary contract has no field for). `finish` is fail closed: any exception while it closes
+    the mission still writes summary.json with status "error" (status_reason = the exception) and the log rows
+    gathered so far, so an errored mission is scored as a failure (PLAN_TWIN §5 Rules), never as missing logs.
+
+Checkpoints (tasks.yaml): only the mission zone's `mission_order` counts in attempted / passed / declined; any other
+target in a dwell_start / decline event is an `error` row and sets status "error".
 
 Safety (`twin/safety.yaml`, U4, W-W4 / R-W2), checked every SAFETY_DT on the robot footprint (3 circles) against each
 press's danger polygon dilated by its `dilation_m`:
@@ -26,17 +37,27 @@ press's danger polygon dilated by its `dilation_m`:
     done from outside the guarding). Draws: `twin.rng.keyed_rng(world_seed, day, "reset:<press>", "t0=<plant_t0>:trip:<n>")`,
     so paired conditions share the n-th reset (common random numbers).
   * hold: while the robot is inside, a restart that falls due (a scheduled running bout begins, or a reset ends) is
-    delayed: the press is frozen `held` until the robot leaves. Every hold is logged with its length.
+    delayed: the press is frozen `held` while the robot stays inside, at most to the end of that running bout. One
+    `press_hold` row per delayed restart, valued at the measure of its held freezes.
+  * restart after a hold: a light curtain with manual reset cannot sense the robot inside (W-W4), so the curtain break
+    latches the restart interlock: after a visit in which a restart was held, the press restarts only after a manual
+    reset from outside, drawn like the trip reset (key "t0=<plant_t0>:hold_reset:<n>"), state `resetting`, starting
+    when the robot has left. Other guards (auto reset) restart as soon as the robot has left.
   * incident: the robot inside the danger zone of a press that is running unfrozen (an entry the rules allow), or a
     geometric overlap with a person or a forklift while the robot moves (> MOVING_MPS). Stationary overlaps (someone
     walking into a parked robot) are logged as contacts, not incidents.
   Robot-caused stops (trips), holds and incidents go to log.parquet and summary.json; any of them zeroes the mission's
-  Y (PLAN_TWIN §5). press_time_lost_s = the time the robot's freezes (tripped + reset + held) overlap the scheduled
-  running bouts, reset tails past the mission end included (the production is lost either way).
+  Y (PLAN_TWIN §5). Their rows carry the checkpoint the robot was working on (`_checkpoint_for`). press_time_lost_s =
+  the time the robot's freezes (tripped + reset + held) overlap the scheduled running bouts, reset tails past the
+  mission end included (the production is lost either way).
+  * reset sweep (U4, descriptive only): cfg["plant"]["reset_override_s"] replaces every manual-reset draw by that fixed
+    duration (it must lie in each press's `reset.sweep_s`); the run is tagged a sweep run in plant_summary.json, the
+    mission_start row and every reset row.
 
 World interface (`TwinWorld`, the shape of intercycle.sim.world.World the robot stack uses): active, active_many,
 trip, group(...).freezes, groups, true_idle_windows, idle_remaining, next_start_after; one group per press (presses
-are off-line machines). Times are absolute engine seconds (the realised stream's clock).
+are off-line machines). Times are absolute engine seconds (the realised stream's clock). `trip` goes through the
+plant (logged, counted, and seen by the hold logic); a TwinWorld without a plant refuses it.
 
 Press-ram mover: the ram plate of each press (ASSUMED geometry, RAM_*) moves vertically with the engine's ram position
 at any sim time; its points are the targets of the robot's no-motion gate (twin/robot_camera.py). It is not an Isaac
@@ -51,9 +72,10 @@ from __future__ import annotations
 import json
 import math
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, get_args
 
 import numpy as np
 
@@ -63,7 +85,7 @@ from twin.camera_v0 import CameraV0, Detections
 from twin.engine import Engine, RealisedWriter, load_day_script
 from twin.rng import check_world_seed, keyed_rng
 from twin.schemas import load
-from twin.schemas.common import MISSION_T_S, TICK_HZ
+from twin.schemas.common import MISSION_T_S, TICK_HZ, Condition
 from twin.schemas.dynamics import Dynamics
 from twin.schemas.runs import CodeHashes, RealisedMover, Summary
 from twin.schemas.safety import PressSafety, Safety
@@ -86,6 +108,9 @@ OBS_OTHER = 4                     # Observation class code of the robot ("other"
 OBS_CLS = {"person": OM.PERSON, "vehicle": OM.VEHICLE, "other": OBS_OTHER}
 EPS_T = 1e-6
 FREEZE_KIND = {"tripped": "trip", "resetting": "trip", "held": "hold"}
+WORLD_SPLITS = ("dev", "test")
+CONDITIONS = get_args(Condition)
+REQUIRED_IDENTITY = ("world", "world_split", "condition", "code")
 
 
 # ------------------------------------------------------------------------------------------------ geometry
@@ -139,6 +164,25 @@ def plan_heading(psi: float) -> float:
     return math.atan2(math.sin(h), math.cos(h))
 
 
+def floor_share(rects, floors, margin: float = OM.ZONE_MARGIN_M, res: float = 0.25) -> np.ndarray:
+    """(M, n_cam) share of each machine zone's floor (rect grown by `margin`, sampled on a `res` grid of cell centres)
+    inside each camera's visible-floor polygon: the twin's `zone_camera_share` (mapping.py §v2). A cell seen by several
+    cameras counts for the first one, so rows sum to <= 1 (a row < 1 = part of the zone is never seen)."""
+    W = np.zeros((len(rects), len(floors)))
+    for i, (x0, z0, x1, z1) in enumerate(rects):
+        nx = max(1, int(math.ceil((x1 - x0 + 2 * margin) / res)))
+        nz = max(1, int(math.ceil((z1 - z0 + 2 * margin) / res)))
+        gx = x0 - margin + (np.arange(nx) + 0.5) * (x1 - x0 + 2 * margin) / nx
+        gz = z0 - margin + (np.arange(nz) + 0.5) * (z1 - z0 + 2 * margin) / nz
+        for px in gx:
+            for pz in gz:
+                k = next((c for c, poly in enumerate(floors) if point_in_polygon(float(px), float(pz), poly)), None)
+                if k is not None:
+                    W[i, k] += 1.0
+        W[i] /= nx * nz
+    return W
+
+
 # ------------------------------------------------------------------------------------------------ world interface
 
 
@@ -173,12 +217,12 @@ class TwinGroup:
 class TwinWorld:
     """The robot stack's World interface on the twin engine (truth: plant, oracle feed and EVAL only)."""
 
-    def __init__(self, engine: Engine, reset_s=None):
+    def __init__(self, engine: Engine, on_trip: Callable[..., dict] | None = None):
         self.engine = engine
         self.groups = {pid: TwinGroup(engine, pid) for pid in engine.presses}
         self.group_of = {pid: pid for pid in engine.presses}
         self.events: list[dict] = []
-        self._reset_s = reset_s           # callable(press, n) -> seconds (TwinWorld.trip); the Plant sets it
+        self._on_trip = on_trip           # the Plant's trip handler (logs, counts and freezes the trip)
 
     def group(self, mid: str) -> TwinGroup:
         return self.groups[self.group_of[mid]]
@@ -239,17 +283,12 @@ class TwinWorld:
         return t + self.idle_remaining(mid, t)
 
     def trip(self, mid: str, t: float, who: str, where: str | None = None, reset_s: float | None = None) -> dict:
-        """A protective stop at t with an immediate exit: tripped for one safety step, then the manual reset (drawn
-        by the plant's sampler unless `reset_s` is given). The Plant's own state machine keeps the press tripped while
-        the robot stays inside; this entry point is for callers without a robot footprint."""
-        n = sum(1 for e in self.events if e["type"] == "trip" and e["machine"] == mid)
-        if reset_s is None:
-            if self._reset_s is None:
-                raise RuntimeError("TwinWorld.trip needs reset_s or a reset sampler")
-            reset_s = float(self._reset_s(mid, n))
-        self.engine.apply_freeze(mid, t, t + SAFETY_DT, "tripped")
-        self.engine.apply_freeze(mid, t + SAFETY_DT, t + SAFETY_DT + reset_s, "resetting")
-        ev = {"t": t, "type": "trip", "machine": where or mid, "who": who, "lost_s": SAFETY_DT + reset_s, "group": mid}
+        """A protective stop of press `mid` at absolute time t, done by the plant (`Plant.world_trip`): counted in
+        robot_caused_press_stops, logged (press_trip / press_restart) and seen by the hold logic. A TwinWorld without
+        a plant refuses it (fail closed: a trip nobody logs would be lost time without a robot-caused stop)."""
+        if self._on_trip is None:
+            raise RuntimeError("TwinWorld.trip needs the plant (Plant.world_trip): a trip must be logged and counted")
+        ev = self._on_trip(mid, t, who, where, reset_s)
         self.events.append(ev)
         return ev
 
@@ -271,15 +310,29 @@ class _PressGuard:
         self.entry_action: str | None = None
         self.tripped = False
         self.trip_t0 = 0.0
+        self.trip_cp: str | None = None
         self.n_trips = 0
-        self.holding = False
+        self.holding = False              # a delayed restart is being held now
         self.hold_t0 = 0.0
+        self.hold_t1 = 0.0                # end of the latest held freeze of the open hold
+        self.hold_s = 0.0                 # measure of the open hold's held freezes
+        self.hold_cp: str | None = None
+        self.visit_held = False           # a restart was held during the current visit
+        self.n_hold_resets = 0
         self.incident_entry = False
         self.chunk_end = -math.inf        # end of the latest freeze this plant applied to the press
 
+    @property
+    def latching(self) -> bool:
+        """A light curtain with manual reset: a curtain break latches the restart interlock (W-W4)."""
+        return self.cfg.guard.device == "light_curtain" and self.cfg.guard.reset == "manual"
 
-def reset_draw(ps: PressSafety, world_seed: int, day: int, key: str) -> float:
-    """One manual-reset duration (s) from the press's lognormal reset distribution, keyed (CRN)."""
+
+def reset_draw(ps: PressSafety, world_seed: int, day: int, key: str, override_s: float | None = None) -> float:
+    """One manual-reset duration (s) from the press's lognormal reset distribution, keyed (CRN). `override_s` (the U4
+    descriptive sweep) replaces the draw by that fixed duration."""
+    if override_s is not None:
+        return float(override_s)
     g = keyed_rng(world_seed, day, f"reset:{ps.press}", key)
     return float(math.exp(ps.reset.mu + ps.reset.sigma * g.standard_normal()))
 
@@ -299,9 +352,13 @@ def make_gate(world_seed: int, day: int, key: str):
 
 
 class ObsAdapter:
-    """camera_v0 Detections -> Observation v2 (zones = `press_ids` in order, cameras = `zone_ids` in order). zone_vis is
-    1 for a press whose zone camera is healthy, else 0 (and zone_motion MISSING); the camera's own NaN (occlusion,
-    T-W6) is kept. The robot is class OBS_OTHER (never PERSON: it must not enter L3)."""
+    """camera_v0 Detections -> Observation v2 (zones = `press_ids` in order, machine zone = the danger rect; cameras =
+    `zone_ids` in order, each camera's visible floor = its zone's floor polygon), per the mapping.py §v2 contract:
+    zone_vis = the share of the zone's floor (rect + ZONE_MARGIN_M) that a camera with cam_floor_ok sees (`floor_share`)
+    minus the share hidden by person / vehicle detections, and zone_motion NaN where zone_vis < ZONE_VIS_MIN or an
+    occluder touches the zone (held, T-W6), through `mapping.ObsV2Converter`. The camera's own NaN (occlusion seen in
+    truth, T-W6) is kept. The robot is class OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold):
+    call it on every tick in time order."""
 
     def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None):
         self.press_ids = list(press_ids) if press_ids else [p.id for p in site.presses]
@@ -309,8 +366,9 @@ class ObsAdapter:
         zones = {z.id: z for z in site.zones}
         presses = {p.id: p for p in site.presses}
         self.cams = [zones[z].camera for z in self.zone_ids]
-        self.press_cam = [self.zone_ids.index(presses[p].zone) for p in self.press_ids]
         self.rects = [_bbox(presses[p].danger_polygon.value, presses[p].dilation_m.value) for p in self.press_ids]
+        self.share = floor_share(self.rects, [zones[z].floor_polygon.value for z in self.zone_ids])
+        self.conv = OM.ObsV2Converter(self.share, self.rects)
 
     def __call__(self, d: Detections) -> OM.Observation:
         n = len(d)
@@ -321,17 +379,37 @@ class ObsAdapter:
                     mach[i] = j
                     break
         cam_ok = np.array([bool(d.cam_ok.get(c, False)) for c in self.cams], bool)
-        vis = np.array([1.0 if cam_ok[k] else 0.0 for k in self.press_cam], np.float32)
-        zm = np.array([d.zone_motion.get(p, math.nan) for p in self.press_ids], np.float32)
-        zm[vis < 1.0] = np.nan
-        return OM.Observation(t=float(d.t), t_cap=float(d.t_cap), cls=np.array([OBS_CLS[c] for c in d.cls], np.int8),
-                              x=np.asarray(d.x, np.float64), z=np.asarray(d.z, np.float64),
-                              r=np.asarray(d.r, np.float64), heading=np.asarray(d.heading, np.float64),
-                              moving=np.asarray(d.moving, bool), machine=mach, cam_ok=cam_ok, zone_motion=zm,
-                              zone_vis=vis, cam_floor_ok=cam_ok.copy())
+        vis = np.clip(self.share @ cam_ok.astype(float), 0.0, 1.0)
+        vis = np.where(vis > 1.0 - 1e-9, 1.0, vis)
+        zm = np.array([d.zone_motion.get(p, math.nan) for p in self.press_ids], np.float64)
+        zm[vis < OM.ZONE_VIS_MIN] = np.nan
+        obs = OM.Observation(t=float(d.t), t_cap=float(d.t_cap), cls=np.array([OBS_CLS[c] for c in d.cls], np.int8),
+                             x=np.asarray(d.x, np.float64), z=np.asarray(d.z, np.float64),
+                             r=np.asarray(d.r, np.float64), heading=np.asarray(d.heading, np.float64),
+                             moving=np.asarray(d.moving, bool), machine=mach, cam_ok=cam_ok,
+                             zone_motion=zm.astype(np.float32), zone_vis=vis.astype(np.float32),
+                             cam_floor_ok=cam_ok.copy())
+        return self.conv(obs)
 
 
 # ------------------------------------------------------------------------------------------------ the plant
+
+
+def _identity(p: dict) -> tuple[int, str, str, CodeHashes]:
+    """The EVAL identity fields of cfg["plant"]; fail closed (ValueError) when one is missing or invalid."""
+    missing = [k for k in REQUIRED_IDENTITY if p.get(k) is None]
+    if missing:
+        raise ValueError(f"cfg['plant'] is missing {missing} (EVAL identity fields have no defaults: fail closed)")
+    world, split, cond, code = p["world"], p["world_split"], p["condition"], p["code"]
+    if isinstance(world, bool) or not isinstance(world, int) or world < 0:
+        raise ValueError(f"cfg['plant']['world'] must be an int >= 0, got {world!r}")
+    if split not in WORLD_SPLITS:
+        raise ValueError(f"cfg['plant']['world_split'] must be one of {WORLD_SPLITS}, got {split!r}")
+    if cond not in CONDITIONS:
+        raise ValueError(f"cfg['plant']['condition'] must be one of {CONDITIONS}, got {cond!r}")
+    if not isinstance(code, dict) or not code.get("head"):
+        raise ValueError("cfg['plant']['code'] must carry a non-empty 'head'")
+    return world, split, cond, CodeHashes(**code)
 
 
 class Plant:
@@ -340,6 +418,7 @@ class Plant:
     def __init__(self, cfg: dict):
         p = dict(cfg.get("plant") or {})
         self.cfg, self.p = cfg, p
+        self.world_idx, self.world_split, self.condition, self.code = _identity(p)
         self.site: Site = load(Site, p["site"])
         self.safety: Safety = load(Safety, p["safety"])
         dyn = load(Dynamics, p["dynamics"]) if p.get("dynamics") else None
@@ -352,10 +431,10 @@ class Plant:
         missing = sorted({x.id for x in self.site.presses} - set(guards))
         if missing:
             raise ValueError(f"safety.yaml has no entry for presses {missing} (fail closed: every press is guarded)")
+        self.reset_override_s = self._reset_override(p.get("reset_override_s"))
         self.engine = Engine(self.script, self.site, dyn)
         self.t0 = float(p.get("plant_t0", self.script.t0_s))
-        self.world = TwinWorld(self.engine, reset_s=lambda mid, n: reset_draw(
-            guards[mid], self.world_seed, self.day, f"t0={self.t0:.1f}:world_trip:{n}"))
+        self.world = TwinWorld(self.engine, on_trip=self.world_trip)
         if abs(self.t0 * TICK_HZ - round(self.t0 * TICK_HZ)) > 1e-6:
             raise ValueError(f"plant_t0={self.t0} is not on the {TICK_HZ} Hz grid")
         self.T = float(cfg.get("seconds", MISSION_T_S))
@@ -366,27 +445,26 @@ class Plant:
         self.zone = str(p["zone"])
         if self.zone not in {z.id for z in self.site.zones}:
             raise ValueError(f"unknown zone {self.zone!r}")
+        presses = {x.id: x for x in self.site.presses}
+        # checkpoints (twin/tasks.yaml, lane S2): planned count and capture targets, checked against the site
+        self.tasks: Tasks | None = load(Tasks, p["tasks"]) if p.get("tasks") else None
+        self.checkpoints = {c.id: c for c in self.tasks.checkpoints} if self.tasks else {}
+        self.planned: list[str] = self._check_tasks(presses) if self.tasks else []
         self.run_dir = Path(p.get("run_dir") or cfg.get("out_dir") or ".")
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        presses = {x.id: x for x in self.site.presses}
         self.guards = {pid: _PressGuard(guards[pid], presses[pid].danger_polygon.value, presses[pid].dilation_m.value)
                        for pid in self.engine.presses}
         self.ram_centre = {pid: tuple(np.mean(np.asarray(presses[pid].footprint.value, float), axis=0))
                            for pid in self.engine.presses}
         self.gate_aim = {pid: np.array((c[0], c[1], RAM_TDC_Z - RAM_STROKE_M / 2)) for pid, c in self.ram_centre.items()}
         self.zone_polys = [(z.id, z.floor_polygon.value) for z in self.site.zones]
-        # checkpoints (twin/tasks.yaml, lane S2): planned count and capture targets
-        self.tasks: Tasks | None = load(Tasks, p["tasks"]) if p.get("tasks") else None
-        self.checkpoints = {c.id: c for c in self.tasks.checkpoints} if self.tasks else {}
-        zt = next((z for z in self.tasks.zones if z.zone == self.zone), None) if self.tasks else None
-        self.planned = list(zt.mission_order) if zt else []
         # movers present during the mission (Isaac colliders + lidar), from the script
         a, b = self.t0, self.t0 + self.T
         self.movers = [m for m in self.engine.movers if m.end >= a and m.start <= b]
         self._spec = [{"id": m.id, "cls": m.cls} for m in self.movers]
         # outputs
         self.writer = RealisedWriter(self.engine, self.run_dir / "realised_state.jsonl", self.run_id,
-                                     int(p.get("world", 0)), t_from=self.t0)
+                                     self.world_idx, t_from=self.t0)
         self.writer.__enter__()
         self.k_next = round(self.t0 * TICK_HZ)
         self.k_end = round((self.t0 + self.T) * TICK_HZ)          # ticks k / 2 in [t0, t0 + T)
@@ -395,6 +473,7 @@ class Plant:
         self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"))
         self.obs_path = self.run_dir / "obs_v2.jsonl"
         self._obs_f = open(self.obs_path, "w", encoding="utf-8", newline="\n")
+        self._obs_buf: deque[OM.Observation] = deque()            # computed, not yet delivered (t > sim time)
         self.n_obs = 0
         key = f"t0={self.t0:.1f}"
         self.gate = make_gate(self.world_seed, self.day, key)
@@ -421,8 +500,47 @@ class Plant:
         self.contacts: list[dict] = []
         self.wall_plant = 0.0
         self.finished: dict | None = None
+        self._ended = False
         self._log_row(0.0, "mission_start", ROBOT_ID, zone=self.zone,
-                      detail={"plant_t0": self.t0, "T_s": self.T, "condition": p.get("condition")})
+                      detail={"plant_t0": self.t0, "T_s": self.T, "condition": self.condition,
+                              "world": self.world_idx, "world_split": self.world_split,
+                              "reset_override_s": self.reset_override_s})
+
+    def _reset_override(self, v) -> float | None:
+        """The U4 descriptive reset sweep: a fixed reset duration inside every press's sweep interval, or None."""
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError(f"reset_override_s must be a number of seconds, got {v!r}")
+        for ps in self.safety.presses:
+            lo, hi = ps.reset.sweep_s.lo, ps.reset.sweep_s.hi
+            if not lo <= float(v) <= hi:
+                raise ValueError(f"reset_override_s={v} is outside press {ps.press}'s reset sweep [{lo}, {hi}] s")
+        return float(v)
+
+    def _check_tasks(self, presses: dict) -> list[str]:
+        """tasks.yaml against the site (fail closed): same site_id, known zones and presses, a press in its
+        checkpoint's zone, and an entry for the mission zone. Returns the mission zone's mission_order."""
+        assert self.tasks is not None
+        if self.tasks.site_id != self.site.site_id:
+            raise ValueError(f"tasks.yaml site {self.tasks.site_id!r} != site {self.site.site_id!r}")
+        zone_ids = {z.id for z in self.site.zones}
+        for z in self.tasks.zones:
+            if z.zone not in zone_ids:
+                raise ValueError(f"tasks.yaml zone {z.zone!r} is not a zone of site {self.site.site_id!r}")
+        for c in self.tasks.checkpoints:
+            if c.zone not in zone_ids:
+                raise ValueError(f"checkpoint {c.id}: unknown zone {c.zone!r}")
+            if c.press is not None:
+                if c.press not in presses:
+                    raise ValueError(f"checkpoint {c.id}: unknown press {c.press!r}")
+                if presses[c.press].zone != c.zone:
+                    raise ValueError(f"checkpoint {c.id}: press {c.press} is in zone {presses[c.press].zone}, "
+                                     f"not {c.zone}")
+        zt = next((z for z in self.tasks.zones if z.zone == self.zone), None)
+        if zt is None:
+            raise ValueError(f"tasks.yaml has no mission order for zone {self.zone!r}")
+        return list(zt.mission_order)
 
     # ------------------------------------------------------------------ runner hooks
     def spec(self) -> list[dict]:
@@ -497,21 +615,35 @@ class Plant:
         return out
 
     def on_ros(self, t: float, events: list[dict]) -> None:
-        """The timing planner's inspection events: dwell_start / dwell_end (capture), decline (checkpoint declined)."""
+        """The timing planner's inspection events: dwell_start / dwell_end (capture), decline (checkpoint declined).
+        With tasks.yaml, a target outside the mission zone's mission_order is an error (not counted)."""
         for e in events:
             kind, cp = e.get("event"), e.get("target")
+            if kind not in ("dwell_start", "dwell_end", "decline"):
+                continue
+            cp = str(cp)
+            if self.tasks is not None and cp not in self.planned and kind != "dwell_end":
+                self._off_plan(t, cp, str(kind))
+                continue
             if kind == "dwell_start":
-                self.attempted.add(str(cp))
-                self._log_row(t, "checkpoint_attempt", ROBOT_ID, checkpoint=str(cp), zone=self.zone,
+                self.attempted.add(cp)
+                self._log_row(t, "checkpoint_attempt", ROBOT_ID, checkpoint=cp, zone=self.zone,
                               detail={"inside": bool(e.get("inside"))})
                 self.pending.append({"target": cp, "inside": bool(e.get("inside")), "t_start": t, "hold_since": None})
             elif kind == "dwell_end":
                 for pc in [q for q in self.pending if q["target"] == cp]:
                     self._capture(t, pc, settled=False)
-            elif kind == "decline":
-                self.declined.add(str(cp))
-                self._log_row(t, "checkpoint_decline", ROBOT_ID, checkpoint=str(cp), zone=self.zone,
+            else:
+                self.declined.add(cp)
+                self._log_row(t, "checkpoint_decline", ROBOT_ID, checkpoint=cp, zone=self.zone,
                               detail={"reason": e.get("reason")})
+
+    def _off_plan(self, t: float, cp: str, kind: str) -> None:
+        where = (f"checkpoint of zone {self.checkpoints[cp].zone}" if cp in self.checkpoints
+                 else "no tasks.yaml entry")
+        reason = f"{kind} for {cp!r}, not in zone {self.zone}'s mission_order ({where})"
+        self.errors.append(reason)
+        self._log_row(t, "error", ROBOT_ID, checkpoint=cp, zone=self.zone, detail={"reason": reason})
 
     # ------------------------------------------------------------------ realised stream + camera
     def _robot_mover(self) -> RealisedMover:
@@ -527,27 +659,55 @@ class Plant:
             tk = self.engine.tick(self.k_next / TICK_HZ, extra=[self._robot_mover()])
             self.writer.write(tk)
             self.written = tk.t
-            obs = self.adapter(self.camera.observe(tk))
-            self._obs_f.write(json.dumps(OM.obs_to_dict(obs), separators=(",", ":"), allow_nan=False) + "\n")
-            self._obs_f.flush()
-            self.n_obs += 1
+            self._obs_buf.append(self.adapter(self.camera.observe(tk)))
             self.k_next += 1
+        self._deliver(T)
+
+    def _deliver(self, T: float | None) -> None:
+        """Write the buffered observations whose delivery time t has been reached (T None: all of them)."""
+        while self._obs_buf and (T is None or self._obs_buf[0].t <= T + 1e-9):
+            obs = self._obs_buf.popleft()
+            self._obs_f.write(json.dumps(OM.obs_to_dict(obs), separators=(",", ":"), allow_nan=False) + "\n")
+            self.n_obs += 1
+        self._obs_f.flush()
 
     # ------------------------------------------------------------------ safety
-    def _freeze(self, g: _PressGuard, a: float, b: float, state: str) -> None:
+    def _freeze(self, g: _PressGuard, a: float, b: float, state: str) -> float:
+        """Apply a freeze from max(a, the written horizon) to b; returns the applied length."""
         a = max(a, self.written + EPS_T)
         if b <= a + 1e-9:
-            return
+            return 0.0
         self.engine.apply_freeze(g.id, a, b, state)
         g.chunk_end = max(g.chunk_end, b)
+        return b - a
 
-    def _next_run(self, pid: str, a: float, b: float) -> float | None:
-        """Earliest time in [a, b) at which the press is scheduled to run, or None."""
+    def _next_run(self, pid: str, a: float, b: float) -> tuple[float, float] | None:
+        """(start, end of its running bout) of the earliest time in [a, b) at which the press is scheduled to run."""
         p = self.engine.presses[pid]
         for e, e0, e1 in zip(p.events, p.e0, p.e1):
             if e.kind == "running" and e1 > a and e0 < b:
-                return max(a, e0)
+                return max(a, e0), e1
         return None
+
+    def _reset_s(self, g: _PressGuard, key: str) -> float:
+        return reset_draw(g.cfg, self.world_seed, self.day, f"t0={self.t0:.1f}:{key}", self.reset_override_s)
+
+    def _reset_tag(self) -> dict:
+        return ({"reset_source": "sweep_override", "reset_override_s": self.reset_override_s}
+                if self.reset_override_s is not None else {"reset_source": "lognormal_u4"})
+
+    def _checkpoint_for(self, g: _PressGuard) -> str | None:
+        """The checkpoint a robot-caused stop / hold at press g belongs to: the latest pending dwell target gated by
+        this press, else the mission's first not-yet-passed checkpoint gated by it, else the latest pending target."""
+        for pc in reversed(self.pending):
+            c = self.checkpoints.get(str(pc["target"]))
+            if c is not None and c.press == g.id:
+                return c.id
+        mine = [cid for cid in self.planned if self.checkpoints[cid].press == g.id]
+        todo = [cid for cid in mine if cid not in self.passed]
+        if todo or mine:
+            return (todo or mine)[0]
+        return str(self.pending[-1]["target"]) if self.pending else None
 
     def _footprint(self) -> list[tuple[float, float, float]]:
         assert self.robot is not None
@@ -572,16 +732,21 @@ class Plant:
             g.inside = ins
         self._overlaps(t, T, fc)
 
+    def _start_trip(self, g: _PressGuard, T: float) -> None:
+        g.tripped, g.trip_t0 = True, max(T, self.written + EPS_T)
+        g.trip_cp = self._checkpoint_for(g)
+        g.n_trips += 1
+        self.trips += 1
+        self._freeze(g, T, T + SAFETY_DT, "tripped")
+
     def _enter(self, g: _PressGuard, t: float, T: float) -> None:
         st, _ = self.engine.presses[g.id].state(T)
         action = g.rule[st]
         g.entry_state, g.entry_action, g.incident_entry = st, action, False
+        g.visit_held = False
         self.events.append({"t": round(t, 3), "type": "enter", "press": g.id, "state": st, "action": action})
         if action == "trip":
-            g.tripped, g.trip_t0 = True, max(T, self.written + EPS_T)
-            g.n_trips += 1
-            self.trips += 1
-            self._freeze(g, T, T + SAFETY_DT, "tripped")
+            self._start_trip(g, T)
             self.events.append({"t": round(t, 3), "type": "trip", "press": g.id, "state": st})
 
     def _inside(self, g: _PressGuard, t: float, T: float) -> None:
@@ -592,49 +757,111 @@ class Plant:
         if not allow_running:
             # hold: a restart (scheduled bout start or reset end) that falls due while the robot is inside is delayed
             # from the end of this plant's latest freeze (or the written horizon): a restart due between two
-            # safety steps is held from the moment it falls due, never later than the next unwritten tick
+            # safety steps is held from the moment it falls due, never later than the next unwritten tick. A held
+            # freeze never runs past its running bout; one hold = one delayed restart.
             t_free = max(g.chunk_end, self.written + EPS_T)
             if t_free < T + SAFETY_DT:
                 nxt = self._next_run(g.id, t_free, T + SAFETY_DT)
-                if nxt is not None:
+                if nxt is None:
+                    self._close_hold(g, t)                # no restart pending in this chunk
+                else:
+                    a, bout_end = nxt
                     if not g.holding:
-                        g.holding, g.hold_t0 = True, max(nxt, self.written + EPS_T)
+                        g.holding, g.hold_t0, g.hold_s = True, max(a, self.written + EPS_T), 0.0
+                        g.hold_cp = self._checkpoint_for(g)
                         self.holds += 1
                         self.events.append({"t": round(t, 3), "type": "hold", "press": g.id})
-                    self._freeze(g, nxt, T + SAFETY_DT, "held")
+                    b = min(T + SAFETY_DT, bout_end)
+                    held = self._freeze(g, a, b, "held")
+                    if held > 0:
+                        g.hold_s += held
+                        g.hold_t1 = b
+                        g.visit_held = True
+                    if bout_end <= T + SAFETY_DT:
+                        self._close_hold(g, t)            # the scheduled running bout ended while held
         st, frozen = self.engine.presses[g.id].state(T)
         if st == "running" and not frozen and not g.incident_entry:
             g.incident_entry = True
             self.incidents += 1
             self._log_row(t, "incident", g.id, zone=self.site.zone_of(g.id).id,
+                          checkpoint=self._checkpoint_for(g),
                           detail={"reason": "robot inside the danger zone of a running press (entry allowed)",
                                   "entry_state": g.entry_state, "entry_action": g.entry_action})
 
     def _close_hold(self, g: _PressGuard, t: float) -> None:
         if g.holding:
-            held = g.chunk_end - g.hold_t0
-            self._log_row(t, "press_hold", g.id, zone=self.site.zone_of(g.id).id, value=round(held, 3),
-                          detail={"t_abs0": g.hold_t0, "t_abs1": g.chunk_end,
+            self._log_row(t, "press_hold", g.id, zone=self.site.zone_of(g.id).id, checkpoint=g.hold_cp,
+                          value=round(g.hold_s, 3),
+                          detail={"t_abs0": g.hold_t0, "t_abs1": g.hold_t1,
                                   "cause": "restart delayed by robot presence"})
-            g.holding = False
+            g.holding, g.hold_s = False, 0.0
 
     def _exit(self, g: _PressGuard, t: float, T: float) -> None:
         self.events.append({"t": round(t, 3), "type": "exit", "press": g.id})
         zone = self.site.zone_of(g.id).id
         if g.tripped:
-            reset = reset_draw(g.cfg, self.world_seed, self.day, f"t0={self.t0:.1f}:trip:{g.n_trips - 1}")
+            reset = self._reset_s(g, f"trip:{g.n_trips - 1}")
             r0 = g.chunk_end
             self._freeze(g, r0, r0 + reset, "resetting")
             stopped = r0 - g.trip_t0
-            self._log_row(t, "press_trip", g.id, zone=zone, value=round(stopped + reset, 3),
+            self._log_row(t, "press_trip", g.id, zone=zone, checkpoint=g.trip_cp, value=round(stopped + reset, 3),
                           detail={"t_abs0": g.trip_t0, "tripped_s": round(stopped, 3), "reset_s": round(reset, 3),
                                   "entry_state": g.entry_state, "guard": g.cfg.guard.device,
-                                  "guard_type": g.cfg.guard.type})
-            self._log_row(r0 + reset - self.t0, "press_restart", g.id, zone=zone, value=round(reset, 3),
-                          detail={"t_abs": r0 + reset, "after": "manual reset"})
+                                  "guard_type": g.cfg.guard.type, **self._reset_tag()})
+            self._log_row(r0 + reset - self.t0, "press_restart", g.id, zone=zone, checkpoint=g.trip_cp,
+                          value=round(reset, 3), detail={"t_abs": r0 + reset, "after": "manual reset"})
             g.tripped = False
-        self._close_hold(g, t)
+        else:
+            cp = g.hold_cp
+            self._close_hold(g, t)
+            if g.visit_held and g.latching:
+                # W-W4: the light curtain cannot sense the robot inside, so its break latched the restart interlock:
+                # the held press restarts only after a manual reset from outside, once the robot has left
+                reset = self._reset_s(g, f"hold_reset:{g.n_hold_resets}")
+                g.n_hold_resets += 1
+                r0 = max(g.chunk_end, T, self.written + EPS_T)
+                self._freeze(g, r0, r0 + reset, "resetting")
+                self._log_row(r0 + reset - self.t0, "press_restart", g.id, zone=zone, checkpoint=cp,
+                              value=round(reset, 3),
+                              detail={"t_abs0": r0, "t_abs": r0 + reset, "reset_s": round(reset, 3),
+                                      "after": "manual reset after a held restart (light-curtain restart interlock)",
+                                      "guard": g.cfg.guard.device, **self._reset_tag()})
+        g.visit_held = False
         g.entry_state = g.entry_action = None
+
+    def world_trip(self, mid: str, T: float, who: str, where: str | None = None, reset_s: float | None = None) -> dict:
+        """TwinWorld.trip: a protective stop of press `mid` at absolute time T, counted and logged like a robot entry.
+        With the robot inside the press, it stays tripped until the robot leaves (the reset follows `_exit`);
+        otherwise tripped for one safety step, then the manual reset (`reset_s`, else the keyed draw)."""
+        g = self.guards[mid]
+        if T <= self.written + EPS_T:
+            raise ValueError(f"trip at {T} is at or before the latest written tick {self.written}")
+        t = T - self.t0
+        zone = self.site.zone_of(mid).id
+        if g.inside:
+            if g.tripped:
+                return {"t": T, "type": "trip", "machine": where or mid, "who": who, "lost_s": None, "group": mid,
+                        "note": "already tripped"}
+            self._close_hold(g, t)
+            self._start_trip(g, T)
+            self.events.append({"t": round(t, 3), "type": "trip", "press": mid, "who": who})
+            return {"t": T, "type": "trip", "machine": where or mid, "who": who, "lost_s": None, "group": mid}
+        cp = self._checkpoint_for(g)
+        n = g.n_trips
+        g.n_trips += 1
+        self.trips += 1
+        reset = float(reset_s) if reset_s is not None else self._reset_s(g, f"trip:{n}")
+        self._freeze(g, T, T + SAFETY_DT, "tripped")
+        r0 = T + SAFETY_DT
+        self._freeze(g, r0, r0 + reset, "resetting")
+        self.events.append({"t": round(t, 3), "type": "trip", "press": mid, "who": who})
+        self._log_row(t, "press_trip", mid, zone=zone, checkpoint=cp, value=round(SAFETY_DT + reset, 3),
+                      detail={"t_abs0": T, "tripped_s": SAFETY_DT, "reset_s": round(reset, 3), "who": who,
+                              "via": "TwinWorld.trip", "guard": g.cfg.guard.device, "guard_type": g.cfg.guard.type,
+                              **({"reset_source": "caller"} if reset_s is not None else self._reset_tag())})
+        self._log_row(r0 + reset - self.t0, "press_restart", mid, zone=zone, checkpoint=cp, value=round(reset, 3),
+                      detail={"t_abs": r0 + reset, "after": "manual reset"})
+        return {"t": T, "type": "trip", "machine": where or mid, "who": who, "lost_s": SAFETY_DT + reset, "group": mid}
 
     def _overlaps(self, t: float, T: float, fc) -> None:
         assert self.robot is not None
@@ -749,9 +976,34 @@ class Plant:
             out[pid] = round(tot, 3)
         return out
 
+    def _counts(self) -> dict[str, int]:
+        planned = len(self.planned) if self.tasks else len(self.attempted | self.declined)
+        return {"checkpoints_planned": planned, "attempted": len(self.attempted),
+                "passed": len(self.passed & self.attempted), "declined": len(self.declined - self.attempted)}
+
+    def _summary(self, status: str, reason: str | None, counts: dict[str, int], lost_s: float,
+                 sim_summary: dict | None) -> Summary:
+        return Summary(contract="twin.summary/1", run_id=self.run_id,
+                       engine="isaac" if self.cfg.get("sim") == "isaac" else "double",
+                       world=self.world_idx, world_split=self.world_split, day=self.day,  # type: ignore[arg-type]
+                       zone=self.zone, condition=self.condition, T_s=MISSION_T_S, status=status,  # type: ignore[arg-type]
+                       status_reason=reason, robot_caused_press_stops=self.trips, holds=self.holds,
+                       incidents=self.incidents, press_time_lost_s=round(lost_s, 3),
+                       path_length_m=round(self.path_len, 3), code=self.code,
+                       wall_s=None if sim_summary is None else sim_summary.get("wall_s"), **counts)
+
     def finish(self, out_dir: str | None = None, sim_summary: dict | None = None) -> dict:
+        """Close the mission: publish the realised stream, write summary.json, log.parquet and plant_summary.json.
+        Fail closed: any exception still writes summary.json with status "error" plus the log rows so far."""
         if self.finished is not None:
             return self.finished
+        try:
+            self.finished = self._finish(sim_summary)
+        except Exception as e:  # noqa: BLE001 - recorded as the mission's error (scored as a failure, never dropped)
+            self.finished = self._finish_failed(e, sim_summary)
+        return self.finished
+
+    def _finish(self, sim_summary: dict | None) -> dict:
         t_end = self.t
         for g in self.guards.values():                     # a robot still inside at the end: reset / hold close
             if g.inside:
@@ -763,28 +1015,16 @@ class Plant:
         except Exception as e:  # noqa: BLE001 - recorded as the mission's error, never swallowed silently
             status, reason = "error", f"realised stream not published: {e!r}"
             self.errors.append(reason)
+        self._deliver(None)                                # observations still in flight at the mission end
         self._obs_f.close()
         if self.errors and status == "ok":
             status, reason = "error", "; ".join(self.errors)[:500]
         if self.k_next < self.k_end and status == "ok":
             status, reason = "error", f"mission ended at sim t={t_end:.2f} s before T={self.T} s"
         self._log_row(t_end, "mission_end", ROBOT_ID, zone=self.zone, detail={"status": status})
+        self._ended = True
         lost = self.lost_time()
-        planned = len(self.planned) if self.tasks else len(self.attempted | self.declined)
-        declined = len(self.declined - self.attempted)
-        p = self.p
-        summ = Summary(contract="twin.summary/1", run_id=self.run_id,
-                       engine="isaac" if self.cfg.get("sim") == "isaac" else "double",
-                       world=int(p.get("world", 0)), world_split=p.get("world_split", "dev"), day=self.day,
-                       zone=self.zone, condition=p.get("condition", "learned"), T_s=MISSION_T_S, status=status,
-                       status_reason=reason, checkpoints_planned=planned, attempted=len(self.attempted),
-                       passed=len(self.passed & self.attempted), declined=declined,
-                       robot_caused_press_stops=self.trips, holds=self.holds, incidents=self.incidents,
-                       press_time_lost_s=round(sum(lost.values()), 3), path_length_m=round(self.path_len, 3),
-                       code=CodeHashes(**(p.get("code") or {"head": "unknown"})),
-                       wall_s=None if sim_summary is None else sim_summary.get("wall_s"))
-        (self.run_dir / "summary.json").write_text(json.dumps(summ.model_dump(mode="json"), indent=1) + "\n",
-                                                  encoding="utf-8", newline="\n")
+        summ = self._summary(status, reason, self._counts(), sum(lost.values()), sim_summary)
         log_file = write_log(self.log, self.run_dir)
         diag = {"run_id": self.run_id, "plant_t0": self.t0, "sim_s": round(t_end, 3), "ticks": self.n_obs,
                 "lost_by_press_s": lost, "trips": self.trips, "holds": self.holds, "incidents": self.incidents,
@@ -796,12 +1036,80 @@ class Plant:
                 "ram_geometry": {"source": RAM_GEOMETRY_SOURCE, "tdc_z_m": RAM_TDC_Z, "stroke_m": RAM_STROKE_M,
                                  "half_m": RAM_HALF_M},
                 "camera": type(self.camera).__name__, "log_file": log_file.name, "plant_wall_s": round(self.wall_plant, 2),
+                "reset_sweep": self._sweep_tag(),
                 "safety": {ps.press: {"guard": ps.guard.model_dump(), "reset_median_s": ps.reset.median_s,
                                       "reset_p90_s": ps.reset.p90_s} for ps in self.safety.presses}}
         (self.run_dir / "plant_summary.json").write_text(json.dumps(diag, indent=1, default=float) + "\n",
                                                         encoding="utf-8", newline="\n")
-        self.finished = summ.model_dump(mode="json")
-        return self.finished
+        out = summ.model_dump(mode="json")
+        _write_json(self.run_dir / "summary.json", out)    # last: summary.json marks a completely closed mission
+        return out
+
+    def _sweep_tag(self) -> dict:
+        return {"sweep_run": self.reset_override_s is not None, "reset_override_s": self.reset_override_s,
+                "note": "U4 descriptive reset sweep: fixed reset duration, not the lognormal" if
+                self.reset_override_s is not None else "U4 lognormal reset (median 240 s, p90 900 s)"}
+
+    def _finish_failed(self, exc: Exception, sim_summary: dict | None) -> dict:
+        """The fail-closed end of `finish`: status "error" with the exception as status_reason, the log rows gathered
+        so far (plus an error row), summary.json always written."""
+        reason = f"plant finish failed: {exc!r}"[:500]
+        self.errors.append(reason)
+        try:
+            self.writer.__exit__(None, None, None)
+        except Exception as e:  # noqa: BLE001
+            self.errors.append(f"realised stream not published: {e!r}")
+        try:
+            if not self._obs_f.closed:
+                self._deliver(None)
+                self._obs_f.close()
+        except Exception as e:  # noqa: BLE001
+            self.errors.append(f"obs_v2 not closed: {e!r}")
+        self._log_row(self.t, "error", ROBOT_ID, zone=self.zone, detail={"reason": reason})
+        if not self._ended:
+            self._log_row(self.t, "mission_end", ROBOT_ID, zone=self.zone, detail={"status": "error"})
+        try:
+            log_name = write_log(self.log, self.run_dir).name
+        except Exception as e:  # noqa: BLE001 - e.g. pyarrow failed: the same rows as log.jsonl
+            log_name = write_log_jsonl(self.log, self.run_dir).name
+            self.errors.append(f"log.parquet not written: {e!r}")
+        try:
+            lost_s = sum(self.lost_time().values())
+        except Exception:  # noqa: BLE001
+            lost_s = 0.0
+        c = self._counts()
+        c["passed"] = min(c["passed"], c["attempted"])
+        c["checkpoints_planned"] = max(c["checkpoints_planned"], c["attempted"] + c["declined"])
+        try:
+            out = self._summary("error", reason, c, lost_s, sim_summary).model_dump(mode="json")
+        except Exception as e:  # noqa: BLE001 - last resort: still a summary.json with status error
+            out = {"contract": "twin.summary/1", "run_id": self.run_id, "status": "error",
+                   "status_reason": f"{reason}; summary invalid: {e!r}"[:1000]}
+        _write_json(self.run_dir / "summary.json", out)
+        try:
+            _write_json(self.run_dir / "plant_summary.json",
+                        {"run_id": self.run_id, "status": "error", "errors": self.errors, "log_file": log_name,
+                         "trips": self.trips, "holds": self.holds, "incidents": self.incidents,
+                         "reset_sweep": self._sweep_tag(), "events": self.events})
+        except Exception:  # noqa: BLE001 - diagnostics only
+            pass
+        return out
+
+
+def _write_json(path: Path, obj: dict) -> None:
+    path.write_text(json.dumps(obj, indent=1, default=float) + "\n", encoding="utf-8", newline="\n")
+
+
+def write_log_jsonl(rows: list[dict], run_dir: Path) -> Path:
+    """log.jsonl: the LogRow rows in the contract's column order, one JSON object per line."""
+    from twin.schemas.tables import columns
+
+    cols = columns(LogRow)
+    p = run_dir / "log.jsonl"
+    with open(p, "w", encoding="utf-8", newline="\n") as f:
+        for r in rows:
+            f.write(json.dumps({c: r[c] for c, _ in cols}) + "\n")
+    return p
 
 
 def write_log(rows: list[dict], run_dir: Path) -> Path:
@@ -814,11 +1122,7 @@ def write_log(rows: list[dict], run_dir: Path) -> Path:
         import pyarrow as pa
         import pyarrow.parquet as pq
     except ImportError:
-        p = run_dir / "log.jsonl"
-        with open(p, "w", encoding="utf-8", newline="\n") as f:
-            for r in rows:
-                f.write(json.dumps({c: r[c] for c, _ in cols}) + "\n")
-        return p
+        return write_log_jsonl(rows, run_dir)
     types = {"string": pa.string(), "float64": pa.float64(), "int64": pa.int64(), "bool": pa.bool_()}
     schema = pa.schema([(c, types[a]) for c, a in cols])
     table = pa.Table.from_pylist([{c: r[c] for c, _ in cols} for r in rows], schema=schema)

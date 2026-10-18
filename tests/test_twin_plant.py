@@ -56,14 +56,30 @@ def _script(p9a: list[PressEvent], intents=(), segments=(), duration=600.0, worl
                      mover_intents=list(intents), segments=list(segments))
 
 
-def _plant(tmp_path, script: DayScript, seconds=120.0, safety=SAFETY_PATH, name="r1", **plant) -> PL.Plant:
+def _cfg(tmp_path, script: DayScript, seconds=120.0, safety=SAFETY_PATH, name="r1", **plant) -> dict:
+    """The tests' cfg: the EVAL identity fields (world, world_split, condition, code) are set here only; the plant
+    itself has no defaults for them."""
     sp = tmp_path / f"{name}.day_script.json"
     sp.write_text(json.dumps(script.model_dump(mode="json")), encoding="utf-8")
-    cfg = {"seconds": seconds, "sim": "fake",
-           "plant": {"site": str(SITE_PATH), "safety": str(safety), "day_script": str(sp), "run_id": name,
-                     "zone": "z9", "world": 0, "world_split": "dev", "condition": "learned", "plant_t0": T0,
-                     "run_dir": str(tmp_path / "runs" / name), **plant}}
-    return PL.make(cfg)
+    return {"seconds": seconds, "sim": "fake",
+            "plant": {"site": str(SITE_PATH), "safety": str(safety), "day_script": str(sp), "run_id": name,
+                      "zone": "z9", "world": 0, "world_split": "dev", "condition": "learned",
+                      "code": {"head": "test"}, "plant_t0": T0, "run_dir": str(tmp_path / "runs" / name), **plant}}
+
+
+def _plant(tmp_path, script: DayScript, seconds=120.0, safety=SAFETY_PATH, name="r1", **plant) -> PL.Plant:
+    return PL.make(_cfg(tmp_path, script, seconds, safety, name, **plant))
+
+
+def _tasks(tmp_path, **over) -> Path:
+    """The tasks fixture on the site's id (tests/fixtures/twin_tasks.yaml: cp1 at P9a and cp2 in z9, cp3 at P14a in
+    z14)."""
+    d = yaml.safe_load((REPO / "tests" / "fixtures" / "twin_tasks.yaml").read_text(encoding="utf-8"))
+    d["site_id"] = load(Site, SITE_PATH).site_id
+    d.update(over)
+    p = tmp_path / "tasks.yaml"
+    p.write_text(yaml.safe_dump(d), encoding="utf-8")
+    return p
 
 
 def _st(x, y, vx=0.0, vy=0.0, psi=0.0) -> dict:
@@ -185,7 +201,7 @@ def test_paired_conditions_share_the_reset(tmp_path):
 # ------------------------------------------------------------------------------------------------ hold
 
 
-def test_restart_due_while_the_robot_is_inside_is_held_and_logged(tmp_path):
+def test_restart_due_while_the_robot_is_inside_is_held_then_needs_a_manual_reset_after_exit(tmp_path):
     pl = _plant(tmp_path, _script([_stop(t1=30.0), _run(t0=30.0)]), seconds=60.0)
     _drive(pl, lambda t: IN if 10.0 <= t < 40.0 else OUT, 60.0)
     pl.finish()
@@ -193,7 +209,12 @@ def test_restart_due_while_the_robot_is_inside_is_held_and_logged(tmp_path):
     assert s.robot_caused_press_stops == 0 and s.holds == 1 and s.incidents == 0
     held = [f for f in pl.engine.freezes() if f.state == "held"]
     assert min(f.t0 for f in held) == pytest.approx(T0 + 30.0, abs=1e-6)   # held from the moment the restart is due
-    assert max(f.t1 for f in held) == pytest.approx(T0 + 40.1, abs=0.11)
+    t_exit = max(f.t1 for f in held)
+    assert t_exit == pytest.approx(T0 + 40.1, abs=0.11)
+    # light curtain + manual reset (W-W4): the held restart needs a manual reset from outside once the robot has left
+    reset = PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:hold_reset:0")
+    rs = [f for f in pl.engine.freezes() if f.state == "resetting"]
+    assert len(rs) == 1 and rs[0].t0 == pytest.approx(t_exit) and rs[0].t1 - rs[0].t0 == pytest.approx(reset)
     _, ts = _ticks(pl)
     for tk in ts:
         rel, p = tk.t - T0, _p9(tk)
@@ -201,12 +222,45 @@ def test_restart_due_while_the_robot_is_inside_is_held_and_logged(tmp_path):
             assert p.state == "stopped" and not p.freeze
         elif rel < 40.0:
             assert p.state == "held" and p.freeze and not p.stroke
-        elif rel >= 40.5:
-            assert p.state == "running" and not p.freeze
+        elif 40.5 <= rel < t_exit - T0 + reset:
+            assert p.state == "resetting" and p.freeze and not p.stroke
+    rows = _log(pl)
+    hold = [r for r in rows if r["kind"] == "press_hold"]
+    assert len(hold) == 1 and hold[0]["value"] == pytest.approx(10.1, abs=0.11)
+    assert "restart delayed" in json.loads(hold[0]["detail"])["cause"]
+    rst = [r for r in rows if r["kind"] == "press_restart"]
+    assert len(rst) == 1 and rst[0]["value"] == pytest.approx(reset, abs=1e-3)
+    assert "after a held restart" in json.loads(rst[0]["detail"])["after"]
+    assert s.press_time_lost_s == pytest.approx(min(t_exit + reset, T0 + 600.0) - (T0 + 30.0), abs=0.11)
+
+
+def test_an_auto_reset_guard_restarts_when_the_robot_leaves(tmp_path):
+    d = yaml.safe_load(SAFETY_PATH.read_text(encoding="utf-8"))
+    for ps in d["presses"]:
+        ps["guard"] = {"type": "OBSERVED", "device": "interlocked_gate", "reset": "auto", "evidence_clips": ["c9_x"]}
+    sp = tmp_path / "safety_auto.yaml"
+    sp.write_text(yaml.safe_dump(d), encoding="utf-8")
+    pl = _plant(tmp_path, _script([_stop(t1=30.0), _run(t0=30.0)]), seconds=60.0, safety=sp)
+    _drive(pl, lambda t: IN if 10.0 <= t < 40.0 else OUT, 60.0)
+    s = pl.finish()
+    assert s["holds"] == 1 and s["press_time_lost_s"] == pytest.approx(10.1, abs=0.11)
+    assert [f for f in pl.engine.freezes() if f.state == "resetting"] == []
+
+
+def test_each_delayed_restart_is_its_own_hold_valued_at_its_held_time(tmp_path):
+    """Audit probe: stop 0-30, run 30-50, stop 50-80, run 80+, robot inside 10-90: two holds (20 s and 10.1 s), no
+    stopped time counted in a hold."""
+    pl = _plant(tmp_path, _script([_stop(t1=30.0), _run(t0=30.0, t1=50.0), _stop(t0=50.0, t1=80.0),
+                                   _run(t0=80.0)]), seconds=120.0)
+    _drive(pl, lambda t: IN if 10.0 <= t < 90.0 else OUT, 120.0)
+    s = pl.finish()
     rows = [r for r in _log(pl) if r["kind"] == "press_hold"]
-    assert len(rows) == 1 and rows[0]["value"] == pytest.approx(10.1, abs=0.11)
-    assert "restart delayed" in json.loads(rows[0]["detail"])["cause"]
-    assert s.press_time_lost_s == pytest.approx(10.1, abs=0.11)
+    assert s["holds"] == 2 and len(rows) == 2
+    assert [r["value"] for r in rows] == pytest.approx([20.0, 10.1], abs=0.11)
+    held = sum(f.t1 - f.t0 for f in pl.engine.freezes() if f.state == "held")
+    assert sum(r["value"] for r in rows) == pytest.approx(held, abs=1e-3)
+    assert all(f.t1 <= T0 + 50.0 + 1e-9 or f.t0 >= T0 + 80.0 - 1e-9 for f in pl.engine.freezes()
+               if f.state == "held")
 
 
 def test_entering_and_leaving_a_stopped_press_costs_nothing(tmp_path):
@@ -239,6 +293,161 @@ def test_a_safety_file_missing_a_press_fails_closed(tmp_path):
         _plant(tmp_path, _script([_run()]), safety=sp)
 
 
+def test_trip_and_hold_rows_name_the_checkpoint(tmp_path):
+    pl = _plant(tmp_path, _script([_stop(t1=20.0), _run(t0=20.0)]), seconds=120.0, tasks=str(_tasks(tmp_path)),
+                reset_override_s=60.0)
+    pl.attach(caster=_OpenCaster())
+
+    def where(t):                       # hold 20-25.1, manual reset 25.1-85.1, then a trip on entry at 90
+        if t == pytest.approx(5.0):
+            pl.on_ros(t, [{"event": "dwell_start", "target": "cp1", "inside": True}])
+        return IN if 10.0 <= t < 25.0 or 90.0 <= t < 92.0 else OUT
+    _drive(pl, where, 120.0)
+    pl.finish()
+    rows = {r["kind"]: r for r in _log(pl) if r["kind"] in ("press_trip", "press_hold", "press_restart")}
+    assert set(rows) == {"press_trip", "press_hold", "press_restart"}
+    assert all(r["checkpoint"] == "cp1" for r in rows.values())
+
+
+# ------------------------------------------------------------------------------------------------ fail closed
+
+
+def test_an_off_zone_dwell_start_is_an_error_and_summary_json_is_still_written(tmp_path):
+    """Audit repro: zone z9, dwell_start for cp1, cp2 and cp3 (cp3 is a z14 checkpoint)."""
+    pl = _plant(tmp_path, _script([_run()]), seconds=30.0, tasks=str(_tasks(tmp_path)))
+    pl.attach(caster=_OpenCaster())
+
+    def where(t):
+        if t == pytest.approx(2.0):
+            pl.on_ros(t, [{"event": "dwell_start", "target": c, "inside": False} for c in ("cp1", "cp2", "cp3")])
+            pl.on_ros(t, [{"event": "decline", "target": "cpX", "reason": "test"}])
+        return OUT
+    _drive(pl, where, 30.0)
+    s = pl.finish()
+    disk = Summary.model_validate(json.loads((pl.run_dir / "summary.json").read_text(encoding="utf-8")))
+    assert disk.model_dump(mode="json") == s
+    assert s["status"] == "error" and "cp3" in s["status_reason"]
+    assert (s["checkpoints_planned"], s["attempted"], s["declined"]) == (2, 2, 0)
+    errs = [r for r in _log(pl) if r["kind"] == "error"]
+    assert {r["checkpoint"] for r in errs} == {"cp3", "cpX"}
+    assert (pl.run_dir / "realised_state.jsonl").exists() and (pl.run_dir / "plant_summary.json").exists()
+
+
+def test_an_exception_inside_finish_still_writes_an_error_summary_and_the_log(tmp_path, monkeypatch):
+    pl = _plant(tmp_path, _script([_run()]), seconds=20.0)
+    _drive(pl, lambda t: IN if 5.0 <= t < 8.0 else OUT, 20.0)
+
+    def boom(rows, run_dir):
+        raise OSError("disk full (test)")
+    monkeypatch.setattr(PL, "write_log", boom)
+    s = pl.finish()
+    disk = json.loads((pl.run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert disk == s
+    Summary.model_validate(disk)
+    assert s["status"] == "error" and "disk full (test)" in s["status_reason"]
+    assert s["robot_caused_press_stops"] == 1                       # what happened is kept
+    rows = [json.loads(ln) for ln in (pl.run_dir / "log.jsonl").read_text(encoding="utf-8").splitlines()]
+    kinds = [r["kind"] for r in rows]
+    assert kinds[0] == "mission_start" and "press_trip" in kinds and "error" in kinds
+    assert kinds.count("mission_end") == 1
+    for r in rows:
+        LogRow.model_validate(r)
+    assert (pl.run_dir / "realised_state.jsonl").exists()
+    assert pl.finish() is s                                         # idempotent
+
+
+def test_eval_identity_fields_have_no_defaults(tmp_path):
+    for k in ("world", "world_split", "condition", "code"):
+        cfg = _cfg(tmp_path, _script([_run()]), name=f"id_{k}")
+        del cfg["plant"][k]
+        with pytest.raises(ValueError, match=k):
+            PL.make(cfg)
+    for k, bad in (("world", -1), ("world", "3"), ("world_split", "train"), ("condition", "best"),
+                   ("code", {"head": ""})):
+        cfg = _cfg(tmp_path, _script([_run()]), name=f"bad_{k}")
+        cfg["plant"][k] = bad
+        with pytest.raises(ValueError, match=k):
+            PL.make(cfg)
+
+
+def test_tasks_must_match_the_site(tmp_path):
+    with pytest.raises(ValueError, match="tasks.yaml site"):
+        _plant(tmp_path, _script([_run()]), tasks=str(REPO / "tests" / "fixtures" / "twin_tasks.yaml"))
+    d = yaml.safe_load(_tasks(tmp_path).read_text(encoding="utf-8"))
+    d["checkpoints"][0]["press"] = "P99"
+    bad = tmp_path / "tasks_bad_press.yaml"
+    bad.write_text(yaml.safe_dump(d), encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown press"):
+        _plant(tmp_path, _script([_run()]), tasks=str(bad))
+    d["checkpoints"][0]["press"] = "P14a"                          # a z14 press on a z9 checkpoint
+    bad.write_text(yaml.safe_dump(d), encoding="utf-8")
+    with pytest.raises(ValueError, match="is in zone z14"):
+        _plant(tmp_path, _script([_run()]), tasks=str(bad))
+
+
+def test_reset_override_runs_the_u4_sweep_and_is_tagged(tmp_path):
+    pl = _plant(tmp_path, _script([_run()]), seconds=40.0, reset_override_s=60.0)
+    _drive(pl, lambda t: IN if 5.0 <= t < 8.0 else OUT, 40.0)
+    pl.finish()
+    rs = [f for f in pl.engine.freezes() if f.state == "resetting"]
+    assert len(rs) == 1 and rs[0].t1 - rs[0].t0 == pytest.approx(60.0)
+    diag = json.loads((pl.run_dir / "plant_summary.json").read_text(encoding="utf-8"))
+    assert diag["reset_sweep"]["sweep_run"] is True and diag["reset_sweep"]["reset_override_s"] == 60.0
+    rows = _log(pl)
+    assert json.loads(rows[0]["detail"])["reset_override_s"] == 60.0
+    trip = next(r for r in rows if r["kind"] == "press_trip")
+    assert json.loads(trip["detail"])["reset_source"] == "sweep_override"
+    with pytest.raises(ValueError, match="outside press"):
+        _plant(tmp_path, _script([_run()]), name="r2", reset_override_s=30.0)    # below the 60-900 s sweep
+    plain = _plant(tmp_path, _script([_run()]), name="r3", seconds=10.0)
+    _drive(plain, lambda t: OUT, 10.0)
+    plain.finish()
+    assert json.loads((plain.run_dir / "plant_summary.json").read_text(encoding="utf-8"))["reset_sweep"]["sweep_run"] \
+        is False
+
+
+# ------------------------------------------------------------------------------------------------ obs v2 adapter
+
+
+def test_zone_vis_drops_below_one_with_a_person_on_the_press_rect(tmp_path):
+    seg = Segment(id="s0", cls="person", source="synthetic_stub", points=[(0.0, 6.0, 5.5), (60.0, 6.5, 5.5)])
+    intents = [MoverIntent(entity="person:0", cls="person", zone="z9", t_start=0.0, segment="s0", speed_scale=1.0)]
+    pl = _plant(tmp_path, _script([_run()], intents=intents, segments=[seg]), seconds=20.0)
+    _drive(pl, lambda t: OUT, 20.0)
+    pl.finish()
+    obs = [OM.obs_from_dict(json.loads(ln)) for ln in (pl.run_dir / "obs_v2.jsonl").open(encoding="utf-8")]
+    v2 = [(np.asarray(o.zone_vis), np.asarray(o.zone_motion)) for o in obs]
+    vis = np.array([v[0] for v, _ in v2])
+    zm = np.array([m[0] for _, m in v2])
+    assert (vis < 1.0).mean() > 0.8                                # the person hides part of P9a's zone floor
+    assert np.isnan(zm[vis < 1.0]).all() and np.isnan(zm).all()   # MISSING (detections held across misses, T-W6)
+    assert all(v[1] == 1.0 for v, _ in v2)                         # P14a's zone is untouched
+
+
+def test_floor_share_counts_the_unseen_part_of_a_zone():
+    floors = [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], [(10.0, 0.0), (20.0, 0.0), (20.0, 10.0),
+                                                                     (10.0, 10.0)]]
+    w = PL.floor_share([(2.0, 2.0, 4.0, 4.0), (9.0, 2.0, 11.0, 4.0), (-4.0, 2.0, 0.0, 4.0)], floors, margin=1.0)
+    assert w[0] == pytest.approx([1.0, 0.0])
+    assert w[1] == pytest.approx([0.5, 0.5])
+    assert w[2].sum() == pytest.approx(1.0 / 6.0) and w[2][1] == 0.0   # 1 m of the 6 m wide zone is on the floor
+
+
+def test_obs_lines_are_written_only_once_their_delivery_time_is_reached(tmp_path):
+    pl = _plant(tmp_path, _script([_run()]), seconds=20.0)
+    k = 0
+    while k < 200:
+        t = round((k + 1) * 0.1, 6)
+        pl.after_step(t, _st(*OUT), [])
+        pl._obs_f.flush()
+        lines = (pl.run_dir / "obs_v2.jsonl").read_text(encoding="utf-8").splitlines()
+        assert all(json.loads(ln)["t"] <= T0 + t + 1e-9 for ln in lines)
+        assert len(lines) == int((t - OM.LATENCY_S) * 2 + 1e-9) + 1 if t >= OM.LATENCY_S else not lines
+        k += 1
+    pl.finish()
+    assert len((pl.run_dir / "obs_v2.jsonl").read_text(encoding="utf-8").splitlines()) == 40
+
+
 # ------------------------------------------------------------------------------------------------ world interface
 
 
@@ -250,13 +459,35 @@ def test_world_interface_follows_the_freezes(tmp_path):
     assert w.true_idle_windows("P9a", T0 + 10, 60) == [(T0 + 10, T0 + 30)]
     assert w.idle_remaining("P9a", T0 + 10) == pytest.approx(20.0)
     _drive(pl, lambda t: IN if 10.0 <= t < 40.0 else OUT, 60.0)
-    assert not w.active("P9a", T0 + 35) and w.active("P9a", T0 + 45)
-    assert w.group("P9a").is_frozen(T0 + 35) and w.group("P9a").frozen_until(T0 + 35) == pytest.approx(T0 + 40.1, abs=0.11)
-    assert {f.kind for f in w.group("P9a").freezes} == {"hold"} and w.group("P14a").freezes == []
-    assert list(w.active_many("P9a", [T0 + 10, T0 + 35, T0 + 45])) == [False, False, True]
+    reset = PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:hold_reset:0")
+    t_go = T0 + 40.1 + reset                                       # held, then the manual reset after exit
+    assert not w.active("P9a", T0 + 35) and not w.active("P9a", T0 + 45) and w.active("P9a", t_go + 1.0)
+    assert w.group("P9a").is_frozen(T0 + 35) and w.group("P9a").frozen_until(T0 + 35) == pytest.approx(t_go, abs=0.11)
+    assert {(f.kind, f.state) for f in w.group("P9a").freezes} == {("hold", "held"), ("trip", "resetting")}
+    assert w.group("P14a").freezes == []
+    assert list(w.active_many("P9a", [T0 + 10, T0 + 35, t_go + 1.0])) == [False, False, True]
     ev = w.trip("P14a", T0 + 70.0, "test", reset_s=30.0)          # after the written horizon (t0 + 59.5)
     assert ev["group"] == "P14a" and not w.active("P14a", T0 + 80) and w.active("P14a", T0 + 101)
-    pl.finish()
+    s = pl.finish()
+    # a trip through the World interface is a logged, counted robot-caused stop
+    assert s["robot_caused_press_stops"] == 1
+    trip = [r for r in _log(pl) if r["kind"] == "press_trip"]
+    assert len(trip) == 1 and trip[0]["entity"] == "P14a" and trip[0]["value"] == pytest.approx(30.1)
+    assert json.loads(trip[0]["detail"])["via"] == "TwinWorld.trip"
+
+
+def test_world_trip_without_a_plant_and_in_the_past_fail_closed(tmp_path):
+    pl = _plant(tmp_path, _script([_run()]), seconds=20.0)
+    with pytest.raises(RuntimeError, match="needs the plant"):
+        PL.TwinWorld(pl.engine).trip("P9a", T0 + 5.0, "test", reset_s=10.0)
+    _drive(pl, lambda t: OUT, 10.0)
+    with pytest.raises(ValueError, match="written tick"):
+        pl.world.trip("P9a", T0 + 5.0, "test", reset_s=10.0)
+    ev = pl.world.trip("P9a", T0 + 12.0, "test")                   # keyed draw, the press's first trip
+    want = PL.SAFETY_DT + PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:trip:0")
+    assert ev["lost_s"] == pytest.approx(want)
+    s = pl.finish()
+    assert s["robot_caused_press_stops"] == 1 and s["status"] == "error"   # mission cut at 10 s of 20 s
 
 
 # ------------------------------------------------------------------------------------------------ truth isolation

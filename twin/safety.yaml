@@ -8,6 +8,14 @@
 #   idle      -> hold  (the engine never emits idle; kept for the contract)
 #   tripped / held / resetting -> hold (the press may not restart while the robot is inside; a reset starts
 #                                        only after the robot has left)
+# Hold release (W-W4: a perimeter light curtain cannot sense the robot inside, so its break latches the restart
+# interlock): after a visit in which a restart was HELD, a light_curtain + manual-reset press restarts only after a
+# manual reset from outside, drawn from the same lognormal as the trip reset (state resetting, from the robot's exit).
+# One press_hold row per delayed restart (value = the held seconds); a hold never runs past its running bout.
+# DISCLOSED (needs the user's decision, W-W4): entering a STOPPED press and leaving before any restart falls due costs
+# nothing (no reset is drawn); a guard device that can sense presence inside (area scanner) is not modelled.
+# U4 descriptive sweep: cfg plant.reset_override_s (a fixed reset inside sweep_s) replaces every reset draw; such a
+# run is tagged a sweep run in plant_summary.json and the log rows, never a primary-metric run.
 contract: twin.safety/1
 site_id: esk_press_v0
 presses:
