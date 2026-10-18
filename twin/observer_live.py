@@ -31,6 +31,14 @@ with the LEAD DECISION: fail closed, i.e. every cell of a press grid not learned
 union of the twin bins OR the detector's UNKNOWN cells, inflated by the margin; the inflated set is broadcast as
 UNKNOWN boxes (`map_snapshot`). The margin's cell_m must equal the L1 grid cell (env_res) and margin_m must fit in the
 grid's margin around the zone, else ValueError (fail closed: re-calibrate on this grid).
+DISCLOSED, LEAD DECISION PENDING (audit S6 #3): unknown_rects apply to every bin and slice, so the inflated union of the
+bin-0 and STOP_BIN envelopes makes the running envelope of every press UNKNOWN to the robot at all times; neither the
+fast layer (idle windows, phase) nor a learned STOP_BIN envelope can open any of those cells. Conservative, but in the
+press grids the "learned" condition then behaves like a static keep-out, which limits what the learned-vs-reactive
+comparison can show there. The alternative (inflate each bin's envelope separately and send it through the L1 per-bin
+boxes, keeping only the detector's UNKNOWN / fail-closed cells in unknown_rects) needs the robot-side fix of audit S6 #4
+first (masks.py ANDON vote, mapping.predicted_bins for off-line machines) and S7b's dev recorder to score pred = the
+per-bin envelope the robot looks up. `tags["m7_application"]` carries this into every run's diagnostics.
 
 Time of day (P2: the real clips carry no timing information): any time-of-day / shift structure the map's L2/L3
 slices learn comes from the generated days, i.e. from the generator's ASSUMED structure. `tags` says so and is part of
@@ -68,6 +76,9 @@ TWIN_BINS = (0, M.STOP_BIN)
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 TOD_TAG = ("ASSUMED: no hour-of-day structure is observed in the real clips (probe P2: no timing information); "
            "any time-of-day or shift structure in the map's slices comes from the generated days")
+M7_TAG = ("DISCLOSED (lead decision pending, audit S6 #3): the M-W7-inflated union of the bin-0 and STOP_BIN envelopes "
+          "is broadcast as UNKNOWN boxes valid in every bin and slice, so each press's running envelope is always "
+          "UNKNOWN to the robot; the fast layer cannot open it (press grids behave like a static keep-out)")
 
 
 # ------------------------------------------------------------------------------------------------ spec
@@ -192,7 +203,7 @@ class ObserverLive:
         self.seq = 0
         self.events: list[dict] = []
         self.n_ticks = 0
-        self.tags = dict(time_of_day=TOD_TAG,
+        self.tags = dict(time_of_day=TOD_TAG, m7_application=M7_TAG,
                          cycle_consts={k: dict(placeholder=list(c.placeholder), source=c.source)
                                        for k, c in cfg.consts.items()},
                          motion_thr=dict(value=cfg.motion_thr, source=cfg.motion_thr_source),

@@ -289,6 +289,22 @@ def test_time_of_day_structure_is_tagged_assumed(run):
     assert run[0].diagnostics()["tags"]["time_of_day"].startswith("ASSUMED")
 
 
+def test_m7_application_is_disclosed_and_covers_the_running_envelope(run):
+    """Audit S6 #3 (lead decision pending): the inflated bin-0 / STOP_BIN union is broadcast as UNKNOWN boxes valid in
+    every bin, so every cell of a press's learned running envelope is UNKNOWN to the robot. Disclosed in the run tags;
+    this test fails if the behaviour changes without the tag being revisited."""
+    ob, _, _ = run
+    assert ob.diagnostics()["tags"]["m7_application"].startswith("DISCLOSED")
+    m = ob.map_snapshot()
+    res = SPEC["env_res"]
+    for i, pid in enumerate(ob.ids):
+        env = np.asarray(ob.map.envelope(pid, 0, ob.det.cfg.p_min), bool)
+        assert env.any()
+        ix, iz = np.nonzero(env)
+        for x, z in zip(ob.map.l1_x0[i] + (ix + 0.5) * res, ob.map.l1_z0[i] + (iz + 0.5) * res):
+            assert any(r[0] <= x <= r[2] and r[1] <= z <= r[3] for r in m.unknown_rects)
+
+
 # ---------------------------------------------------------------- C-W5 signing, explicit keyring, fail closed
 def _store(key: SigningKey, root: SigningKey, now: float) -> TrustStore:
     st = TrustStore(root.verify_key, SPEC["site_id"])
