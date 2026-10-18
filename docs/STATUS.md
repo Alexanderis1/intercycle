@@ -1,4 +1,17 @@
-# InterCycle — status at clean stop (17 Oct 2026, ~13:50 CEST)
+# InterCycle — status (press-shop twin, Option B; lead session intercycle-74 on the desktop)
+
+## >>> Gate log, lead intercycle-74 (H+0 = Sat 17 Oct 22:48 CEST; FREEZE Sun 08:30 fixed) <<<
+The monitor amd-ce was offline at 02:30, so gate hand-offs are written here.
+
+**G0 (~02:30, green except the MANIFEST).** origin/main 65f2c26.
+- User decisions (Sun ~00:45-01:40): M-W7 alpha 0.05 / delta 0.10; T-W6 onset gap disclosed; split Amendment 1 (A1+); double cpu=4, max_rtf 2, K=16; A-lite kept. At ~01:40 the user went to sleep and delegated decisions to the lead (budget caps unchanged).
+- Split A1+ (prereg/split_a1.csv, AMENDMENTS.md): groups train 11+12, dev 6+12, test 4+12 (cam9+cam14); test 126 clips (cam9 114 = 18.2 min, cam14 12 = 1.2 min). Small-group rule applies to cam9. N = 55.6 train min, M = 7.2 cam14 train min. Test purge done; check_no_test_images clean.
+- Probes: P1 96.8 min / 691 clips; P2 no timing information; P4 P9a + P9b LEARNED (cam9, 1.96 s / 1.69 s), cam14 presses ASSUMED; P5 no vehicles cam9, forklifts cam14 (RF-DETR truck>=0.5); P6 3 framings, scale interval cam14; P7 2 separate zones; P8 whole-box masking; H1 $0.026-0.028/run at cpu4 rtf2.
+- Lead decisions: CAL points placed by an agent (U14 clause, disclosed); k1_v0/scale_v0 invalid, refit on train; forklift class cam14 only; S7a L1 adapter fails closed in unlearned bins.
+- Open: no custodian session yet (bootstrap prompt given to the user), so no MANIFEST / test labels yet.
+- Revised gates: G1 ~04:30, Movers ~05:45, PREREG v1 ~06:15, G2 ~07:00, Dry run 07:45, FREEZE 08:30.
+
+# (older) InterCycle — status at clean stop (17 Oct 2026, ~13:50 CEST)
 
 ## >>> HAND-OFF for lead session 3 (written by lead session 2, Sat 17 Oct ~19:20 CEST) <<<
 Read in this order: this section → `docs/DIRECTION.md` (still the plan of record) → `docs/AUDIT.md` + `docs/PRODUCTION_BRIEF.md`
