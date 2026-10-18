@@ -1,0 +1,18 @@
+{
+ "_doc": "CAL v1 k1 line hints (lane S2). Approximate endpoints (full-res px of the RAW frame) of straight world lines, picked by a Claude agent viewing the per-framing median background of A1+ TRAIN frames ($INTERCYCLE_DATA/cal/<framing>_bg.png; scripts/cal_v1.py gather). intercycle.framing.trace_edge snaps each hint to the sub-pixel edge. Names with a '#n' suffix are pieces of ONE world line (traced separately because the line bows by more than the search band) and are joined before the fit. c9_f0 and c14_f0 lines A/B/C are the P6 hints (k1_hints.json) re-traced on the A1+ train background. The third value is optional trace_edge keyword arguments.",
+ "c9_f0": {
+  "A_center_yellow_stripe": [[1212, 215], [1030, 1020]],
+  "B_green_walkway_left_yellow_line": [[1400, 10], [1735, 1075]],
+  "C_green_walkway_inner_yellow_line": [[1668, 525], [1850, 975]]
+ },
+ "c9_f1": {
+  "A_center_yellow_stripe": [[1300, 655], [1180, 1060]],
+  "B_green_walkway_left_yellow_line": [[1510, 390], [1690, 1060]],
+  "D_roof_beam_orange_pipe_lower_edge#1": [[20, 78], [880, 56], {"half_width": 20, "polarity": -1.0}],
+  "D_roof_beam_orange_pipe_lower_edge#2": [[900, 58], [1740, 140], {"half_width": 25, "polarity": -1.0}]
+ },
+ "c14_f0": {
+  "A_yellow_floor_line": [[770, 610], [1490, 930]],
+  "C_white_column_left_edge_top": [[1437, 3], [1410, 105], {"half_width": 15}]
+ }
+}
