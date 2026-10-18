@@ -550,6 +550,28 @@ def test_calibration_pred_is_the_robot_lookup_uninflated(still_run):
         ob.calibration_pred(s, fast, replace(hm, ids=("X", "Y")), t)
 
 
+def test_robot_bins_and_calibration_pred_held_read_the_stop_bin(still_run):
+    """Audit minor (lane S5b-entry): the robot inside / reaching into a press zone holds it -> (STOP_BIN,), whatever
+    the layers say, as masks.machine_bins does for MachineView.held; calibration_pred takes per-press held flags."""
+    ob, obs = still_run
+    t = obs[-1].t_cap
+    held = _held(ob, t)
+    s, hm = held["slow"], held["map"]
+    nan = float("nan")
+    assert OL.robot_bins(None, None, t, t, nan, held=True) == (M.STOP_BIN,)
+    fast = FastLayer(s.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, State.ACTIVE, 0.0, 0.5, 10.0, 8, 1) for i in range(ob.M)])
+    assert OL.robot_bins(s.machines[0], fast.machines[0], t, t + 0.5, float(hm.period[0]), held=True) == (M.STOP_BIN,)
+    assert OL.robot_bins(s.machines[0], fast.machines[0], t, t + 0.5, float(hm.period[0])) == (0,)
+    preds = ob.calibration_pred(s, fast, hm, t + 0.5, held=[True] + [False] * (ob.M - 1))
+    assert np.array_equal(preds[0], hm.pred(0, (M.STOP_BIN,)))
+    for i in range(1, ob.M):
+        assert np.array_equal(preds[i], hm.pred(i, (0,)))
+    assert all(np.array_equal(a, b) for a, b in zip(ob.calibration_pred(s, fast, hm, t + 0.5, held=None),
+                                                       ob.calibration_pred(s, fast, hm, t + 0.5)))
+    with pytest.raises(ValueError, match="held flags"):
+        ob.calibration_pred(s, fast, hm, t + 0.5, held=[True] * (ob.M + 1))
+
+
 def test_calibration_pred_uses_the_map_the_robot_holds(still_run, monkeypatch):
     """Audit S6-optB fix 2 #1: after the robot completed map v1, the live map and detector change (a CUSUM alarm adds
     UNKNOWN cells, a fail-closed UNKNOWN is lifted, count forgetting empties the envelopes). calibration_pred(slow, fast, held v1, t) is
