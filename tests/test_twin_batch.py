@@ -26,7 +26,8 @@ def test_plan_is_the_192_cell_cut_design_crn_paired():
     for m in ms:
         lo = (m.day - 1) * TB.DAY_S + TB.SLOT_PAD_S
         assert lo <= m.t0 <= m.day * TB.DAY_S - 720 - TB.SLOT_PAD_S and (m.t0 * 2) == int(m.t0 * 2)
-    assert len({m.run_id for m in ms}) == 192 and E.parse_run_id(ms[0].run_id)[0] == (0, 9, "z9", "static")
+    named = E.parse_run_id(ms[0].run_id)
+    assert len({m.run_id for m in ms}) == 192 and named is not None and named[0] == (0, 9, "z9", "static")
     for bad in (("static", "learned"), ("static", "learned", "reactive", "oracle"), ("no_map", "learned", "reactive")):
         with pytest.raises(TB.BatchError, match="cut design"):
             TB.plan(WORLDS, ["z9"], conditions=bad)
@@ -69,7 +70,7 @@ def test_projection_uses_the_h1_rates():
 
 def test_sealed_batch_and_cli_refuse_without_the_sealed_flag(monkeypatch, tmp_path):
     sys.path.insert(0, str(REPO / "scripts"))
-    import run_double as RD
+    import run_double as RD  # pyright: ignore[reportMissingImports]  (scripts/ on sys.path)
 
     monkeypatch.delenv("INTERCYCLE_SEALED_RUN", raising=False)
     with pytest.raises(RD.DoubleError, match="sealed_run"):
@@ -82,12 +83,11 @@ def test_sealed_batch_and_cli_refuse_without_the_sealed_flag(monkeypatch, tmp_pa
         RD.run_batch(tmp_path, RD.dev_worlds([0]), backend="modal")
 
 
-@pytest.mark.slow
 def test_local_batch_end_to_end_into_twin_eval(tmp_path, monkeypatch):
     """Stub world, dev world 0, both zones, the 3 conditions on days 9-10 (12 missions, 720 s each), the observer phase
     on SHORT 1 h days (dev-only test setting), classify_invalid per round, scored by twin_eval on the dev split."""
     sys.path.insert(0, str(REPO / "scripts"))
-    import run_double as RD
+    import run_double as RD  # pyright: ignore[reportMissingImports]  (scripts/ on sys.path)
 
     monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
     rec = RD.run_batch(tmp_path / "out", RD.dev_worlds([0]), day_s=3600.0)
