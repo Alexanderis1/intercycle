@@ -307,3 +307,16 @@ Lane notes under A2 item 4 and the split freeze (lane RC-freeze-fix1):
   item 6); P9a has 1 of 13 test stroke windows (A3 item 7); the custodian runs on the desktop (A1 lead notes); the
   observer learns clock-time bins only, so event-triggered effects "cannot show" (A3 item 8); with 20 min learning,
   the v1 slice gave confidence 0 on every press before fix (a) (A4 "Still open").
+
+### A5 erratum (same day, ~09:45 CEST, lead): five rows of the A5 table corrected, checked against HEAD of d2b3a56
+
+The A5 table was computed from a working tree that did not match the merge commit. Checked with
+`git rev-parse d2b3a56:<path>` for all 15 §1 paths; **this erratum replaces the A5 table where they differ**:
+
+- intercycle/observer/learn_cycles.py: binding blob is `03b54be1a905de3c371f498adf94c3bbb86f34b7` (not de8d4233aacd7d9d40fda21367b7d8606315811c).
+- ros2/intercycle_nav/intercycle_nav/timing.py, timing_planner.py, masks.py and ros2/intercycle_nav/config/nav2.yaml
+  are **unchanged** at this commit (the §1 table blobs 0c3555c2…, 2ea9a0e0…, a9c67f66…, 156409cd… are binding);
+  their A5 "new" blobs are void.
+- The other seven A5 rows are correct. So 8 of the 15 §1 paths changed, not 12.
+- Any later change to a §1 path (for example fix (a), A5 item 8, if it is merged before FREEZE) gets its own entry
+  listing the old and new blobs.
