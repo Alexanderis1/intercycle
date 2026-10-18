@@ -97,13 +97,16 @@ injected new arms it marked the cells UNKNOWN after a median of Z min, with F fa
 - No change to code, parameters, worlds or metrics after FREEZE. A failed episode is reported as failed. Only an
   infrastructure failure (container lost, timeout) is re-run, once, same seed, disclosed.
 - Budget: estimate ~$0.3 (Section 6); stop and report at $0.5.
-- Dry run (done before FREEZE, local CPU, world 801): `scripts/alite_run.py --dry-run` (30 min of learning, one 300 s
-  mission on day 0) runs for all three conditions; a Modal smoke of the same dry run gave the same numbers.
+- Dry run (done before FREEZE, local CPU, worlds 801 and 802): `scripts/alite_run.py --dry-run` (30 min of learning,
+  one 300 s mission on day 0) runs for all three conditions; the same dry run on Modal (`--dry-run --worlds 801,802`)
+  gave identical numbers (learned Y 8, reactive 7, static 2 over 2 missions; no trip, no hold).
 
 ## 6. Cost and time
 
-Measured locally (world 801, full episode, learned): see the FREEZE note. Per episode one Modal container (1 CPU,
-2 GiB); 12 episodes + 4 M-W4 worlds in parallel. Estimate from H1 prices ($0.0000131 / core-s + $0.00000222 / GiB-s).
+Measured locally (world 801, one full learned episode, laptop CPU shared with other jobs): 1421 s wall, under 300 MB
+of memory. The dry run took 33 s on Modal against 44 s locally. Per episode one Modal container (1 CPU, 2 GiB);
+12 episodes + 4 M-W4 worlds run in parallel, about 25 min of wall time. Estimate: ~13 000 container-s for the
+episodes + ~3 600 for M-W4, x ($0.0000131 / core-s + 2 x $0.00000222 / GiB-s, H1 prices) = about $0.3.
 
 ## 7. Known limits (disclose with the results)
 
@@ -118,3 +121,9 @@ Measured locally (world 801, full episode, learned): see the FREEZE note. Per ep
 - Robots get UNKNOWN boxes at mission start only (C-W7 cut); in Run A no change is injected, so any UNKNOWN box there is
   a false alarm, which can only make `learned` decline more.
 - Any time-of-day structure (mission times, the shift-change stop) is ASSUMED, from the body-shop scenario.
+- The phase-origin calibration can leave a machine without a lag (S80 lifter on world 801: fewer than 20 usable
+  pairs); the learned robot then never trusts the map's parked check there (fail closed) and uses its other rules.
+- Run A's JSON lists the observer's change events on day 1 (world 801 dev run: 7 `inzone_change` events near 18:00,
+  no change injected); they are false alarms and are reported with the table.
+- The development run of world 801 (before the E-W6 walkway change and the mission-start UNKNOWN hand-over) gave
+  learned Y 41 over 8 missions, 1 trip, 1 hold; it is not part of the results.
