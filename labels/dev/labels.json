@@ -1,0 +1,2102 @@
+{
+ "contract": "twin.labels/1",
+ "split": "dev",
+ "labeller_id": "dev-labeller-A",
+ "labeller_kind": "claude_agent",
+ "blind": true,
+ "proposals_shown": false,
+ "rules_sha256": "8a3b9ab5984e13350444b26db853619f807738a31c298f75bfa4514e27695b63",
+ "sample_list_sha256": "1172f3c4d4cb2040b4248e872d5d842098526119c61da2c7e9b9778fcc29bc06",
+ "frames": [
+  {
+   "sample_id": "dev-f-c14-01",
+   "clip_id": "7_tr13",
+   "t_pts": 3.0184630738522955,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1097.0,
+     "y0": 275.0,
+     "x1": 1585.0,
+     "y1": 868.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1572.0,
+     "y0": 421.0,
+     "x1": 1660.0,
+     "y1": 630.0,
+     "foot_u": 1615.0,
+     "foot_v": 625.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift carrying two orange crates (box = truck + load); driver in forklift (no separate person box); operator standing at the press to the right of the load; clutter near (1690, 130) at the back is not a recognisable person"
+  },
+  {
+   "sample_id": "dev-f-c14-02",
+   "clip_id": "3_tr38",
+   "t_pts": 3.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 478.0,
+     "y0": 102.0,
+     "x1": 857.0,
+     "y1": 482.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1565.0,
+     "y0": 425.0,
+     "x1": 1648.0,
+     "y1": 625.0,
+     "foot_u": 1590.0,
+     "foot_v": 620.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1741.0,
+     "y0": 100.0,
+     "x1": 1762.0,
+     "y1": 178.0,
+     "foot_u": 1752.0,
+     "foot_v": 176.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1765.0,
+     "y0": 106.0,
+     "x1": 1790.0,
+     "y1": 181.0,
+     "foot_u": 1777.0,
+     "foot_v": 178.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift carrying three orange crates (box = truck + load); driver in forklift if present (cab interior unclear; no separate person box); seated operator at the right press, partly behind the chair back; two small people standing at the back right"
+  },
+  {
+   "sample_id": "dev-f-c14-03",
+   "clip_id": "3_tr39",
+   "t_pts": 1.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1282.0,
+     "y0": 280.0,
+     "x1": 1735.0,
+     "y1": 872.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1762.0,
+     "y0": 105.0,
+     "x1": 1800.0,
+     "y1": 188.0,
+     "foot_u": 1780.0,
+     "foot_v": 185.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 38.0,
+     "y0": 0.0,
+     "x1": 76.0,
+     "y1": 58.0,
+     "foot_u": 57.0,
+     "foot_v": 58.0,
+     "truncated": true,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift turning with stacked orange crates (box = truck + load); driver in forklift (no separate person box); small person at the back right; partial person at the top-left border behind a rack (cut by the top border, feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c14-04",
+   "clip_id": "3_tr34",
+   "t_pts": 1.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1030.0,
+     "y0": 338.0,
+     "x1": 1476.0,
+     "y1": 970.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1562.0,
+     "y0": 424.0,
+     "x1": 1641.0,
+     "y1": 640.0,
+     "foot_u": 1600.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1646.0,
+     "y0": 408.0,
+     "x1": 1722.0,
+     "y1": 647.0,
+     "foot_u": 1680.0,
+     "foot_v": 640.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 190.0,
+     "y0": 60.0,
+     "x1": 253.0,
+     "y1": 176.0,
+     "foot_u": 220.0,
+     "foot_v": 170.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1772.0,
+     "y0": 118.0,
+     "x1": 1802.0,
+     "y1": 182.0,
+     "foot_u": 1787.0,
+     "foot_v": 180.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift driving towards the camera: only its load of three orange crates is visible, the truck is hidden behind the load (boxed as forklift, occluded; ambiguous); seated operator partly hidden by a standing colleague at the right press; walker at the top left; small person at the back right, low contrast"
+  },
+  {
+   "sample_id": "dev-f-c14-05",
+   "clip_id": "3_tr46",
+   "t_pts": 1.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1092.0,
+     "y0": 244.0,
+     "x1": 1680.0,
+     "y1": 795.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with stacked orange crates (box = truck + load); driver in forklift (no separate person box); the operators at the right press are hidden behind the forklift; dark blurred shape near (1695, 170) at the back is unclear (chair or seated person), not boxed"
+  },
+  {
+   "sample_id": "dev-f-c14-06",
+   "clip_id": "7_tr6",
+   "t_pts": 5.06796875,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 275.0,
+     "y0": 85.0,
+     "x1": 546.0,
+     "y1": 386.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1555.0,
+     "y0": 423.0,
+     "x1": 1668.0,
+     "y1": 635.0,
+     "foot_u": 1600.0,
+     "foot_v": 630.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with orange crates at the top left, headlight glare (box = truck + load); driver not visible through the glare (driver in forklift, no separate person box); seated operator at the right press, partly hidden by the chair"
+  },
+  {
+   "sample_id": "dev-f-c14-07",
+   "clip_id": "3_tr48",
+   "t_pts": 1.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 848.0,
+     "y0": 372.0,
+     "x1": 1446.0,
+     "y1": 1080.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": true,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1560.0,
+     "y0": 424.0,
+     "x1": 1646.0,
+     "y1": 640.0,
+     "foot_u": 1600.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1640.0,
+     "y0": 411.0,
+     "x1": 1731.0,
+     "y1": 645.0,
+     "foot_u": 1680.0,
+     "foot_v": 640.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 38.0,
+     "y0": 31.0,
+     "x1": 67.0,
+     "y1": 118.0,
+     "foot_u": 52.0,
+     "foot_v": 116.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1772.0,
+     "y0": 114.0,
+     "x1": 1801.0,
+     "y1": 182.0,
+     "foot_u": 1786.0,
+     "foot_v": 180.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift driving towards the camera with three orange crates; the load hides most of the truck and reaches the bottom border (driver in forklift, not visible); seated operator partly hidden by a standing colleague at the right press; person standing at the far top left behind the on-screen camera label; small low-contrast person at the back right"
+  },
+  {
+   "sample_id": "dev-f-c14-08",
+   "clip_id": "7_te1",
+   "t_pts": 6.998984375,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 415.0,
+     "y0": 106.0,
+     "x1": 777.0,
+     "y1": 465.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1560.0,
+     "y0": 425.0,
+     "x1": 1661.0,
+     "y1": 643.0,
+     "foot_u": 1605.0,
+     "foot_v": 638.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with two orange crates (box = truck + load); driver in forklift (visible in the cab, no separate person box); seated operator at the right press, partly hidden by the chair"
+  },
+  {
+   "sample_id": "dev-f-c14-09",
+   "clip_id": "7_te6",
+   "t_pts": 9.10296875,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 996.0,
+     "y0": 281.0,
+     "x1": 1595.0,
+     "y1": 840.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 140.0,
+     "y0": 163.0,
+     "x1": 193.0,
+     "y1": 320.0,
+     "foot_u": 168.0,
+     "foot_v": 316.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1581.0,
+     "y0": 424.0,
+     "x1": 1662.0,
+     "y1": 635.0,
+     "foot_u": 1620.0,
+     "foot_v": 630.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with orange crates (box = truck + load); driver in forklift (visible in the cab, no separate person box); walker at the left; operator at the right press partly hidden by the forklift load"
+  },
+  {
+   "sample_id": "dev-f-c14-10",
+   "clip_id": "3_tr22",
+   "t_pts": 1.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 626.0,
+     "y0": 128.0,
+     "x1": 1110.0,
+     "y1": 668.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1562.0,
+     "y0": 428.0,
+     "x1": 1650.0,
+     "y1": 640.0,
+     "foot_u": 1605.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with stacked orange crates, cab glare (box = truck + load); driver in forklift if present (not distinguishable through the glare); seated operator at the right press, partly hidden by the chair; dark blob near (1780, 155) at the back right may be a crouching person, not boxed (uncertain)"
+  },
+  {
+   "sample_id": "dev-f-c14-11",
+   "clip_id": "3_tr10",
+   "t_pts": 7.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1018.0,
+     "y0": 300.0,
+     "x1": 1428.0,
+     "y1": 880.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 933.0,
+     "y0": 183.0,
+     "x1": 1015.0,
+     "y1": 380.0,
+     "foot_u": 968.0,
+     "foot_v": 375.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1562.0,
+     "y0": 428.0,
+     "x1": 1650.0,
+     "y1": 640.0,
+     "foot_u": 1605.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift seen from the front behind its load of three orange crates: the truck is hidden by the load (boxed as forklift, occluded; neighbouring frames of the same clip show the forklift carrying the stack); walker by the presses; seated operator at the right press, partly hidden by the chair"
+  },
+  {
+   "sample_id": "dev-f-c14-12",
+   "clip_id": "7_tr12",
+   "t_pts": 2.99688123752495,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 676.0,
+     "y0": 333.0,
+     "x1": 1230.0,
+     "y1": 915.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1562.0,
+     "y0": 428.0,
+     "x1": 1655.0,
+     "y1": 640.0,
+     "foot_u": 1605.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with two orange crates, cab glare (box = truck + load); driver in forklift if present (not distinguishable through the glare); seated operator at the right press, partly hidden by the chair"
+  },
+  {
+   "sample_id": "dev-f-c14-13",
+   "clip_id": "7_tr13",
+   "t_pts": 0.998003992015968,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 903.0,
+     "y0": 362.0,
+     "x1": 1576.0,
+     "y1": 925.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1600.0,
+     "y0": 428.0,
+     "x1": 1660.0,
+     "y1": 640.0,
+     "foot_u": 1625.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with two orange crates (box = truck + load); driver in forklift (visible in the cab, no separate person box); seated operator at the right press, partly hidden by the chair and the forklift cab"
+  },
+  {
+   "sample_id": "dev-f-c14-14",
+   "clip_id": "3_tr38",
+   "t_pts": 1.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 715.0,
+     "y0": 176.0,
+     "x1": 1143.0,
+     "y1": 662.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1560.0,
+     "y0": 428.0,
+     "x1": 1660.0,
+     "y1": 640.0,
+     "foot_u": 1605.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1741.0,
+     "y0": 100.0,
+     "x1": 1762.0,
+     "y1": 178.0,
+     "foot_u": 1752.0,
+     "foot_v": 176.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1765.0,
+     "y0": 106.0,
+     "x1": 1790.0,
+     "y1": 181.0,
+     "foot_u": 1777.0,
+     "foot_v": 178.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with three orange crates (box = truck + load); driver in forklift if present (cab interior not visible); seated operator at the right press, partly hidden by the chair; two small people standing at the back right"
+  },
+  {
+   "sample_id": "dev-f-c14-15",
+   "clip_id": "3_tr39",
+   "t_pts": 3.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1015.0,
+     "y0": 290.0,
+     "x1": 1640.0,
+     "y1": 945.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1768.0,
+     "y0": 111.0,
+     "x1": 1800.0,
+     "y1": 190.0,
+     "foot_u": 1785.0,
+     "foot_v": 188.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 38.0,
+     "y0": 0.0,
+     "x1": 76.0,
+     "y1": 58.0,
+     "foot_u": 57.0,
+     "foot_v": 58.0,
+     "truncated": true,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift turning with stacked orange crates (box = truck + load); driver in forklift if present (not distinguishable); the seated operator at the right press is hidden behind the forklift; small person at the back right; partial person at the top-left border behind a rack (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c14-16",
+   "clip_id": "3_tr34",
+   "t_pts": 3.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 928.0,
+     "y0": 217.0,
+     "x1": 1395.0,
+     "y1": 735.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1562.0,
+     "y0": 424.0,
+     "x1": 1645.0,
+     "y1": 640.0,
+     "foot_u": 1600.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1645.0,
+     "y0": 408.0,
+     "x1": 1722.0,
+     "y1": 647.0,
+     "foot_u": 1680.0,
+     "foot_v": 640.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 88.0,
+     "y0": 62.0,
+     "x1": 130.0,
+     "y1": 143.0,
+     "foot_u": 108.0,
+     "foot_v": 140.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1772.0,
+     "y0": 118.0,
+     "x1": 1802.0,
+     "y1": 182.0,
+     "foot_u": 1787.0,
+     "foot_v": 180.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with three orange crates (box = truck + load); driver in forklift if present (cab interior not visible); seated operator partly hidden by a standing colleague at the right press; person standing at the far top left (partly behind the on-screen camera label); small low-contrast person at the back right"
+  },
+  {
+   "sample_id": "dev-f-c14-17",
+   "clip_id": "7_tr11",
+   "t_pts": 3.015390625,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 340.0,
+     "y0": 138.0,
+     "x1": 656.0,
+     "y1": 483.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1562.0,
+     "y0": 428.0,
+     "x1": 1650.0,
+     "y1": 640.0,
+     "foot_u": 1605.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with orange crates at the top left, headlight glare (box = truck + load); driver not distinguishable through the glare (driver in forklift, no separate person box); seated operator at the right press, partly hidden by the chair"
+  },
+  {
+   "sample_id": "dev-f-c14-18",
+   "clip_id": "7_te4",
+   "t_pts": 3.008984375,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 888.0,
+     "y0": 295.0,
+     "x1": 1475.0,
+     "y1": 805.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1562.0,
+     "y0": 430.0,
+     "x1": 1660.0,
+     "y1": 640.0,
+     "foot_u": 1610.0,
+     "foot_v": 635.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with two orange crates (box = truck + load); driver in forklift (visible in the cab, no separate person box); seated operator at the right press, partly hidden by the chair"
+  },
+  {
+   "sample_id": "dev-f-c14-19",
+   "clip_id": "7_te3",
+   "t_pts": 1.0092666400956556,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1125.0,
+     "y0": 372.0,
+     "x1": 1735.0,
+     "y1": 803.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with two orange crates (box = truck + load); driver in forklift (visible in the cab, no separate person box); the seated operator at the right press is hidden behind the forklift; no other person visible"
+  },
+  {
+   "sample_id": "dev-f-c14-20",
+   "clip_id": "3_tr22",
+   "t_pts": 5.0,
+   "boxes": [
+    {
+     "cls": "forklift",
+     "x0": 1228.0,
+     "y0": 262.0,
+     "x1": 1765.0,
+     "y1": 850.0,
+     "foot_u": null,
+     "foot_v": null,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 38.0,
+     "y0": 0.0,
+     "x1": 76.0,
+     "y1": 58.0,
+     "foot_u": 57.0,
+     "foot_v": 58.0,
+     "truncated": true,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "forklift with stacked orange crates (box = truck + load); driver in forklift (visible in the cab, no separate person box); the seated operator at the right press is hidden behind the forklift; partial person at the top-left border behind a rack (feet not visible); dark blob near (1780, 160) at the back right may be a crouching person, not boxed (uncertain)"
+  },
+  {
+   "sample_id": "dev-f-c9-01",
+   "clip_id": "0_tr2",
+   "t_pts": 1.0068465565847764,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 368.0,
+     "y0": 402.0,
+     "x1": 454.0,
+     "y1": 530.0,
+     "foot_u": 410.0,
+     "foot_v": 530.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 446.0,
+     "y0": 403.0,
+     "x1": 502.0,
+     "y1": 545.0,
+     "foot_u": 474.0,
+     "foot_v": 545.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1493.0,
+     "y0": 341.0,
+     "x1": 1529.0,
+     "y1": 454.0,
+     "foot_u": 1511.0,
+     "foot_v": 451.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1532.0,
+     "y0": 334.0,
+     "x1": 1564.0,
+     "y1": 455.0,
+     "foot_u": 1547.0,
+     "foot_v": 452.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1566.0,
+     "y0": 376.0,
+     "x1": 1596.0,
+     "y1": 455.0,
+     "foot_u": 1582.0,
+     "foot_v": 452.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "two operators behind the P9a crown, lower bodies hidden by a column and the press base (feet not visible); three people in the right corridor; dark shape at the left border near (40, 800) looks like a chair, not boxed (uncertain)"
+  },
+  {
+   "sample_id": "dev-f-c9-02",
+   "clip_id": "2_tr22",
+   "t_pts": 1.0,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 1130.0,
+     "y0": 380.0,
+     "x1": 1287.0,
+     "y1": 757.0,
+     "foot_u": 1178.0,
+     "foot_v": 750.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1257.0,
+     "y0": 420.0,
+     "x1": 1377.0,
+     "y1": 782.0,
+     "foot_u": 1290.0,
+     "foot_v": 772.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1296.0,
+     "y0": 2.0,
+     "x1": 1338.0,
+     "y1": 118.0,
+     "foot_u": 1317.0,
+     "foot_v": 116.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 254.0,
+     "y0": 100.0,
+     "x1": 293.0,
+     "y1": 160.0,
+     "foot_u": 273.0,
+     "foot_v": 160.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "two walkers in the centre aisle; one far walker at the top of the aisle; one operator behind the top-left press, only head and shoulders visible (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-03",
+   "clip_id": "0_tr47",
+   "t_pts": 1.0480720766129032,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 1511.0,
+     "y0": 606.0,
+     "x1": 1592.0,
+     "y1": 832.0,
+     "foot_u": 1537.0,
+     "foot_v": 826.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 342.0,
+     "y0": 417.0,
+     "x1": 384.0,
+     "y1": 460.0,
+     "foot_u": 363.0,
+     "foot_v": 460.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 479.0,
+     "y0": 464.0,
+     "x1": 540.0,
+     "y1": 532.0,
+     "foot_u": 510.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 678.0,
+     "y0": 905.0,
+     "x1": 805.0,
+     "y1": 1080.0,
+     "foot_u": 741.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "vehicle (forklift with headlight glare) in the aisle near (1300, 550): camera 9, not boxed (no vehicle class on camera 9); its driver is not visible through the glare, so no person box; two operators behind the P9a crown with feet not visible; person at the bottom border seen from behind, cut by the border (feet not visible); dark chair-like shape at the left border near (40, 800) not boxed"
+  },
+  {
+   "sample_id": "dev-f-c9-04",
+   "clip_id": "4_tr48",
+   "t_pts": 4.98603909054647,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 700.0,
+     "y0": 713.0,
+     "x1": 838.0,
+     "y1": 940.0,
+     "foot_u": 769.0,
+     "foot_v": 940.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1098.0,
+     "y0": 86.0,
+     "x1": 1162.0,
+     "y1": 266.0,
+     "foot_u": 1130.0,
+     "foot_v": 258.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1435.0,
+     "y0": 32.0,
+     "x1": 1487.0,
+     "y1": 174.0,
+     "foot_u": 1460.0,
+     "foot_v": 168.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "seated operator at the P9a front (legs and feet hidden in shadow, feet not visible); two walkers in the aisles"
+  },
+  {
+   "sample_id": "dev-f-c9-05",
+   "clip_id": "4_tr11",
+   "t_pts": 3.0111325742171613,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 716.0,
+     "y0": 214.0,
+     "x1": 788.0,
+     "y1": 450.0,
+     "foot_u": 752.0,
+     "foot_v": 446.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 820.0,
+     "y0": 200.0,
+     "x1": 893.0,
+     "y1": 466.0,
+     "foot_u": 858.0,
+     "foot_v": 460.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1643.0,
+     "y0": 489.0,
+     "x1": 1792.0,
+     "y1": 886.0,
+     "foot_u": 1674.0,
+     "foot_v": 840.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "two people standing by the coil feeder (feet partly hidden by floor clutter); one walker on the right walkway; dark shape near (1455, 30) at the far end of the right walkway may be a person, not boxed (uncertain)"
+  },
+  {
+   "sample_id": "dev-f-c9-06",
+   "clip_id": "0_te11",
+   "t_pts": 5.040007560483871,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 343.0,
+     "y0": 419.0,
+     "x1": 383.0,
+     "y1": 500.0,
+     "foot_u": 363.0,
+     "foot_v": 500.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 470.0,
+     "y0": 461.0,
+     "x1": 526.0,
+     "y1": 532.0,
+     "foot_u": 498.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1158.0,
+     "y0": 437.0,
+     "x1": 1212.0,
+     "y1": 590.0,
+     "foot_u": 1185.0,
+     "foot_v": 588.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 712.0,
+     "y0": 912.0,
+     "x1": 822.0,
+     "y1": 1080.0,
+     "foot_u": 767.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "vehicle (forklift) near (1390, 600) on camera 9: not boxed (no vehicle class on camera 9); its cab shows no visible driver; two operators behind the P9a crown (feet not visible); walker by the aisle with motion-blurred legs; person at the bottom border seen from behind (feet not visible); red shape near (60, 420) by the left presses is unclear (object or person), not boxed"
+  },
+  {
+   "sample_id": "dev-f-c9-07",
+   "clip_id": "4_tr26",
+   "t_pts": 2.9802658074909383,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 461.0,
+     "y0": 395.0,
+     "x1": 527.0,
+     "y1": 532.0,
+     "foot_u": 494.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 506.0,
+     "y0": 465.0,
+     "x1": 580.0,
+     "y1": 528.0,
+     "foot_u": 543.0,
+     "foot_v": 528.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1460.0,
+     "y0": 349.0,
+     "x1": 1493.0,
+     "y1": 431.0,
+     "foot_u": 1468.0,
+     "foot_v": 428.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1496.0,
+     "y0": 321.0,
+     "x1": 1522.0,
+     "y1": 402.0,
+     "foot_u": 1510.0,
+     "foot_v": 398.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 808.0,
+     "y0": 925.0,
+     "x1": 962.0,
+     "y1": 1080.0,
+     "foot_u": 885.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "two operators behind the P9a crown (feet not visible); two people in the right corridor (one bending with a mop); person at the bottom border looking at a phone, cut by the border (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-08",
+   "clip_id": "2_tr22",
+   "t_pts": 3.0,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 1058.0,
+     "y0": 502.0,
+     "x1": 1222.0,
+     "y1": 875.0,
+     "foot_u": 1145.0,
+     "foot_v": 866.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1197.0,
+     "y0": 560.0,
+     "x1": 1350.0,
+     "y1": 962.0,
+     "foot_u": 1250.0,
+     "foot_v": 948.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1298.0,
+     "y0": 0.0,
+     "x1": 1331.0,
+     "y1": 72.0,
+     "foot_u": 1312.0,
+     "foot_v": 68.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 302.0,
+     "y0": 97.0,
+     "x1": 377.0,
+     "y1": 218.0,
+     "foot_u": 340.0,
+     "foot_v": 218.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "two walkers in the centre aisle; legs of a far walker cut by the top border; operator behind the top-left press (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-09",
+   "clip_id": "0_tr47",
+   "t_pts": 3.0238785282258065,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 343.0,
+     "y0": 419.0,
+     "x1": 383.0,
+     "y1": 496.0,
+     "foot_u": 363.0,
+     "foot_v": 496.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 470.0,
+     "y0": 464.0,
+     "x1": 528.0,
+     "y1": 532.0,
+     "foot_u": 499.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1477.0,
+     "y0": 545.0,
+     "x1": 1559.0,
+     "y1": 746.0,
+     "foot_u": 1500.0,
+     "foot_v": 736.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 640.0,
+     "y0": 920.0,
+     "x1": 762.0,
+     "y1": 1080.0,
+     "foot_u": 701.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "vehicle (forklift, headlight glare) near (1390, 560) on camera 9: not boxed (no vehicle class on camera 9), driver not visible through the glare; two operators behind the P9a crown (feet not visible); person at the bottom border seen from behind in shadow (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-10",
+   "clip_id": "4_tr47",
+   "t_pts": 9.014758675708018,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 702.0,
+     "y0": 713.0,
+     "x1": 838.0,
+     "y1": 940.0,
+     "foot_u": 769.0,
+     "foot_v": 940.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1346.0,
+     "y0": 0.0,
+     "x1": 1385.0,
+     "y1": 65.0,
+     "foot_u": 1362.0,
+     "foot_v": 62.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "seated operator at the P9a front (legs and feet hidden in shadow); far walker at the top of the aisle, cut by the top border"
+  },
+  {
+   "sample_id": "dev-f-c9-11",
+   "clip_id": "0_tr130",
+   "t_pts": 7.0065575437169585,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 660.0,
+     "y0": 682.0,
+     "x1": 830.0,
+     "y1": 1000.0,
+     "foot_u": 735.0,
+     "foot_v": 995.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1290.0,
+     "y0": 277.0,
+     "x1": 1396.0,
+     "y1": 580.0,
+     "foot_u": 1325.0,
+     "foot_v": 550.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 181.0,
+     "y0": 121.0,
+     "x1": 240.0,
+     "y1": 198.0,
+     "foot_u": 210.0,
+     "foot_v": 198.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1461.0,
+     "y0": 0.0,
+     "x1": 1501.0,
+     "y1": 98.0,
+     "foot_u": 1478.0,
+     "foot_v": 95.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "seated operator at the P9a front facing the camera (chair back excluded); walker in the centre aisle; operator behind the top-left press (feet not visible); walker at the top of the right walkway cut by the top border"
+  },
+  {
+   "sample_id": "dev-f-c9-12",
+   "clip_id": "0_te11",
+   "t_pts": 1.0480720766129032,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 343.0,
+     "y0": 419.0,
+     "x1": 383.0,
+     "y1": 496.0,
+     "foot_u": 363.0,
+     "foot_v": 496.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 479.0,
+     "y0": 461.0,
+     "x1": 528.0,
+     "y1": 532.0,
+     "foot_u": 503.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1458.0,
+     "y0": 423.0,
+     "x1": 1510.0,
+     "y1": 478.0,
+     "foot_u": 1484.0,
+     "foot_v": 478.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 700.0,
+     "y0": 863.0,
+     "x1": 800.0,
+     "y1": 1080.0,
+     "foot_u": 750.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "vehicle (forklift) near (1400, 600) on camera 9: not boxed (no vehicle class on camera 9); a driver may be inside the cab but is not distinguishable, not boxed (uncertain); walker behind the forklift roof (feet not visible); two operators behind the P9a crown (feet not visible); person at the bottom border (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-13",
+   "clip_id": "0_tr14",
+   "t_pts": 7.007652033830044,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 421.0,
+     "y0": 389.0,
+     "x1": 497.0,
+     "y1": 527.0,
+     "foot_u": 455.0,
+     "foot_v": 527.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1450.0,
+     "y0": 292.0,
+     "x1": 1474.0,
+     "y1": 357.0,
+     "foot_u": 1461.0,
+     "foot_v": 354.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1517.0,
+     "y0": 370.0,
+     "x1": 1546.0,
+     "y1": 461.0,
+     "foot_u": 1530.0,
+     "foot_v": 457.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "operator standing behind the P9a crown, feet hidden by the press base; two walkers in the right corridor"
+  },
+  {
+   "sample_id": "dev-f-c9-14",
+   "clip_id": "1_tr90",
+   "t_pts": 1.0480720766129032,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 1511.0,
+     "y0": 606.0,
+     "x1": 1592.0,
+     "y1": 832.0,
+     "foot_u": 1537.0,
+     "foot_v": 826.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 342.0,
+     "y0": 417.0,
+     "x1": 384.0,
+     "y1": 460.0,
+     "foot_u": 363.0,
+     "foot_v": 460.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 479.0,
+     "y0": 464.0,
+     "x1": 540.0,
+     "y1": 532.0,
+     "foot_u": 510.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 678.0,
+     "y0": 905.0,
+     "x1": 805.0,
+     "y1": 1080.0,
+     "foot_u": 741.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "pixel-identical to dev-f-c9-03 (clip 1_tr90 is a byte-identical copy of 0_tr47, same PTS; decoded frames differ by 0): same labels. Vehicle (forklift with headlight glare) near (1300, 550): camera 9, not boxed; driver not visible through the glare; two operators behind the P9a crown (feet not visible); person at the bottom border seen from behind, cut by the border (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-15",
+   "clip_id": "4_tr47",
+   "t_pts": 4.98603909054647,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 702.0,
+     "y0": 712.0,
+     "x1": 838.0,
+     "y1": 940.0,
+     "foot_u": 769.0,
+     "foot_v": 940.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1369.0,
+     "y0": 0.0,
+     "x1": 1395.0,
+     "y1": 28.0,
+     "foot_u": 1382.0,
+     "foot_v": 26.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "seated operator at the P9a front (legs and feet hidden in shadow); only the lower legs of a far walker visible at the top border"
+  },
+  {
+   "sample_id": "dev-f-c9-16",
+   "clip_id": "2_te11",
+   "t_pts": 7.033373301358913,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 730.0,
+     "y0": 220.0,
+     "x1": 815.0,
+     "y1": 458.0,
+     "foot_u": 770.0,
+     "foot_v": 452.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 822.0,
+     "y0": 206.0,
+     "x1": 888.0,
+     "y1": 496.0,
+     "foot_u": 855.0,
+     "foot_v": 490.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1426.0,
+     "y0": 45.0,
+     "x1": 1475.0,
+     "y1": 175.0,
+     "foot_u": 1445.0,
+     "foot_v": 172.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "two people standing by the coil feeder; one walker on the right walkway"
+  },
+  {
+   "sample_id": "dev-f-c9-17",
+   "clip_id": "1_tr89",
+   "t_pts": 3.0238785282258065,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 343.0,
+     "y0": 419.0,
+     "x1": 383.0,
+     "y1": 496.0,
+     "foot_u": 363.0,
+     "foot_v": 496.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 470.0,
+     "y0": 462.0,
+     "x1": 528.0,
+     "y1": 532.0,
+     "foot_u": 499.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 702.0,
+     "y0": 913.0,
+     "x1": 816.0,
+     "y1": 1080.0,
+     "foot_u": 759.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "vehicle (forklift) near (1390, 580) on camera 9: not boxed (no vehicle class on camera 9); no driver distinguishable in the cab; two operators behind the P9a crown (feet not visible); person at the bottom border (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-18",
+   "clip_id": "4_tr37",
+   "t_pts": 7.007652033830044,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 1183.0,
+     "y0": 481.0,
+     "x1": 1222.0,
+     "y1": 640.0,
+     "foot_u": 1202.0,
+     "foot_v": 640.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "one person behind the railing by the aisle, low contrast, legs hazy (feet not visible); nobody visible behind the P9a crown in this frame"
+  },
+  {
+   "sample_id": "dev-f-c9-19",
+   "clip_id": "1_tr90",
+   "t_pts": 5.040007560483871,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 343.0,
+     "y0": 419.0,
+     "x1": 383.0,
+     "y1": 498.0,
+     "foot_u": 363.0,
+     "foot_v": 498.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 470.0,
+     "y0": 465.0,
+     "x1": 531.0,
+     "y1": 532.0,
+     "foot_u": 500.0,
+     "foot_v": 532.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1468.0,
+     "y0": 535.0,
+     "x1": 1534.0,
+     "y1": 728.0,
+     "foot_u": 1500.0,
+     "foot_v": 722.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 620.0,
+     "y0": 918.0,
+     "x1": 750.0,
+     "y1": 1080.0,
+     "foot_u": 685.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "vehicle (forklift) near (1350, 620) on camera 9: not boxed (no vehicle class on camera 9); no driver distinguishable in the cab; person standing beside the forklift; two operators behind the P9a crown (feet not visible); person at the bottom border in shadow (feet not visible)"
+  },
+  {
+   "sample_id": "dev-f-c9-20",
+   "clip_id": "1_tr48",
+   "t_pts": 9.027399349328995,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 210.0,
+     "y0": 940.0,
+     "x1": 345.0,
+     "y1": 1080.0,
+     "foot_u": 277.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    }
+   ],
+   "note": "one person bending over the bin at the bottom border, motion-blurred, cut by the border (feet not visible); no other person"
+  }
+ ],
+ "stroke_windows": [
+  {
+   "sample_id": "dev-sw-P9a-01",
+   "clip_id": "2_tr22",
+   "press": "P9a",
+   "t0": 0.0,
+   "t1": 3.96,
+   "strokes": [
+    1.12,
+    3.04
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566 (assumed rigidly coupled to the slide). strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sw-P9a-02",
+   "clip_id": "1_tr90",
+   "press": "P9a",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [],
+   "note": "P9a in c9_f1: the slide/ram is not identifiable in the ROI (lower guard area at the bottom border, operators in front); a periodic bright part (~1.85 s) is seen but its relation to BDC is ambiguous, so no stroke is clicked; running not confirmed; excluded from the scored stroke set (ambiguous).  Clip 1_tr90 is a byte-identical copy of 0_tr47 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9a-03",
+   "clip_id": "0_te10",
+   "press": "P9a",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [],
+   "note": "P9a in c9_f1: the slide/ram is not identifiable in the ROI (lower guard area at the bottom border, operators in front); a periodic bright part (~1.85 s) is seen but its relation to BDC is ambiguous, so no stroke is clicked; running not confirmed; excluded from the scored stroke set (ambiguous).  Clip 0_te10 is a byte-identical copy of 1_tr88 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9a-04",
+   "clip_id": "1_tr45",
+   "press": "P9a",
+   "t0": 0.6500101667344449,
+   "t1": 10.613409922732819,
+   "strokes": [
+    2.4393554290361936,
+    4.472702318015453,
+    6.3840483936559576,
+    8.376728344855632
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566 (assumed rigidly coupled to the slide). possible BDC near 10.3 s at the window end, rise after it not seen: edge, not clicked. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sw-P9a-05",
+   "clip_id": "2_tr11",
+   "press": "P9a",
+   "t0": 0.03896882494004796,
+   "t1": 3.9958033573141485,
+   "strokes": [
+    0.8383293365307753,
+    2.9166666666666665
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566 (assumed rigidly coupled to the slide). strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sw-P9a-06",
+   "clip_id": "0_te12",
+   "press": "P9a",
+   "t0": 0.040022150624244864,
+   "t1": 7.973973016512284,
+   "strokes": [],
+   "note": "P9a in c9_f1: the slide/ram is not identifiable in the ROI (lower guard area at the bottom border, operators in front); a periodic bright part (~1.85 s) is seen but its relation to BDC is ambiguous, so no stroke is clicked; running not confirmed; excluded from the scored stroke set (ambiguous)."
+  },
+  {
+   "sample_id": "dev-sw-P9a-07",
+   "clip_id": "0_tr47",
+   "press": "P9a",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [],
+   "note": "P9a in c9_f1: the slide/ram is not identifiable in the ROI (lower guard area at the bottom border, operators in front); a periodic bright part (~1.85 s) is seen but its relation to BDC is ambiguous, so no stroke is clicked; running not confirmed; excluded from the scored stroke set (ambiguous).  Clip 0_tr47 is a byte-identical copy of 1_tr90 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9a-08",
+   "clip_id": "1_tr88",
+   "press": "P9a",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [],
+   "note": "P9a in c9_f1: the slide/ram is not identifiable in the ROI (lower guard area at the bottom border, operators in front); a periodic bright part (~1.85 s) is seen but its relation to BDC is ambiguous, so no stroke is clicked; running not confirmed; excluded from the scored stroke set (ambiguous).  Clip 1_tr88 is a byte-identical copy of 0_te10 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9a-09",
+   "clip_id": "1_tr48",
+   "press": "P9a",
+   "t0": 0.3653416022773485,
+   "t1": 10.328741358275721,
+   "strokes": [
+    0.6500101667344449,
+    2.4800223668157786,
+    4.4320353802358685,
+    6.3840483936559576,
+    8.336061407076047
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566 (assumed rigidly coupled to the slide). low phase near 10.1 s at the window end: edge, not clicked. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sw-P9a-10",
+   "clip_id": "4_tr11",
+   "press": "P9a",
+   "t0": 0.203334688897926,
+   "t1": 10.17115697437983,
+   "strokes": [
+    1.4911549410329403,
+    3.411142740951606,
+    5.451148840992273,
+    7.411142740951607,
+    9.331130540870273
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566 (assumed rigidly coupled to the slide). strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sw-P9a-r1",
+   "clip_id": "0_tr9",
+   "press": "P9a",
+   "t0": 1.5706806282722514,
+   "t1": 11.558598469593234,
+   "strokes": [],
+   "note": "P9a in c9_f1: the slide/ram is not identifiable in the ROI (lower guard area at the bottom border, operators in front); a periodic bright part (~1.85 s) is seen but its relation to BDC is ambiguous, so no stroke is clicked; running not confirmed; excluded from the scored stroke set (ambiguous)."
+  },
+  {
+   "sample_id": "dev-sw-P9a-r2",
+   "clip_id": "0_te11",
+   "press": "P9a",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [],
+   "note": "P9a in c9_f1: the slide/ram is not identifiable in the ROI (lower guard area at the bottom border, operators in front); a periodic bright part (~1.85 s) is seen but its relation to BDC is ambiguous, so no stroke is clicked; running not confirmed; excluded from the scored stroke set (ambiguous).  Clip 0_te11 is a byte-identical copy of 1_tr89 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9a-r3",
+   "clip_id": "6_te6",
+   "press": "P9a",
+   "t0": 0.0,
+   "t1": 3.5714285714285716,
+   "strokes": [
+    0.48154093097913325,
+    2.3274478330658104
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566 (assumed rigidly coupled to the slide). strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sw-P9b-01",
+   "clip_id": "0_tr92",
+   "press": "P9b",
+   "t0": 0.040022150624244864,
+   "t1": 7.973973016512284,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sw-P9b-02",
+   "clip_id": "0_te11",
+   "press": "P9b",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [
+    0.8464591733870968,
+    2.6206527217741935,
+    4.273878528225806,
+    5.967426915322581
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS. Clip 0_te11 is a byte-identical copy of 1_tr89 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9b-03",
+   "clip_id": "0_tr47",
+   "press": "P9b",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [
+    0.40291078629032256,
+    2.136781754032258,
+    3.8303301411290325,
+    5.443233366935484
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS. Clip 0_tr47 is a byte-identical copy of 1_tr90 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9b-04",
+   "clip_id": "0_tr98",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 7.974224728151429,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sw-P9b-05",
+   "clip_id": "0_te10",
+   "press": "P9b",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [
+    1.1287172379032258,
+    2.822265625,
+    4.515814012096774,
+    6.209362399193548
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS. Clip 0_te10 is a byte-identical copy of 1_tr88 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9b-06",
+   "clip_id": "1_tr90",
+   "press": "P9b",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [
+    0.40291078629032256,
+    2.136781754032258,
+    3.8303301411290325,
+    5.443233366935484
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS. Clip 1_tr90 is a byte-identical copy of 0_tr47 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9b-07",
+   "clip_id": "0_tr159",
+   "press": "P9b",
+   "t0": 1.8525976641159887,
+   "t1": 11.840515505436972,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sw-P9b-08",
+   "clip_id": "1_tr88",
+   "press": "P9b",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [
+    1.1287172379032258,
+    2.822265625,
+    4.515814012096774,
+    6.209362399193548
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS. Clip 1_tr88 is a byte-identical copy of 0_te10 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9b-09",
+   "clip_id": "0_tr95",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 7.974224728151429,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sw-P9b-10",
+   "clip_id": "1_tr89",
+   "press": "P9b",
+   "t0": 0.04000756048387097,
+   "t1": 6.975491431451613,
+   "strokes": [
+    0.8464591733870968,
+    2.6206527217741935,
+    4.273878528225806,
+    5.967426915322581
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS. Clip 1_tr89 is a byte-identical copy of 0_te11 (inventory dup_of)."
+  },
+  {
+   "sample_id": "dev-sw-P9b-r1",
+   "clip_id": "0_tr11",
+   "press": "P9b",
+   "t0": 1.0873942811115587,
+   "t1": 11.07531212243254,
+   "strokes": [
+    1.5304067660088603,
+    3.2219089810712846,
+    4.953685058397101,
+    6.604913411196134,
+    8.296415626258558,
+    10.028191703584374
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sw-P9b-r2",
+   "clip_id": "0_te12",
+   "press": "P9b",
+   "t0": 0.040022150624244864,
+   "t1": 7.973973016512284,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sw-P9b-r3",
+   "clip_id": "0_te2",
+   "press": "P9b",
+   "t0": 1.0468687072090213,
+   "t1": 11.034786548530004,
+   "strokes": [
+    1.8523459524768426,
+    3.503574305275876,
+    5.195076520338301,
+    6.886578735400725,
+    8.57808095046315,
+    10.269583165525574
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. strokes marked by the labeller on upscaled space-time strips (kymographs) of the ROI pixels, one column per decoded frame with PTS ticks, checked against frame crops; stroke = frame where the band reaches its lowest image position, snapped to the nearest frame PTS."
+  }
+ ]
+}
