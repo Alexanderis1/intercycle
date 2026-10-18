@@ -49,16 +49,11 @@ KNOWN = {
         "S3b: Masks.from_scenario (l.196) builds ext from scn.data_hall; use ext = scn.site_extent",
 }
 # (file, body-shop reach) -> owner and patch: the SiteGraph / build_rects rule applied to the SHARED modules.
-KNOWN_REACH = {
-    ("ros2/intercycle_nav/intercycle_nav/timing.py", "SiteGraph"):
-        "S1b: TimingCore.from_scenario (l.51-52) builds the body-shop SiteGraph(scn) (CROSS_X nodes); twin mode: "
-        "from_scenario -> TimingCore(compiled_zone.graph)._build(); type TimingCore.graph (l.39) with a SiteGraph-"
-        "interface Protocol (scn, pos, adj, targets, inspect_pose, mission) and import only Target (l.22)",
-    ("ros2/intercycle_nav/intercycle_nav/timing_planner.py", "TimingCore.from_scenario"):
-        "S1b: TimingPlanner (l.55) builds its core with TimingCore.from_scenario(scn); twin mode: build it as "
-        "TimingCore(<the zone's compiled site graph>, ...)._build(), the graph handed over as data via run_cfg "
-        "(intercycle_nav never imports twin, tests/test_no_truth_import.py TWIN_FREE)",
-}
+# Fixed by S1b (lane S1b-eval): timing.py types TimingCore.graph with the SiteGraphLike Protocol and imports only Target;
+# TimingCore.from_scenario takes its graph from intercycle.robot.twin_sitegraph.site_graph(scn, scenario_path), which
+# builds the TwinSiteGraph from the compiled zone's inputs in twin mode and refuses the body-shop graph for a
+# twin-compiled scenario (runtime test: tests/test_twin_sitegraph.py); timing_planner passes its scenario path.
+KNOWN_REACH: dict[tuple[str, str], str] = {}
 
 
 def code_tokens(tree: ast.Module) -> list[str]:
@@ -209,9 +204,10 @@ def test_known_shared_reach_is_fixed(key):
     assert key not in _shared_reach()
 
 
-def test_from_scenario_is_found_as_a_builder_callable():
-    # the one-level reach is computed from the code, not listed by hand
-    assert "TimingCore.from_scenario" in _shared_via()
+def test_no_shared_module_builds_the_body_shop_graph_itself():
+    # the one-level reach is computed from the code, not listed by hand (the scanner itself is self-tested below):
+    # since S1b's fix no SHARED function builds SiteGraph / build_rects, the graph comes from twin_sitegraph.site_graph
+    assert _shared_via() == set()
 
 
 def test_shared_list_matches_the_plan_names():
