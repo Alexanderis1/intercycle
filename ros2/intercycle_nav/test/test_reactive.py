@@ -149,21 +149,153 @@ def test_km_conditional_quantile_censoring_and_cap():
 def test_persisted_within_the_world_and_refused_elsewhere(tmp_path):
     cfg = R.ReactiveConfig()
     p = str(tmp_path / "w3" / "reactive_state.json")
-    assert R.load_state(p) is None
-    first = R.OwnCameraEstimator.from_state(R.load_state(p), cfg, ["P1"], "w3")
+    assert R.load_state_file("") == (None, None)                            # empty path = the world's first mission
+    first = R.OwnCameraEstimator.from_state(None, cfg, ["P1"], "w3")
     assert first.tracks["P1"].still_runs == [] and first.missions == []    # no camera history before the first mission
     feed(first, "P1", press_stream(0.0, 200.0, 8.0, 30.0))
     first.finish_mission(200.0, "w3-d9-z9")
     R.save_state(p, first)
-    second = R.OwnCameraEstimator.from_state(R.load_state(p), cfg, ["P1"], "w3")
+    st, sha = R.load_state_file(p)
+    second = R.OwnCameraEstimator.from_state(st, cfg, ["P1"], "w3", state_sha256=sha)
     assert second.tracks["P1"].still_runs == first.tracks["P1"].still_runs and second.missions == ["w3-d9-z9"]
     assert second.tracks["P1"].cur == R.UNKNOWN                              # a new mission starts unseen
+    assert second.parent_sha256 == sha and R.snapshot_json(0.0, second)["reactive"]["parent_sha256"] == sha
     with pytest.raises(ValueError):
-        R.OwnCameraEstimator.from_state(R.load_state(p), cfg, ["P1"], "w4")
+        R.OwnCameraEstimator.from_state(st, cfg, ["P1"], "w4", state_sha256=sha)
     with pytest.raises(ValueError):
-        R.OwnCameraEstimator.from_state(R.load_state(p), replace(cfg, quantile=0.2), ["P1"], "w3")
+        R.OwnCameraEstimator.from_state(st, replace(cfg, quantile=0.2), ["P1"], "w3", state_sha256=sha)
+    with pytest.raises(ValueError):
+        R.OwnCameraEstimator.from_state(st, cfg, ["P1"], "w3")              # a loaded state needs its sha256
     with pytest.raises(ValueError):
         R.OwnCameraEstimator(cfg, ["P1"], world_id="")
+    with pytest.raises(ValueError):
+        first.finish_mission(300.0, "")                                      # the chain check needs the tag
+
+
+def test_missing_named_state_is_an_error_not_a_first_mission(tmp_path):
+    """Audit fix 3: a non-empty state path whose file is missing must not silently start with no history."""
+    with pytest.raises(FileNotFoundError):
+        R.load_state_file(str(tmp_path / "lost" / "reactive_state.json"))
+    with pytest.raises(FileNotFoundError):
+        R.load_state(str(tmp_path / "lost.json"))
+
+
+def test_mission_chain_is_verified(tmp_path):
+    cfg = R.ReactiveConfig()
+    p1, p2 = str(tmp_path / "m1.json"), str(tmp_path / "m2.json")
+    e1 = R.OwnCameraEstimator.from_state(None, cfg, ["P1"], "w5")
+    feed(e1, "P1", press_stream(0.0, 100.0, 8.0, 30.0))
+    e1.finish_mission(100.0, "w5-d9-z9")
+    R.save_state(p1, e1)
+    assert R.verify_chain(p1, "w5-d9-z9", None, "w5")["missions"] == 1
+    st, sha = R.load_state_file(p1)
+    e2 = R.OwnCameraEstimator.from_state(st, cfg, ["P1"], "w5", state_sha256=sha)
+    feed(e2, "P1", press_stream(0.0, 100.0, 8.0, 30.0))
+    e2.finish_mission(100.0, "w5-d9-z14")
+    R.save_state(p2, e2)
+    assert R.verify_chain(p2, "w5-d9-z14", p1, "w5")["missions"] == 2
+    with pytest.raises(ValueError):
+        R.verify_chain(p2, "w5-d9-z14", None, "w5")                          # it was not the world's first mission
+    with pytest.raises(ValueError):
+        R.verify_chain(p2, "w5-d10-z9", p1, "w5")                            # wrong mission tag
+    with pytest.raises(ValueError):
+        R.verify_chain(p1, "w5-d9-z9", None, "w6")                           # another world
+    # a mission that started from no state although the world had one (lost file) breaks the chain
+    e3 = R.OwnCameraEstimator.from_state(None, cfg, ["P1"], "w5")
+    e3.finish_mission(10.0, "w5-d10-z9")
+    p3 = str(tmp_path / "m3.json")
+    R.save_state(p3, e3)
+    with pytest.raises(ValueError):
+        R.verify_chain(p3, "w5-d10-z9", p2, "w5")
+    with open(p2 + R.FAILED_SUFFIX, "w") as f:                              # the bridge's save-failure marker
+        f.write("{}")
+    with pytest.raises(ValueError):
+        R.verify_chain(p2, "w5-d9-z14", p1, "w5")
+    with pytest.raises(FileNotFoundError):
+        R.verify_chain(str(tmp_path / "never_saved.json"), "w5-d10-z14", p2, "w5")
+
+
+# ------------------------------------------------------------------------------------------------ robot presence
+def test_robot_held_stretch_is_censored_at_entry_and_not_learned():
+    """Audit fix 2: the robot enters while the machine is still; the plant holds it until the robot leaves (the camera
+    sees one long STILL run). The stored run is right-censored at the entry time, never a natural event."""
+    est = R.OwnCameraEstimator(R.ReactiveConfig(debounce_s=0.0), ["P1", "P2"], world_id="w0")
+    est.tracks["P1"].still_runs = [(60.0, False)] * 5                     # past natural stops of 60 s
+    t = 0.0
+    while t < 5.0 - 1e-9:                          # moving 0-5 s
+        est.presence(t, False)
+        est.observe(t, "P1", True, True)
+        t = round(t + DT, 3)
+    while t < 20.0 - 1e-9:                         # still from 5 s, robot outside until 20 s
+        est.presence(t, False)
+        est.observe(t, "P1", True, False)
+        t = round(t + DT, 3)
+    t_out = round(t - DT, 3)                       # last tick known outside
+    w_before = est.windows(t)["P1"]
+    assert w_before == [(pytest.approx(5.0), pytest.approx(5.0 + 60.0 - 2.0))]
+    while t < 80.0 - 1e-9:                         # robot inside 20-80 s: the machine is held (still)
+        est.presence(t, True)
+        est.observe(t, "P1", True, False)
+        if abs(t - 40.0) < 1e-6:
+            assert est.windows(t)["P1"] == w_before                        # the natural prediction continues inside
+        t = round(t + DT, 3)
+    assert est.tracks["P1"].tainted and est.tracks["P2"].tainted          # every machine (line holds / trips)
+    while t < 90.0 - 1e-9:                         # robot out; the held machine restarts at once
+        est.presence(t, False)
+        est.observe(t, "P1", True, True)
+        t = round(t + DT, 3)
+    runs = est.tracks["P1"].still_runs[5:]
+    assert runs == [(pytest.approx(t_out - 5.0, abs=1e-6), True)]          # censored at the entry, not 75 s natural
+    assert est.tracks["P1"].n_robot_censored == 1 and not est.tracks["P1"].tainted
+    assert est.n_entries == 1
+    # a still run that STARTS while the robot is inside (a trip, or a hold) is never recorded and gives no window
+    est.presence(t, True)
+    for _ in range(100):
+        est.observe(t, "P1", True, False)
+        t = round(t + DT, 3)
+    assert est.windows(t)["P1"] == []
+    est.presence(t, False)
+    for _ in range(50):                            # still after the robot left: still not natural until it moves
+        est.observe(t, "P1", True, False)
+        t = round(t + DT, 3)
+    assert est.windows(t)["P1"] == []
+    for _ in range(10):
+        est.observe(t, "P1", True, True)
+        t = round(t + DT, 3)
+    assert len(est.tracks["P1"].still_runs) == 6 and est.tracks["P1"].n_robot_dropped == 1
+    t0 = t
+    for _ in range(100):                           # a natural run again: recorded as an event when it ends
+        est.observe(t, "P1", True, False)
+        t = round(t + DT, 3)
+    for _ in range(5):
+        est.observe(t, "P1", True, True)
+        t = round(t + DT, 3)
+    assert est.tracks["P1"].still_runs[-1] == (pytest.approx(100 * DT, abs=1e-6), False)
+    assert est.tracks["P1"].still_runs[-1][0] == pytest.approx(round(t0 + 100 * DT, 3) - t0, abs=1e-6)
+
+
+def test_long_held_runs_do_not_grow_the_reactive_windows():
+    """The bias the audit found: without the presence input, every entry stored a long 'natural' still run, so the KM
+    window lengths grew with every entry. With it, the history after many held entries equals the history without."""
+    def run(with_presence: bool):
+        est = R.OwnCameraEstimator(R.ReactiveConfig(debounce_s=0.0, min_at_risk=1), ["P1"], world_id="w0")
+        t = 0.0
+        for _ in range(6):                         # 6 cycles: 8 s moving, 20 s still, robot inside for 60 s holds it
+            for _ in range(40):
+                est.presence(t, False)
+                est.observe(t, "P1", True, True)
+                t = round(t + DT, 3)
+            for _ in range(100):
+                est.presence(t, False)
+                est.observe(t, "P1", True, False)
+                t = round(t + DT, 3)
+            for _ in range(300):
+                est.presence(t, with_presence)
+                est.observe(t, "P1", True, False)
+                t = round(t + DT, 3)
+        return [d for d, c in est.tracks["P1"].still_runs if not c]
+    assert run(True) == []                                                  # no held stretch is an event
+    assert max(run(False)) > 70.0                                           # what happened before the fix
 
 
 # ------------------------------------------------------------------------------------------------ planner + masks
