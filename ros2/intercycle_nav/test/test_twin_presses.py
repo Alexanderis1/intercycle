@@ -5,8 +5,11 @@
 * mapping.MapView.predicted_bins(on_line=False): a stopped / unknown phase never gets the STOP bin from a line state;
 * masks.machine_bins: the twin presses (Site.own_stop) get their STOP-bin envelope only from their OWN confident STOPPED
   while it stays inside its TTL over the whole keep-out horizon; UNKNOWN / missing / low confidence / a stop expiring
-  inside the horizon -> the union of all bins (fail closed); body shop unchanged (its ANDON vote: see
-  test_body_shop_andon_vote_on_its_own_site).
+  inside the horizon -> the union of all bins (fail closed). Body shop: two DELIBERATE, disclosed changes of the S6 #4
+  patch, pinned on its real site: its ANDON vote (test_body_shop_andon_vote_on_its_own_site), and its off-line cells
+  with a stopped / unknown phase during ANDON (/ BREAK) get the union of all bins where they got the STOP bin
+  (test_body_shop_off_line_cells_during_andon: no keep-out change at the default 6 s horizon, which already read the
+  union past andon_valid_s = 3 s; a change only for horizon_s < andon_valid_s).
 
     .venv/Scripts/python.exe -m pytest -q ros2/intercycle_nav/test/test_twin_presses.py
 """
@@ -189,8 +192,37 @@ def test_expired_stop_falls_back_to_all_bins():
     assert K.machine_bins(_View(1), 0, late, M.RUNNING, K.MaskParams(), False, True) == M.ALL_BINS
 
 
+def test_body_shop_off_line_cells_during_andon():
+    """Audit S6-optB fix 2 #3 (a DELIBERATE effect of the lead's S6 #4 patch, disclosed): on the body shop's real site in
+    ANDON, an off-line cell with a stopped / unknown phase gets the union of all bins at every step (it got the STOP bin
+    while dt < andon_valid_s before); an on-line station keeps the old rule. Over the default 6 s horizon the old rule
+    already read the union from dt = andon_valid_s = 3 s, so the keep-out is the same there; with horizon_s < 3 s the
+    off-line cell now reads the union where it read the STOP bin (safe direction)."""
+    site = K.Site.from_scenario()
+    line = [i for i, m in enumerate(site.ids) if site.on_line[m]]
+    off = [i for i, m in enumerate(site.ids) if not site.on_line[m]]
+    nows = [(State.STOPPED, 8) if (i in line[:4] or i in off) else (State.ACTIVE, 8) for i in range(len(site.ids))]
+    snap = _state(site, nows).snapshot(T0 + 0.1)
+    assert snap.prod == M.ANDON
+    view = _View(len(site.ids))
+    for p in (K.MaskParams(), K.MaskParams(horizon_s=2.5)):
+        for i in off:
+            mv, mid = snap.machines[i], site.ids[i]
+            assert mv.state == "STOPPED" and mv.phase is None and not site.own_stop[mid]
+            assert K.machine_bins(view, i, mv, snap.prod, p, site.on_line[mid], site.own_stop[mid]) == M.ALL_BINS
+            old = K.machine_bins(view, i, mv, snap.prod, p)                  # the pre-patch rule (on_line default True)
+            assert old == (M.ALL_BINS if p.horizon_s >= p.andon_valid_s else (M.STOP_BIN,))
+        mv = snap.machines[line[0]]
+        assert K.machine_bins(view, line[0], mv, snap.prod, p, True, False) == K.machine_bins(view, line[0], mv, snap.prod, p)
+    for dt in (0.0, 1.0, 2.5):                                               # per step: BREAK / ANDON, off line
+        assert view.predicted_bins(off[0], None, M.ANDON, dt, on_line=False) == M.ALL_BINS
+        assert view.predicted_bins(off[0], None, M.BREAK, dt, on_line=False) == M.ALL_BINS
+        assert view.predicted_bins(off[0], None, M.ANDON, dt) == (M.STOP_BIN,)
+
+
 def test_own_stop_never_applies_without_the_site_flag_or_on_the_line():
-    """Body shop unchanged: an off-line body-shop cell (own_stop False) and an on-line station keep the old rules."""
+    """An off-line body-shop cell (own_stop False) never takes the own-stop rule (its stopped phase reads the union of
+    all bins, see test_body_shop_off_line_cells_during_andon) and an on-line station keeps the old rules."""
     site = _site(["C1", "S1"], [False, True])
     st = _state(site, [(State.STOPPED, 8), (State.STOPPED, 8)])
     snap = st.snapshot(T0 + 0.1)

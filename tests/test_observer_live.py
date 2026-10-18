@@ -342,6 +342,7 @@ def test_m7_application_tag_states_option_b(run):
     tag = ob.diagnostics()["tags"]["m7_application"]
     assert tag.startswith("LEAD DECISION") and "option B" in tag and "calibration_pred" in tag
     assert "whole keep-out horizon" in tag and "layers the robot holds" in tag
+    assert "learner TTL >= 8 s" in tag and "HeldMap" in tag and "ttl_s >= 6 s" not in tag
     a = ob.availability()
     assert set(a["closed_share"]) == {"running", "stopped", "union"}
     assert a["closed_share"]["union"] >= max(a["closed_share"]["running"], a["closed_share"]["stopped"])
@@ -364,6 +365,11 @@ def still_run(tmp_path_factory):
 def _robot(ob, t: float, nows: list[tuple[State, int]], ttl_s: float = 10.0, lag: float = 0.5):
     """The robot's verified view, `lag` s after one signed broadcast (at t) of ob's slow + map and a crafted fast layer
     whose entries carry `ttl_s`."""
+    return _robot_full(ob, t, nows, ttl_s, lag)[:3]
+
+
+def _robot_full(ob, t: float, nows: list[tuple[State, int]], ttl_s: float = 10.0, lag: float = 0.5):
+    """_robot plus what the recorder keeps: (site, view, snap, out of sign_layers, the raw crafted fast layer)."""
     now_u = DAY0_UNIX + t
     root, key = SigningKey.generate(), SigningKey.generate()
     ring = _store(key, root, now_u).keyring_at(now_u)
@@ -377,12 +383,21 @@ def _robot(ob, t: float, nows: list[tuple[State, int]], ttl_s: float = 10.0, lag
         st.ingest(t + k * 1e-4, F.FRAME + fr)
     s = ob.slow(t)
     st.ingest(t, F.BLOB + sign(encode_slow(SlowLayer(s.site_id, kid, s.issue_time, [], s.machines)), key))
-    fast = [MachineNow(i, sv, 0.3 if sv == State.ACTIVE else 0.0, 0.5, ttl_s, c, 1) for i, (sv, c) in enumerate(nows)]
-    st.ingest(t, F.BLOB + sign(encode_fast(FastLayer(s.site_id, kid, DAY0_UNIX + t, 1, fast)), key))
+    fast = FastLayer(s.site_id, kid, DAY0_UNIX + t, 1,
+                     [MachineNow(i, sv, 0.3 if sv == State.ACTIVE else 0.0, 0.5, ttl_s, c, 1) for i, (sv, c) in enumerate(nows)])
+    st.ingest(t, F.BLOB + sign(encode_fast(fast), key))
     view = st.map_view(t + lag)
     assert view is not None, st.all_stats()
+    assert st.map_rx.manifest.sha == out["held"]["map"].sha and st.map_version() == out["held"]["map"].version
     snap = st.snapshot(t + lag)
-    return site, view, snap
+    return site, view, snap, out, fast
+
+
+def _held(ob, t: float):
+    """One signed broadcast at t: what a robot holds afterwards (sign_layers()['held'])."""
+    now_u = DAY0_UNIX + t
+    root, key = SigningKey.generate(), SigningKey.generate()
+    return ob.sign_layers(key, t, _store(key, root, now_u).keyring_at(now_u))["held"]
 
 
 GRID = K.Grid(0.0, 0.0, 0.25, 80, 32)
@@ -464,51 +479,143 @@ def test_robot_constants_are_the_robot_defaults():
     (State.ACTIVE, 8, 2.0, 3.0, OL.TWIN_BINS),        # expired: no phase
     (State.ACTIVE, 8, 300.0, 40.0, OL.TWIN_BINS),     # fast layer older than the robot's fast_max_age_s
     (State.UNKNOWN, 0, 10.0, 0.5, OL.TWIN_BINS),
+    # audit S6-optB fix 2 #2: the robot decodes the TTL in 2 s steps rounded down (6.51 -> 6, 7.9 -> 6)
+    (State.STOPPED, 8, 6.51, 0.3, OL.TWIN_BINS),
+    (State.STOPPED, 8, 7.9, 0.3, OL.TWIN_BINS),
+    (State.STOPPED, 8, 8.0, 0.3, (M.STOP_BIN,)),
+    (State.STOPPED, 8, 9.99, 2.3, OL.TWIN_BINS),      # decoded 8 s: 5.7 s left at issue + 2.3 s
+    (State.ACTIVE, 8, 3.9, 2.5, OL.TWIN_BINS),        # decoded 2 s: expired at issue + 2.5 s
 ])
 def test_robot_bins_are_the_robot_mask_lookup(still_run, sv, c, ttl, lag, want):
-    """S7b alignment, end to end: robot_bins(slow, fast entry, issue, t) == the twin bins of intercycle_nav's
-    machine_bins over the robot's keep-out horizon [t, t + H] after the signed broadcast."""
+    """S7b alignment, end to end: robot_bins(slow, raw fast entry, issue, t, held map period) == the twin bins of
+    intercycle_nav's machine_bins over the robot's keep-out horizon [t, t + H] after the signed broadcast."""
     ob, obs = still_run
     t = obs[-1].t_cap
-    site, view, snap = _robot(ob, t, [(sv, c), (State.ACTIVE, 8)], ttl_s=ttl, lag=lag)
+    site, view, snap, out, _ = _robot_full(ob, t, [(sv, c), (State.ACTIVE, 8)], ttl_s=ttl, lag=lag)
     got = K.machine_bins(view, 0, snap.machines[0], snap.prod, K.MaskParams(), site.on_line["P1"], site.own_stop["P1"])
     s = ob.slow(t)
     now = MachineNow(0, sv, 0.3 if sv == State.ACTIVE else 0.0, 0.5, ttl, c, 1)
+    held = out["held"]["map"]
+    assert np.array_equal(held.period, view.period, equal_nan=True)            # the period the robot decoded
     assert tuple(sorted({OL.twin_bin(b) for b in got})) == want
-    assert OL.robot_bins(s.machines[0], now, t, t + lag) == want
+    assert OL.robot_bins(s.machines[0], now, t, t + lag, float(held.period[0])) == want
+
+
+def test_robot_bins_without_a_map_period_read_the_union(still_run, monkeypatch):
+    """Audit S6-optB fix 2 #4: a map packed without a period for P1 (NaN, e.g. before its first model) makes the robot
+    look up the union for a confident running P1 even with a confident slow model; robot_bins follows the HELD map's
+    period, not the slow model's."""
+    ob, obs = still_run
+    t = obs[-1].t_cap
+    monkeypatch.setattr(ob.map, "period", np.array([np.nan, ob.map.period[1]]))
+    site, view, snap, out, fast = _robot_full(ob, t, [(State.ACTIVE, 8), (State.ACTIVE, 8)])
+    assert not np.isfinite(view.period[0]) and np.isfinite(view.period[1])
+    held = out["held"]["map"]
+    assert np.array_equal(held.period, view.period, equal_nan=True)
+    s = ob.slow(t)
+    assert s.machines[0].confidence >= LC.MIN_CONF and np.isfinite(s.machines[0].period_s)
+    for i, pid in enumerate(ob.ids):
+        got = K.machine_bins(view, i, snap.machines[i], snap.prod, K.MaskParams(), site.on_line[pid], site.own_stop[pid])
+        want = OL.TWIN_BINS if i == 0 else (0,)
+        assert tuple(sorted({OL.twin_bin(b) for b in got})) == want
+        assert OL.robot_bins(s.machines[i], fast.machines[i], t, t + 0.5, float(held.period[i])) == want
+    preds = ob.calibration_pred(s, fast, held, t + 0.5)
+    assert np.array_equal(preds[0], held.pred(0, OL.TWIN_BINS)) and np.array_equal(preds[1], held.pred(1, (0,)))
 
 
 def test_calibration_pred_is_the_robot_lookup_uninflated(still_run):
-    """S7b alignment: inflate(calibration_pred) == what the robot gets for its lookup, per press, for every fast state."""
+    """S7b alignment: inflate(calibration_pred) == what the robot gets for its lookup (the held map's broadcast per-bin
+    envelope OR its broadcast UNKNOWN cells), per press, for every fast state."""
     ob, obs = still_run
     t = obs[-1].t_cap
-    s = ob.slow(t)
+    held = _held(ob, t)
+    s, hm = held["slow"], held["map"]
+    m = ob.map_snapshot()                                        # the same state as the held map
     for sv, c, want in ((State.STOPPED, 8, (M.STOP_BIN,)), (State.ACTIVE, 8, (0,)), (State.IDLE, 8, (0,)),
                         (State.UNKNOWN, 0, OL.TWIN_BINS), (State.STOPPED, 3, OL.TWIN_BINS)):
         fast = FastLayer(s.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, sv, 0.0, 0.5, 10.0, c, 1) for i in range(ob.M)])
-        assert OL.robot_bins(s.machines[0], fast.machines[0], t, t + 0.5) == want
-        preds = ob.calibration_pred(s, fast, t + 0.5)
-        m = ob.map_snapshot()
+        assert OL.robot_bins(s.machines[0], fast.machines[0], t, t + 0.5, float(hm.period[0])) == want
+        preds = ob.calibration_pred(s, fast, hm, t + 0.5)
         for i, pid in enumerate(ob.ids):
-            assert np.array_equal(preds[i], ob.pred_l1(i, want))
+            assert np.array_equal(preds[i], hm.pred(i, want))
+            assert np.array_equal(preds[i], ob.pred_l1(i, want))         # nothing changed since the broadcast
             got = np.zeros_like(preds[i])
             for b in want:
                 got |= m.envelope(pid, b, ob.det.cfg.p_min)
             got |= ob.unknown_l1(i)
             assert np.array_equal(OL.inflate(preds[i], ob.margin, cell_m=SPEC["env_res"]), got)
-    assert OL.robot_bins(None, None, t, t) == OL.TWIN_BINS
+    assert OL.robot_bins(None, None, t, t, float(hm.period[0])) == OL.TWIN_BINS
+    fast = FastLayer(s.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, State.ACTIVE, 0.0, 0.5, 10.0, 8, 1) for i in range(ob.M)])
+    with pytest.raises(ValueError):
+        ob.calibration_pred(s, fast, replace(hm, ids=("X", "Y")), t)
+
+
+def test_calibration_pred_uses_the_map_the_robot_holds(still_run, monkeypatch):
+    """Audit S6-optB fix 2 #1: after the robot completed map v1, the live map and detector change (a CUSUM alarm adds
+    UNKNOWN cells, a fail-closed UNKNOWN is lifted, count forgetting empties the envelopes). calibration_pred(slow, fast, held v1, t) is
+    still v1's lookup, never the live state, and inflate(pred) is inside what intercycle_nav's keepout_mask closes from
+    the held DecodedMap (and equals v1's broadcast per-bin envelopes OR UNKNOWN cells)."""
+    ob, obs = still_run
+    t, lag = obs[-1].t_cap, 0.5
+    site, view, snap, out, fast = _robot_full(ob, t, [(State.STOPPED, 8), (State.ACTIVE, 8)], lag=lag)
+    hm, s = out["held"]["map"], out["held"]["slow"]
+    m1 = ob.map_snapshot()                                       # v1's broadcast envelopes (same state as the held map)
+    want = [(M.STOP_BIN,), (0,)]
+    before = ob.calibration_pred(s, fast, hm, t + lag)
+    expect = []
+    for i, pid in enumerate(ob.ids):
+        assert np.array_equal(before[i], hm.pred(i, want[i]))
+        e = ob.unknown_l1(i).copy()
+        for b in want[i]:
+            e |= m1.envelope(pid, b, ob.det.cfg.p_min)
+        expect.append(e)
+    # the live state moves on after the broadcast: a CUSUM alarm over all of P1, P2's fail-closed UNKNOWN lifted
+    shape = {pid: ob.det.unknown_mask(pid).shape for pid in ob.ids}
+    monkeypatch.setattr(ob.det, "unknown_mask", lambda pid: np.full(shape[pid], pid == "P1"))
+    monkeypatch.setattr(ob.map, "envelope", lambda pid, b, p_min=0.05: np.zeros(shape[pid], bool))
+    after = ob.calibration_pred(s, fast, hm, t + lag)
+    g, info = K.keepout_mask(GRID, "learned", site, snap, view, K.MaskParams())
+    assert info["bins"]["P1"]["bins"] == 1 and info["bins"]["P2"]["bins"] != "all"
+    n_in = {}
+    for i, pid in enumerate(ob.ids):
+        assert not np.array_equal(ob.pred_l1(i, want[i]), before[i])    # the live pred moved ...
+        assert np.array_equal(after[i], before[i])                      # ... the held one did not
+        infl = OL.inflate(after[i], ob.margin, cell_m=SPEC["env_res"])
+        assert np.array_equal(infl, expect[i])
+        n_in[pid] = 0
+        for x, z in _centres(ob, i, infl):
+            if 0 <= x < 20.0 and 0 <= z < 8.0:
+                assert g[int(x / GRID.res), int(z / GRID.res)] == K.KEEP_OUT, (pid, x, z)
+                n_in[pid] += 1
+    assert n_in["P2"] > 0                                                # P2: bin 0 + its fail-closed UNKNOWN cells
+    # P1 (STOP_BIN, still ram): the robot leaves cells FREE that the live alarm now marks UNKNOWN; the held pred does
+    # not count them as covered (the unsafe direction the audit found: they would have shrunk the certified margin)
+    live_only = ob.pred_l1(0, want[0]) & ~after[0]
+    assert live_only.any()
+    assert any(g[int(x / GRID.res), int(z / GRID.res)] == K.FREE for x, z in _centres(ob, 0, live_only)
+               if 0 <= x < 20.0 and 0 <= z < 8.0)
 
 
 def test_calibration_pred_covers_the_robot_horizon(still_run):
-    """Audit S6-optB fix 1: a stop valid for 2 s is scored as the union over the 6 s horizon, not as its STOP bin."""
+    """Audit S6-optB fix 1: a stop valid for 2 s is scored as the union over the 6 s horizon, not as its STOP bin.
+    Fix 2 #2: the TTL is quantised as the robot decodes it (6.51 s -> 6 s: at issue + 0.3 s the stop no longer covers
+    the 6 s horizon; 8 s does)."""
     ob, obs = still_run
     t = obs[-1].t_cap
-    s = ob.slow(t)
-    fast = FastLayer(s.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, State.STOPPED, 0.0, 0.0, 2.0, 8, 1) for i in range(ob.M)])
-    for i, pred in enumerate(ob.calibration_pred(s, fast, t + 1.0)):
-        assert np.array_equal(pred, ob.pred_l1(i, OL.TWIN_BINS))
-    for i, pred in enumerate(ob.calibration_pred(s, fast, t + 1.0, horizon_s=0.5)):
-        assert np.array_equal(pred, ob.pred_l1(i, (M.STOP_BIN,)))
+    held = _held(ob, t)
+    s, hm = held["slow"], held["map"]
+
+    def fast_of(ttl: float) -> FastLayer:
+        return FastLayer(s.site_id, 1, DAY0_UNIX + t, 1,
+                         [MachineNow(i, State.STOPPED, 0.0, 0.0, ttl, 8, 1) for i in range(ob.M)])
+
+    for i, pred in enumerate(ob.calibration_pred(s, fast_of(2.0), hm, t + 1.0)):
+        assert np.array_equal(pred, hm.pred(i, OL.TWIN_BINS))
+    for i, pred in enumerate(ob.calibration_pred(s, fast_of(2.0), hm, t + 1.0, horizon_s=0.5)):
+        assert np.array_equal(pred, hm.pred(i, (M.STOP_BIN,)))
+    for ttl, want in ((6.51, OL.TWIN_BINS), (7.9, OL.TWIN_BINS), (8.0, (M.STOP_BIN,))):
+        for i, pred in enumerate(ob.calibration_pred(s, fast_of(ttl), hm, t + 0.3)):
+            assert np.array_equal(pred, hm.pred(i, want)), ttl
 
 
 def test_calibration_pred_uses_the_slow_layer_the_robot_holds(still_run):
@@ -516,19 +623,21 @@ def test_calibration_pred_uses_the_slow_layer_the_robot_holds(still_run):
     never the observer's current models."""
     ob, obs = still_run
     t = obs[-1].t_cap
-    held = ob.slow(t)
+    hs = _held(ob, t)
+    held, hm = hs["slow"], hs["map"]
     assert all(m.confidence >= 4 for m in held.machines)
     low = SlowLayer(held.site_id, held.key_id, held.issue_time, [], [replace(m, confidence=0) for m in held.machines])
-    fast = FastLayer(held.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, State.STOPPED, 0.0, 0.0, 10.0, 8, 1) for i in range(ob.M)])
+    fast = FastLayer(held.site_id, 1, DAY0_UNIX + t, 1,
+                     [MachineNow(i, State.STOPPED, 0.0, 0.0, 10.0, 8, 1) for i in range(ob.M)])
     saved = list(ob.models)
     try:
         ob.models = list(low.machines)                       # the observer's model dropped below MIN_CONF since
-        for i, pred in enumerate(ob.calibration_pred(held, fast, t + 0.5)):
-            assert np.array_equal(pred, ob.pred_l1(i, (M.STOP_BIN,)))
+        for i, pred in enumerate(ob.calibration_pred(held, fast, hm, t + 0.5)):
+            assert np.array_equal(pred, hm.pred(i, (M.STOP_BIN,)))
     finally:
         ob.models = saved
-    for i, pred in enumerate(ob.calibration_pred(low, fast, t + 0.5)):
-        assert np.array_equal(pred, ob.pred_l1(i, OL.TWIN_BINS))
+    for i, pred in enumerate(ob.calibration_pred(low, fast, hm, t + 0.5)):
+        assert np.array_equal(pred, hm.pred(i, OL.TWIN_BINS))
 
 
 # ---------------------------------------------------------------- C-W5 signing, explicit keyring, fail closed
