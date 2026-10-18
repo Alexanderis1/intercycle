@@ -26,9 +26,10 @@ def test_iso13855_distance_from_stated_k_t_c():
     assert SS.iso13855_c_mm(1000.0) == pytest.approx(850.0)          # never below 850 mm
     sp = SS.FieldSpec()
     assert sp.k_mps == pytest.approx(1.6 + math.hypot(0.7, 0.3))
-    assert sp.t_s == pytest.approx(0.60)
+    assert sp.t_s == pytest.approx(0.08 + 0.02 + math.hypot(0.7, 0.3) / 1.5) == pytest.approx(0.6077, abs=1e-4)
     assert sp.c_m == pytest.approx(1.08)
-    assert sp.s_m == pytest.approx(2.362 * 0.60 + 1.08, abs=1e-3)
+    assert sp.s_m == pytest.approx(2.5152, abs=1e-3)                  # 2.3616 * 0.6077 + 1.08
+    assert sp.s_m > 2.362 * 0.60 + 1.08                              # the old rounded-down T gave a smaller S
     rec = sp.record()
     assert rec["s_m"] == pytest.approx(sp.s_m, abs=1e-4) and rec["sources"]["t_stop"] == "ASSUMED"
 

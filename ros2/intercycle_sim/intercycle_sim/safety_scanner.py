@@ -12,10 +12,11 @@ Fixed field (PLAN_TWIN §6: R-W13 reduced to a fixed field; a speed-dependent fi
       robot driving into a standing person; ASSUMED composition, as in ISO 3691-4 practice for mobile platforms)
   T = t_scanner 0.08 s (ASSUMED: safety laser scanner response, 2 scans at 40 ms)
       + t_control 0.02 s (ASSUMED: safety controller -> locomotion, one 50 Hz step)
-      + t_stop 0.50 s (ASSUMED: stopping time from 0.762 m/s at nav2.yaml's max_decel 1.5 m/s^2)
+      + t_stop = v_robot_max / 1.5 = 0.508 s (ASSUMED: stopping time from 0.762 m/s at nav2.yaml's max_decel
+        1.5 m/s^2; computed, not rounded down)
   C = 1200 mm - 0.4 * H (ISO 13855 horizontal approach of an ESPE field) with the detection plane at H = 300 mm
       (ASSUMED mount; ISO 13855 needs H >= 15 * (d - 50) mm, true for a 70 mm resolution) -> C = 1.08 m (>= 0.85 m)
-  S = 2.362 * 0.60 + 1.08 = 2.497 m, applied on every side of the robot footprint (+-0.50 x +-0.32 m, nav2.yaml), since
+  S = 2.3616 * 0.6077 + 1.08 = 2.515 m, applied on every side of the robot footprint (+-0.50 x +-0.32 m, nav2.yaml), since
       the base is omnidirectional and backs out of zones.
 Only movers at the detection plane are seen (people, vehicles: primitives whose top is above H). Static structure is not
 in the field (the field set is assumed to be configured around the fixed plant, as real scanner field sets are), and
@@ -32,7 +33,8 @@ K_PERSON = 1.6                         # m/s, ISO 13855 walking approach (whole 
 V_ROBOT_MAX = math.hypot(0.7, 0.3)     # m/s, nav2.yaml vx_max / vy_max
 T_SCANNER = 0.08                       # s, ASSUMED
 T_CONTROL = 0.02                       # s, ASSUMED
-T_STOP = 0.50                          # s, ASSUMED (0.762 m/s / 1.5 m/s^2 = 0.51 s)
+MAX_DECEL = 1.5                        # m/s^2, nav2.yaml velocity_smoother max_decel (ASSUMED as the stop decel)
+T_STOP = V_ROBOT_MAX / MAX_DECEL        # s = 0.508, ASSUMED (exact, never rounded down: rounding shrinks S)
 H_PLANE_MM = 300.0                     # detection plane height, ASSUMED
 FOOT_HALF = (0.50, 0.32)               # robot footprint half-length / half-width (nav2.yaml)
 RELEASE_S = 1.0                        # ASSUMED: automatic restart after the field has been clear this long
