@@ -1,0 +1,86 @@
+# twin/tasks_v0.yaml - G0 PLACEHOLDER tasks (contract twin.tasks/1, twin/schemas/tasks.py) for twin/site_v0.yaml.
+# Every value is `source: prior`: nothing here was traced or measured. S2 TASKS writes twin/tasks.yaml (8 checkpoints,
+# 5 in zone 9 and 3 in zone 14, 20x zoom, thermal model, defect rate 25 %, the written detectability formula, E-W3);
+# twin/compile.py uses this stub only while twin/tasks.yaml does not exist.
+# Plan frame: x, z in metres; yaw = atan2(dx, dz) (0 faces +z, pi/2 faces +x). A press checkpoint with
+# inside_danger: true has its capture pose inside the press's dilated danger rect; compile.py generates the wait pose
+# outside it along the target normal (R-W10).
+contract: twin.tasks/1
+site_id: esk_press_v0
+inspection:
+  defect_rate: 0.25
+  zoom_max: 20.0
+  detectability: "STUB (S2 TASKS writes the real formula): p_detect = 1 - exp(-px_per_mm / 2.0) * cos(incidence)"
+zones:
+  - zone: z9
+    dock: {x: 1.0, z: 1.0, yaw: 0.0}
+    mission_order: [cp_P9a_ram, cp_P9a_side, cp_z9_panel]
+  - zone: z14
+    dock: {x: 31.0, z: 1.0, yaw: 0.0}
+    mission_order: [cp_P14a_ram, cp_z14_panel]
+checkpoints:
+  - id: cp_P9a_ram
+    zone: z9
+    press: P9a
+    target_kind: press
+    target_xzh: [6.25, 6.0, 1.2]
+    normal_xz: [0.0, -1.0]
+    candidate_poses:
+      - {pose: {x: 6.25, z: 5.3, yaw: 0.0}, source: prior, standoff_m: 0.7}
+    inside_danger: true
+    dwell_s: 4.0
+    zoom: 20.0
+    thermal: true
+    source: prior
+  - id: cp_P9a_side
+    zone: z9
+    press: P9a
+    target_kind: press
+    target_xzh: [7.5, 7.25, 1.2]
+    normal_xz: [1.0, 0.0]
+    candidate_poses:
+      - {pose: {x: 9.2, z: 7.25, yaw: -1.5707963267948966}, source: prior, standoff_m: 1.7}
+    inside_danger: false
+    dwell_s: 4.0
+    zoom: 8.0
+    thermal: true
+    source: prior
+  - id: cp_z9_panel
+    zone: z9
+    press: null
+    target_kind: panel
+    target_xzh: [13.8, 2.0, 1.2]
+    normal_xz: [-1.0, 0.0]
+    candidate_poses:
+      - {pose: {x: 12.3, z: 2.0, yaw: 1.5707963267948966}, source: prior, standoff_m: 1.5}
+    inside_danger: false
+    dwell_s: 4.0
+    zoom: 4.0
+    thermal: false
+    source: prior
+  - id: cp_P14a_ram
+    zone: z14
+    press: P14a
+    target_kind: press
+    target_xzh: [34.25, 5.0, 1.2]
+    normal_xz: [0.0, -1.0]
+    candidate_poses:
+      - {pose: {x: 34.25, z: 4.4, yaw: 0.0}, source: prior, standoff_m: 0.6}
+    inside_danger: true
+    dwell_s: 4.0
+    zoom: 20.0
+    thermal: true
+    source: prior
+  - id: cp_z14_panel
+    zone: z14
+    press: null
+    target_kind: panel
+    target_xzh: [37.8, 2.0, 1.2]
+    normal_xz: [-1.0, 0.0]
+    candidate_poses:
+      - {pose: {x: 36.6, z: 2.0, yaw: 1.5707963267948966}, source: prior, standoff_m: 1.2}
+    inside_danger: false
+    dwell_s: 4.0
+    zoom: 4.0
+    thermal: false
+    source: prior

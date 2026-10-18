@@ -17,8 +17,8 @@ import pytest
 from _truth_scan import chain, import_closure, parse, py_files, rel, resolve, string_literals
 from twin import truth_guard as TG
 
-PKG = Path(__file__).resolve().parents[1] / "intercycle"
 REPO = Path(__file__).resolve().parents[1]
+PKG = REPO / "intercycle"
 FORBIDDEN_IN = ["observer/learn_cycles.py", "observer/learn_traffic.py", "observer/mapping.py", "observer/change.py",
                 "observer/phases.py", "observer/change_detect.py", "observer/change_detect_l1.py", "codec", "robot"]
 # PLAN_TWIN §2 Truth guards: the robot / episode-side ROS packages never import the twin (plant, engine, camera, truth)

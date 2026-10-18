@@ -1,0 +1,14 @@
+{
+  "site": {
+    "path": "twin/site_v0.yaml",
+    "sha256": "4b0de7fdabea9007c05796ad837df9d8f6cde1fca00ffc41ead07e248b03e258"
+  },
+  "dynamics": {
+    "path": "twin/dynamics_v0.json",
+    "sha256": "d6aa95cb5d1a33d99e3d0e38b311a6829d0ba4e8451e14e277d4448356996dd2"
+  },
+  "tasks": {
+    "path": "twin/tasks_v0.yaml",
+    "sha256": "2f6871fac305e171db982af70ac4ae4516016e3b4aba402dbdfc48ae10827ba3"
+  }
+}
