@@ -4,8 +4,9 @@
   `clip_id,group_id,split,sha256` (these four columns first and in this order; an amended split may append columns
   after them). One row per clip, clip ids unique, split in train/dev/test, sha256 64 lowercase hex.
 * `prereg/ACTIVE_SPLIT` (optional): names the split in force. Its first line that is neither empty nor a `#` comment
-  is the repo-relative path of the split CSV (e.g. `prereg/split_a1.csv`). Without it the active split is
-  `prereg/split.csv`. `active_split_path` fails closed when the named file is missing.
+  is the file name of the split CSV inside prereg/ (e.g. `split_a1.csv`; no directory part), the same rule as
+  `intercycle.esk.active_split_path` (amendment A1+). Without it the active split is `prereg/split.csv`.
+  `active_split_path` fails closed when the entry is not a bare `.csv` name or the named file is missing.
 * `sealed/MANIFEST.sha256` and `sealed/LABELS.sha256` (custodian): `SealedHashes`, one text format for both:
 
       # twin.sealed/1 MANIFEST                       (or LABELS; must be the first line)
@@ -74,14 +75,18 @@ def parse_split(text: str) -> dict[str, SplitRow]:
 
 
 def active_split_path(repo: Path = REPO) -> Path:
-    """The split in force: the path named by prereg/ACTIVE_SPLIT, else prereg/split.csv. Fails closed if missing."""
+    """The split in force: prereg/<name> named by prereg/ACTIVE_SPLIT, else prereg/split.csv. Fails closed if the
+    entry is not a bare .csv file name or the file is missing."""
     pointer = repo / "prereg" / "ACTIVE_SPLIT"
     if pointer.exists():
         lines = [ln.strip() for ln in pointer.read_text(encoding="utf-8").splitlines()]
         named = [ln for ln in lines if ln and not ln.startswith("#")]
         if not named:
             raise ValueError(f"{pointer} names no split file")
-        path = repo / named[0]
+        name = named[0]
+        if "/" in name or "\\" in name or not name.endswith(".csv"):
+            raise ValueError(f"bad prereg/ACTIVE_SPLIT entry {name!r}: a .csv file name inside prereg/")
+        path = repo / "prereg" / name
     else:
         path = repo / "prereg" / "split.csv"
     if not path.is_file():
