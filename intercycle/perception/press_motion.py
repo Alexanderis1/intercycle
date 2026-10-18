@@ -142,7 +142,7 @@ def _box_hits(mask: np.ndarray, boxes: Sequence[Sequence[float]], scale: float) 
 def roi_signals(frames: np.ndarray, t: np.ndarray, mask: np.ndarray, scale: float,
                 person_boxes: Sequence[Sequence[Sequence[float]]] | None = None,
                 params: PressParams | None = None) -> pd.DataFrame:
-    """Per frame: t, flow_v (full-res px/s, + = down), roi_energy, missing. Frame 0 has no flow (NaN).
+    """Per frame: t, flow_v (full-res px/s, + = down), roi_energy, missing. Frame 0 has no flow (NaN, missing).
 
     ``person_boxes[i]`` lists full-resolution (x1, y1, x2, y2) person boxes of frame i; a frame whose ROI touches a
     box is missing (NaN signals).
@@ -174,6 +174,8 @@ def roi_signals(frames: np.ndarray, t: np.ndarray, mask: np.ndarray, scale: floa
         fl = cv2.calcOpticalFlowFarneback(a, b, np.zeros(a.shape + (2,), np.float32), *p.farneback)
         flow_v[i] = float(fl[..., 1][sub].mean()) / scale / dt
         energy[i] = float(np.abs(b.astype(np.int16) - a.astype(np.int16))[sub].mean())
+    # no measurement (frame 0, a non-increasing PTS step) is MISSING too: the machines contract reads NaN as missing
+    missing = missing | ~np.isfinite(flow_v) | ~np.isfinite(energy)
     return pd.DataFrame({"t": t, "flow_v": flow_v, "roi_energy": energy, "missing": missing})
 
 
