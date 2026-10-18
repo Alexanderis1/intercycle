@@ -947,6 +947,7 @@ def test_robot_passes_when_only_robot_files_changed_after_freeze_realclip(s):
     ("sealed/MANIFEST.sha256", None),                       # sealed/* (deleted)
     ("sealed/NEW.txt", "x\n"),                              # sealed/* (added)
     ("prereg/split_a1.csv", "clip_id,group_id,split,sha256,framing_id\n"),   # the active split
+    ("prereg/r0_v1.json", "{}\n"),                         # the detector-input record (PREREG v1 §2.1 data)
 ])
 def test_robot_refuses_a_realclip_input_changed_between_the_freezes(s, rel, text):
     _robot_change(s, rel, text)
@@ -1065,6 +1066,7 @@ def test_the_sealed_scorer_is_in_the_guarded_real_clip_set(monkeypatch):
     for rel in ("intercycle/eval/realclip.py", "intercycle/observer/pixel_adapter.py", "twin/dev_labels.py"):
         assert rel in SR.CLIPS_STAGE_ROOTS
     assert SR.SITE in SR.REALCLIP_DATA_PATHS
+    assert SR.R0_RECORD == "prereg/r0_v1.json" and SR.R0_RECORD in SR.REALCLIP_DATA_PATHS   # PREREG v1 §2.1 data
     got = SR.import_closure(REPO, "HEAD", SR.CLIPS_STAGE_ROOTS)
     assert {"intercycle/eval/realclip.py", "twin/dev_labels.py", "twin/schemas/labels.py"} <= got
     # the container module (shipped by add_local_python_source, imported by name) is a guarded real-clip input

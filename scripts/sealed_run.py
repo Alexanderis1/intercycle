@@ -34,8 +34,8 @@ SPLIT FREEZE (USER DECISION, Sun ~07:00 CEST). There are two freezes and each st
   5. prereg/FREEZE_REALCLIP exists, names a commit that is an ancestor of the FREEZE commit, and NO real-clip input
      differs between FREEZE_REALCLIP and FREEZE: the static import closure of the clips stage (CLIPS_STAGE_ROOTS and
      every repo module they import, at either commit, with their parent packages), the labels schema, every file
-     under sealed/, the active split (prereg/ACTIVE_SPLIT and the split csv it names) and the press ROI file
-     (REALCLIP_DATA_PATHS). The robot stages run from scripts/sealed_robot.py (ROBOT_MODULE, outside that closure,
+     under sealed/, the active split (prereg/ACTIVE_SPLIT and the split csv it names), the press ROI file and the
+     detector-input record prereg/r0_v1.json (REALCLIP_DATA_PATHS). The robot stages run from scripts/sealed_robot.py (ROBOT_MODULE, outside that closure,
      so wiring them does not touch a frozen real-clip file); without it they are refused ("not wired").
 
 Refusals of the robot stages (every one fails closed, before INTERCYCLE_SEALED_RUN=1 is set and before anything is
@@ -179,8 +179,10 @@ CLIPS_STAGE_ROOTS: tuple[str, ...] = ("scripts/sealed_run.py", "scripts/sealed_i
                                       "intercycle/eval/realclip.py", "intercycle/observer/pixel_adapter.py",
                                       "twin/dev_labels.py")
 LABELS_SCHEMA = "twin/schemas/labels.py"
+R0_RECORD = "prereg/r0_v1.json"   # the detector-input record (PREREG v1 §2.1 "Covers": real-clip data)
 REALCLIP_DATA_PATHS: tuple[str, ...] = (LABELS_SCHEMA, "prereg/ACTIVE_SPLIT", "docs/probes/S3a-P4_rois.json",
-                                        "twin/site.yaml", "labels/TEST_RULES.md")   # site: H, ROIs, danger rects
+                                        "twin/site.yaml", "labels/TEST_RULES.md",   # site: H, ROIs, danger rects
+                                        R0_RECORD)
 SITE = "twin/site.yaml"
 LABELS_DIR = "labels/"                        # in the sealed root: every LABELS path (test labels, sample list)
 SCORES_DIR = "scores"                         # in the sealed root: the full sealed scoring output (label content)
