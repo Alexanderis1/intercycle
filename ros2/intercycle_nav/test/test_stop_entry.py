@@ -15,6 +15,7 @@ import math
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 PKG = Path(__file__).resolve().parents[1]
@@ -25,6 +26,7 @@ from intercycle import scenario as S  # noqa: E402
 from intercycle.codec.layout import encode_fast, encode_slow  # noqa: E402
 from intercycle.codec.sign import demo_key, sign  # noqa: E402
 from intercycle.codec.trust import key_id_of  # noqa: E402
+from intercycle.observer import learn_cycles as LC  # noqa: E402
 from intercycle.observer import mapping as M  # noqa: E402
 from intercycle.robot.predict import idle_windows  # noqa: E402
 from intercycle.types import DAY0_UNIX, FastLayer, MachineModel, MachineNow, SlowLayer, State  # noqa: E402
@@ -43,12 +45,14 @@ needs_twin = pytest.mark.skipif(not TWIN_Z9.exists(), reason="twin/z9/scenario.y
 
 
 def _state(site: K.Site, nows: list[tuple[State, int, float, float]], model_conf: int = 10,
-           t: float = T0) -> K.ObserverState:
-    """Signed slow + fast layers for every machine of `site`: nows[i] = (state, confidence, ttl_s, next_idle_len_s)."""
+           t: float = T0, models: list[MachineModel] | None = None) -> K.ObserverState:
+    """Signed slow + fast layers for every machine of `site`: nows[i] = (state, confidence, ttl_s, next_idle_len_s).
+    models: the slow layer's models (default: a hand-set 2 s press model per machine with `model_conf`)."""
     key = demo_key(SEED)
     kid = key_id_of(key.verify_key)
     st = K.ObserverState(site, K.demo_keyring(SEED))
-    models = [MachineModel(i, 2.0, 0.4, 0.01, 0.0, 1.0, model_conf) for i in range(len(site.ids))]
+    if models is None:
+        models = [MachineModel(i, 2.0, 0.4, 0.01, 0.0, 1.0, model_conf) for i in range(len(site.ids))]
     fast = [MachineNow(i, s, 0.0, ln, ttl, c, 1) for i, (s, c, ttl, ln) in enumerate(nows)]
     st.ingest(t, F.BLOB + sign(encode_slow(SlowLayer(site.site_id, kid, DAY0_UNIX + t, [], models)), key))
     st.ingest(t, F.BLOB + sign(encode_fast(FastLayer(site.site_id, kid, DAY0_UNIX + t, 1, fast)), key))
@@ -222,6 +226,60 @@ def test_window_planner_is_shared():
         assert K.idle_through(w, t, t + H) == R.zone_open(w, t, H)
     assert not math.isnan(H)
 
+
+
+# ---------------------------------------------------------------- the real learner's STOPPED TTL (fix round 1, major)
+def _press_signal(t0: float, t1: float, stops: list[tuple[float, float]], period_s: float = 2.4,
+                  busy: float = 0.4, dt: float = 0.5):
+    """A 2 Hz zone-motion signal of a press stroking every period_s (busy share `busy`), still during `stops`."""
+    t = np.arange(t0, t1, dt)
+    y = (((t - t0) % period_s) < busy * period_s).astype(float)
+    for a, b in stops:
+        y[(t >= a) & (t < b)] = 0.0
+    return t, y
+
+
+@needs_twin
+def test_pinned_asymmetry_real_learner_stop_never_enters_while_reactive_does():
+    """PINS A DISCLOSED ASYMMETRY (fix round 1 of lane S5b-entry, major; needs a lead decision in prereg/AMENDMENTS.md
+    before FREEZE). The learned arm fed by the REAL learner (learn_cycles.learn + nowcast, press constants) on a long
+    stop: forecast caps a STOPPED TTL at min(ttl_s, 10 s), and ttl_s itself is capped at 10 / stops_per_h (here ~4
+    stops / h -> ~2.6 s), so the stop window [issue, issue + ttl] never leaves need_s (16.5 s): no entry, all stop long.
+    The reactive arm, from its own camera, has seen >= 3 long still runs and plans an entry at the stop onset. When the
+    lead changes the learner's STOPPED TTL, this test must be replaced by the entry test the decision calls for."""
+    site, core, tg = _twin()
+    mid = tg.machine
+    assert mid is not None and site.ids.index(mid) == 0
+    need = core.need_s(tg)
+    stop0 = T0 + 1500.0                                                         # the long stop: 200 s
+    stops = [(T0 + 200.0 * k, T0 + 200.0 * k + 60.0) for k in range(1, 7)] + [(stop0, stop0 + 200.0)]
+    t, y = _press_signal(T0, stop0 + 200.0, stops)
+    press = LC.KINDS["press"]
+    learned = LC.learn(t[t < stop0 - 100.0], y[t < stop0 - 100.0], consts=press)
+    md = learned.model
+    assert md.confidence >= LC.MIN_CONF
+    for el in (10.0, 30.0, 60.0, 120.0, 190.0):                                 # the whole long stop
+        tn = stop0 + el
+        k = (t <= tn) & (t >= tn - max(6 * md.period_s, 200.0) - 20.0)          # observer_live.fast's window
+        now = LC.nowcast(md, t[k], y[k], tn, consts=press)
+        assert now.state == State.STOPPED and now.confidence >= 4
+        assert now.ttl_s <= 10.0 < need                                         # the learner's cap: the reason
+        st = _state(site, [(now.state, now.confidence, now.ttl_s, 0.0)], t=tn, models=[md])
+        snap = st.snapshot(tn + 0.5)
+        w = snap.machines[0].windows
+        assert w is not None and len(w) == 1 and w[0][0] == pytest.approx(tn, abs=1e-3)   # a stop window, short
+        assert not _plans_entry(core, tg, _planner_windows(snap), tn + 0.5, "learned")
+    # reactive, its own camera on the same press (seen continuously here): enters the same long stop at its onset
+    est = R.OwnCameraEstimator(R.ReactiveConfig(), [mid], "dev_w1")
+    tr = stop0 + 4.0
+    for tt, yy in zip(t, y):
+        if tt > tr:
+            break
+        est.observe(float(tt), mid, True, bool(yy > 0.5))
+    wr = est.windows(tr)[mid]
+    assert wr and R.zone_open(wr, tr, H)
+    planner = {m: d["windows"] for m, d in R.snapshot_json(tr, est)["machines"].items()}
+    assert _plans_entry(core, tg, planner, tr, "reactive")
 
 # ---------------------------------------------------------------- held -> STOP bin
 def test_machine_bins_held_reads_the_stop_bin():

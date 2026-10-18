@@ -28,6 +28,10 @@ One episode = one generated world (KeyedWorld seed, W-W1) x one condition, two g
               zone (M-W4; the robot receives the boxes at its mission start, C-W7 is cut) or the slow layer says the idle never fits. No prediction: it waits (up to WAIT_MAX_S), then
               does the reactive capture and declines the entry.
   Parameters are fixed here (no tuning for any condition; disclosed).
+  DISCLOSED (lane S5b-entry): A-lite calls robot.predict.idle_windows with the default stop_window=False, so a STOPPED
+  machine gives no idle window and the learned arm never captures or enters on a stop here; the twin robot instead
+  opens a stop window [issue, issue + ttl] for its off-line own-stop presses. A-lite is the body shop (the line stop
+  is its ANDON state, not the machine's own), so it keeps the body-shop rule; the two differ on a stopped machine.
 Per mission: captures passed / attempted, entries clean / attempted, trips, holds, line time lost; Y = passed
 captures + clean entries, 0 if the mission had any trip or hold (the PLAN §5 primary rule, adapted). Descriptive table
 only (docs/ALITE_PREREG.md). The robot never appears in the observer's camera (W-W10, as in the body-shop event sim).

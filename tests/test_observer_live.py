@@ -343,6 +343,9 @@ def test_m7_application_tag_states_option_b(run):
     assert tag.startswith("LEAD DECISION") and "option B" in tag and "calibration_pred" in tag
     assert "whole keep-out horizon" in tag and "layers the robot holds" in tag
     assert "learner TTL >= 8 s" in tag and "HeldMap" in tag and "ttl_s >= 6 s" not in tag
+    se = ob.diagnostics()["tags"]["stop_entry"]
+    assert se.startswith("LEAD DECISION (lane S5b-entry)") and "[issue, issue + ttl]" in se and "own_stop" in se
+    assert "[t, t + H]" in se and "need_s" in se and "STOP_BIN" in se and "never enters a stopped press" in se
     a = ob.availability()
     assert set(a["closed_share"]) == {"running", "stopped", "union"}
     assert a["closed_share"]["union"] >= max(a["closed_share"]["running"], a["closed_share"]["stopped"])

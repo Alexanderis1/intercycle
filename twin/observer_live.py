@@ -105,6 +105,15 @@ M7_TAG = ("LEAD DECISION (audit S6 #3, option B): per-bin M-W7 inflation. Every 
           "a learned period, else the union. S7b's calibration pred = calibration_pred(slow, fast, map_held, t), the "
           "same lookup un-inflated, from the layers the robot holds at its lookup time t (quantised as decoded) and "
           "the map version it holds (HeldMap), never the observer's live map")
+STOP_ENTRY_TAG = ("LEAD DECISION (lane S5b-entry): a twin press's own confident STOPPED (fast and slow confidence >= 4, "
+                  "inside its TTL) is one idle window [issue, issue + ttl] for the robot, for off-line Site.own_stop "
+                  "presses only (predict.idle_windows stop_window; the body shop keeps None). The zone rect opens only "
+                  "while that window covers [t, t + H] (masks.idle_through) and the planner enters only while it still "
+                  "leaves need_s (timing.window_open); the reactive arm uses the same planner and zone rule on its own-"
+                  "camera window. A held press (robot inside / reaching into its zone) reads STOP_BIN in robot_bins and "
+                  "calibration_pred, as masks.machine_bins. DISCLOSED (pending lead decision): the learner caps a "
+                  "STOPPED TTL at min(ttl_s, 10 s), ttl_s <= 10 / stops_per_h, so with need_s 16.5 s the learned arm "
+                  "never enters a stopped press, while the reactive arm can")
 
 
 def twin_bin(b: int) -> int:
@@ -332,7 +341,7 @@ class ObserverLive:
         self.seq = 0
         self.events: list[dict] = []
         self.n_ticks = 0
-        self.tags = dict(time_of_day=TOD_TAG, m7_application=M7_TAG,
+        self.tags = dict(time_of_day=TOD_TAG, m7_application=M7_TAG, stop_entry=STOP_ENTRY_TAG,
                          cycle_consts={k: dict(placeholder=list(c.placeholder), source=c.source)
                                        for k, c in cfg.consts.items()},
                          motion_thr=dict(value=cfg.motion_thr, source=cfg.motion_thr_source),
