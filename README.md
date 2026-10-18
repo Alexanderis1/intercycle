@@ -10,15 +10,18 @@ Its days are generated, not recorded.
 
 ## What was tested
 
-Two tests were pre-registered before any dev-world run, and each is sealed.
+Two tests were pre-registered before any dev-world run. Each has its own sealed run.
 
 1. **Sealed real-clip test (H4): person recall.** 126 held-out public clips (114 from camera 9, 12 from camera 14).
-   A detector finds people. We check how many labelled people it finds. The pass level is r0 = 0.5272, set from 19
-   blind dev frames only. The labels are made by Claude agents, not humans.
+   A detector finds people. We check how many labelled people it finds. The pass level is r0 = 0.5272, set from the
+   19 scored blind dev frames only (of 20; one is a duplicate). The labels are made by Claude agents, not humans.
+   Stated in advance: camera 9 has only 4 test groups, so every per-group recall must reach r0, and H4 is expected
+   not to be claimed if any one group falls below it. That is the pre-registered rule, not a failure of the run.
 2. **Sealed twin robot batch (H1-H3).** 192 missions on the CPU double: 3 conditions (static, learned, best reactive)
    x 16 test worlds x test days 9-10 x zones 9 and 14.
    - H1: the learned robot completes more inspections per mission-hour than the reactive robot.
-   - H2: the learned robot loses at most 30 s per hour of press time more than the static robot.
+   - H2: the learned robot costs at most 30 s more lost press time per mission-hour than the static robot
+     (non-inferiority).
    - H3: the map's miss share at a fixed margin stays below 0.06 (mean over worlds) on new worlds (a consistency check).
 
    This batch is a claim only if the robot part is frozen in time (`prereg/FREEZE`, planned about 10:15 CEST on
@@ -40,7 +43,8 @@ pre-registration allows (rules in the comments, and in `STATUS.md`).
 How to fill [[RESULT_H4]] (PREREG sections 4, 4.1, 10). Always say: "against independent Claude-agent labels (vision
 model), not human labels"; give n (frames, people, groups); r0 = 0.5272; the figures per stratum (safe and unsafe,
 per camera). Camera 9 has 4 test groups, so the small-group rule applies: give per-group recall, and the frame-level
-Clopper-Pearson interval marked "ignores clustering (only 4 groups)".
+Clopper-Pearson interval marked "ignores clustering (only 4 groups)". Also say that near-duplicate footage can sit on
+both sides of the train/test line (A1+).
   (a) "H4 claimed: <pooled recall>, lowest per-group recall <x>, both at or above r0."
       Allowed only if H1, H2 and H3 were claimed first and h4_recall rejects.
   (b) "H4 computed, not claimed: <figures>. A hypothesis is claimed only if every earlier one passed."
@@ -56,6 +60,8 @@ stopped press and the reactive robot can; the margin is a fixed latency margin, 
       world-clustered interval. If that point estimate is 0 or below, add on the first screen: "static boundary
       inspection matched or beat the learned policy."
   (b) Not frozen in time: "Descriptive dev results from dev worlds 0-3. No H1, H2 or H3 claim is made."
+  (c) Any design cell unresolved after the last re-run: "Not evaluable: unresolved cells. No H1, H2 or H3 claim is
+      made."
 -->
 
 ## What this can and cannot show
@@ -80,19 +86,20 @@ stopped press and the reactive robot can; the margin is a fixed latency margin, 
   learn effects triggered by events, such as "after a forklift passes, the press stops". That is future work. Nothing
   here tests it.
 - **If the robot part is not ready by the freeze, there is no H1-H3 claim.** The robot results are then descriptive.
-- **Nothing was tuned after looking at results.** No threshold was chosen from dev or test data. One learning limit
-  was changed on a stated reason that is not a result (disclosure 14).
+- **Nothing was tuned after looking at results.** No threshold was chosen from dev or test data. The one approved
+  change to a learning limit (fix (a), disclosure 16) is chosen from the tick period, not from a result.
 - **Not shown at all:** a real robot among real cameras (the real cameras never saw a robot), a real shop floor,
   safety certification.
 
 ## Disclosures
 
-Sources: `prereg/AMENDMENTS.md` (A1-A5, including the A5 erratum) and `prereg/PREREG_TWIN.md` section 11, which holds
+Sources: `prereg/AMENDMENTS.md` (A1-A6, including the A5 erratum) and `prereg/PREREG_TWIN.md` section 11, which holds
 the full list of 36 items. The ones below are the ones a reader needs first.
 
 Data and labels
 
-1. **All labels are made by Claude agents** (vision models), not by humans. This holds for dev and test labels.
+1. **All labels are made by Claude agents** (vision models), not by humans. This holds for dev and test labels. The
+   blind agreement between labeller agents covers camera 9 only, and its intervals ignore clustering.
 2. **Two test labeller agents.** One labelled person frames, one labelled stroke windows. Both read only
    `labels/TEST_RULES.md` and the test images.
 3. **Label file format fix.** The person-frame file `labels_frames.json` had no `stroke_windows` field. A fresh
@@ -102,8 +109,10 @@ Data and labels
    figures rest on n = 1.
 5. **Split risk.** Groups are clusters by background, lighting and layout, without the near-copy link. Real recording
    sessions may be split across groups, so near-duplicate footage can sit on both sides of the train/test line.
-6. **The split is unbalanced.** Camera 9 test has 109 unsafe and 5 safe clips. Camera 14 has 3 of 40 safe clips in
-   test. Figures are reported per stratum.
+   Also, 26 test clips belong to byte-identical sets (13 pairs inside test), and those sets carry different class
+   labels.
+6. **The split is unbalanced.** Camera 9 test has 109 unsafe and 5 safe clips, and no class-2 or class-4 clip.
+   Camera 14 has 3 of 40 safe clips in test. Figures are reported per stratum.
 7. **Four test clips were processed by machine without an agent looking at them** (7_tr1, 3_te7, 3_tr42, 6_tr12).
    Only clips whose pixels an agent viewed were kept out of test.
 8. **Calibration was refit.** The first calibration files used sources that are now dev or test. They were declared
@@ -114,9 +123,10 @@ Seal and procedure
 9. **The seal is procedural, on one machine.** The custodian and labeller agents run on a desktop. The builder lanes
    never read the sealed folder. The seal rests on agent separation, an access log and committed hashes. It is not
    a machine boundary, and it is not cryptographic.
-10. **Two freezes instead of one.** The real-clip code is frozen first (`prereg/FREEZE_REALCLIP`). The robot part is
-    frozen later (`prereg/FREEZE`). Test seeds come from a public random beacon (drand) only after the robot freeze.
-    The real-clip freeze moved from 08:30 to as late as 10:15 CEST by the user's decision.
+10. **Two freeze files instead of one.** The real-clip part is frozen by `prereg/FREEZE_REALCLIP`, the robot part by
+    `prereg/FREEZE`. Test seeds come from a public random beacon (drand) only after the robot freeze. The real-clip
+    freeze moved from 08:30 to as late as 10:15 CEST by the user's decision, and the user then chose both freezes on
+    one commit at 10:15 (A5). Real-clip outputs go only to the custodian until `FREEZE` is committed.
 11. **Cut design.** 3 conditions and 192 missions, not 5 conditions and 320. There is no timing-oracle condition and
     no no-map condition. Isaac, mover and body-shop (A-lite) runs are descriptive only and sit outside the sealed run.
 12. **Code hashes re-recorded by an append-only amendment.** The pre-registration text lists a git hash for 15 code
@@ -126,11 +136,12 @@ Seal and procedure
 Observer and twin
 
 13. **Twin camera.** On the real site files the twin's camera is `stat_v1`, a statistical model of detector noise
-    fitted on dev data. It is not rendered pixels. The older `camera_v0` stays on main only for the stub site and as
+    fitted on dev labels and dev detector tracks (plus train ROI data). It is not rendered pixels. The older `camera_v0` stays on main only for the stub site and as
     a noise reference.
 14. **Learning time is 20 minutes, not days 1-8.** The user chose "Try days 1-8, else 20 min". Days 1-8 were measured at
     about 90 s of wall time per 1,200 s simulated. That is about 14.4 hours per world, so it cannot finish before
-    submission. The observer learns for 20 minutes before each mission.
+    submission. The observer learns for 20 minutes before each mission. With 20 minutes of learning, the v1 slice
+    gave confidence 0 on every press before fix (a).
 15. **`keep_max_s` = 1200 s** (user decision). A confident model kept over mostly-missing data lives at most 1200 s
     after its last confident fit.
 16. **Fix (a), approved and still being tried.** It matches the press timing limits to the 2 Hz observation tick
@@ -139,16 +150,21 @@ Observer and twin
     and new code hashes.
 17. **ROI-only occlusion, in clips and in the twin.** A person or vehicle box that overlaps a press's ram region
     marks that press MISSING. The floor-plane rule is off for real clips (user decision) and in the twin (A4).
+    Two differences stand and were not changed (A6): the hold after an overlap is 1.33 s on real clips but 34 s
+    (camera 9) and 7.5 s (camera 14) in the twin; and in the twin only movers the camera detects that tick occlude,
+    while on real clips every confirmed track box occludes, plus every person or forklift detection at conf 0.4 or
+    above.
     Limit, dev figures: inside hidden spans, 336 of 428 samples (0.785) were flagged, so 21.5 % were not. On the 2 Hz
     ticks inside hidden spans, 31 of 35 were MISSING. Outside hidden spans, 145 of 292 (0.497) were also MISSING,
     mostly from the watchdog.
 18. **Strokes are scored at the bottom of the stroke (BDC)**, the label definition. The tolerance is +/- 0.25 s.
 19. **Fixed latency margin, not a certified one.** The margin is the 99th-percentile map age times the top speed,
-    rounded up to whole cells. There is no conformal certificate. If the margin does not fit the grid, the robot
-    part is descriptive.
+    rounded up to whole cells. There is no conformal certificate. If the margin does not fit the grid (at most 1.0 m,
+    so a map age p99 of at most 0.5578 s), the robot part is descriptive. The margin is never cut to fit.
 20. **Stop-model limits.** Press timing is learned for two presses only (periods 1.96 s and 1.69 s). All zone-14 press
     timing is assumed. Guarding and reset are assumed, not observed.
-21. **r0 is a camera-9 value.** It was set from 20 blind dev frames, all from camera 9, and applied to both cameras.
+21. **r0 is a camera-9 value.** It was set from the blind dev frames (19 scored of 20), all from camera 9, and applied
+    to both cameras.
 
 ## Reproduce
 
@@ -174,13 +190,14 @@ Dev worlds (robot development only; seeds 0-3). The script refuses unless the tr
 Dev robot batch on the CPU double (dev worlds 0-3 only):
 
 ```
-.venv/Scripts/python.exe scripts/run_double.py --dev --out out/double/dev1 --worlds 0 --backend modal
+.venv/Scripts/python.exe scripts/run_double.py --dev --out out/double/dev1 --worlds 0,1,2,3 --backend modal
 ```
 
-Fixed margin from dev runs (only before the robot freeze; it refuses to overwrite a frozen file):
+Fixed margin from the learned-arm dev runs (only before the robot freeze; it refuses to overwrite a frozen file;
+`--grid-margin-m 1.0` is the PREREG section 7 (b) limit and must be given, the script has no default):
 
 ```
-.venv/Scripts/python.exe scripts/write_fixed_margin.py --runs RUN_DIR [RUN_DIR ...] --out twin/m7_margin.json
+.venv/Scripts/python.exe scripts/write_fixed_margin.py --runs RUN_DIR [RUN_DIR ...] --grid-margin-m 1.0     --out twin/m7_margin.json
 ```
 
 Real-clip dev dry run (dev clips and dev labels only, never the sealed folder):
@@ -250,7 +267,7 @@ Code: MIT (`LICENSE`).
 ## Where to read more
 
 - `prereg/PREREG_TWIN.md`: the pre-registration (what is fixed and what cannot be amended).
-- `prereg/AMENDMENTS.md`: amendments A1-A5 with time and evidence.
+- `prereg/AMENDMENTS.md`: amendments A1-A6 with time and evidence.
 - `STATUS.md`: gate log with times and commits.
 - `docs/probes/REALCLIP_RUN.md`: custodian commands for the real-clip run.
 - `docs/LABEL_AGREEMENT.md`: agreement between the two labeller agents.
