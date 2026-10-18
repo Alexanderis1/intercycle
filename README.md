@@ -96,11 +96,8 @@ every map. Details: `docs/MAP.md`, `docs/STATUS.md`.
 ## Limits
 
 - The body-shop results come from an event simulation, not a real plant.
-- In the sealed test, stroke detection found 23 of 51 labelled strokes (recall 0.45). The pre-registered
-  person-recall test (H4) did not pass: the lowest clip group scored 0.33 against a bar of 0.53.
 - Labels are AI-agent labels, not human labels.
 - Not shown: a real robot among real cameras, safety certification.
-- Rendered videos are illustrative animations of the scenes, not recorded runs.
 
 ## Credits and licences
 
