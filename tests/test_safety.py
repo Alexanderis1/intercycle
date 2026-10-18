@@ -37,7 +37,18 @@ def test_faulty_code_never_less_safe_than_no_code(fault, runs):
     assert b_lost <= a_lost, (fault, b_lost, a_lost)
 
 
-@pytest.mark.xfail(reason="E-W6, pre-existing since 4660155; real fix in lane S8 (A-lite)", strict=False)
+# E-W6 root cause (lane S8, measured on B seeds 5, 6, 10-17, 07:00-13:00; not fixed here, > 45 min and robot-side files):
+# 4660155 made the robot's own camera noisy (OwnCamera: occlusion and false motion read as "moving", 0.3-1.0 s latency)
+# and B's loss now comes from two places. (1) Walkway trips, all of them: Runner._cross_walkway sets `seen_active` on
+# any "moving" reading, so an occlusion or a false motion counts as a seen transfer and the robot steps on at a random
+# point of the transfer cycle. Counting only positive evidence (3 visible samples with motion) removes them (B walkway
+# trips 14 -> 1; A 21 -> 2 on seeds 5, 6, 10-13; the rule is fixed in intercycle/alite/episode.py only). (2) Zone trips and
+# holds at "predicted idle window fits" / "no prediction, reactive fallback" entries: learned-observer prediction errors
+# that the delayed camera does not veto (intercycle/robot/policies.py, intercycle/sim/observer_learned.py). With the
+# camera noise off (miss, false, occlusion = 0) seeds 5 and 6 give 0 trips and 0 holds. Runs are path dependent, so a
+# per-seed 0/0 assertion stays fragile even after (1).
+@pytest.mark.xfail(reason="E-W6: noisy own camera since 4660155 (walkway rule fails open on occlusion / false motion; "
+                          "camera does not veto prediction errors); cause above, fix not in lane S8", strict=False)
 def test_clean_broadcast_gives_zero_loss():
     for seed in (5, 6):
         m = run("B", seed).metrics
