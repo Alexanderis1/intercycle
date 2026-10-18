@@ -93,7 +93,9 @@ class Scenario(BaseModel):
     site_id: int
     key_id: int
     hall: dict
-    data_hall: dict
+    # Body shop only. A press-shop twin scenario (twin/compile.py) has no data hall: both stay empty, so code that
+    # reads them in twin mode fails closed (KeyError) instead of using body-shop geometry.
+    data_hall: dict = Field(default_factory=dict)
     shifts: list[Shift]
     breaks: list[Break]
     shift_change_stop_min: float
@@ -105,11 +107,22 @@ class Scenario(BaseModel):
     robot: dict
     ble: Ble
     cameras: list[tuple[float, float]]
-    data_hall_targets: dict
+    data_hall_targets: dict = Field(default_factory=dict)
     seeds: dict = Field(default_factory=dict)
 
     def machine(self, mid: str) -> Machine:
         return next(m for m in self.machines if m.id == mid)
+
+    @property
+    def site_extent(self) -> tuple[float, float, float, float]:
+        """(x0, z0, x1, z1) of the whole floor: the hall, extended east to the data hall's far wall in the body shop.
+        A twin zone has no data hall, so it is the hall (the zone's extent). Twin-mode code reads this instead of
+        the data hall (tests/test_twin_mode_tokens.py)."""
+        x0, x1 = (float(v) for v in self.hall["x"])
+        z0, z1 = (float(v) for v in self.hall["z"])
+        if self.data_hall:
+            x1 = max(x1, float(self.data_hall["x"][1]))
+        return x0, z0, x1, z1
 
     def line_stops(self) -> list[tuple[float, float, str]]:
         """Planned line stops within one day: breaks and shift changes, as (t0, t1, kind)."""

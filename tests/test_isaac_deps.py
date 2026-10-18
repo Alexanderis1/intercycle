@@ -1,7 +1,7 @@
 """Isaac-side dependencies (PLAN_TWIN §2 "Truth guards"): the twin modules the Isaac container imports may only pull
 numpy, astropy, pydantic, nacl, yaml and the standard library (plus repo code that obeys the same rule).
 
-Every module under twin/ is treated as Isaac-side unless listed in CPU_ONLY (none at G0). Two checks, both fail closed:
+Every module under twin/ is treated as Isaac-side unless listed in CPU_ONLY (twin.build_worlds). Two checks, both fail closed:
 
 1. **Static (AST) scan** of every Isaac-side twin file and of every repo module they reach by static imports
    (`_truth_scan.import_closure`). It collects every import anywhere in the file, including imports inside functions
@@ -26,7 +26,9 @@ from _truth_scan import REPO, import_closure, module_name, parse, py_files, rel,
 
 ALLOWED = ("numpy", "astropy", "pydantic", "nacl", "yaml", "twin", "intercycle")
 REPO_PACKAGES = ("twin", "intercycle")
-CPU_ONLY: tuple[str, ...] = ()          # twin modules that never run in the Isaac container (none yet)
+# twin modules that never run in the Isaac container: build_worlds writes the world files the container receives
+# (it imports scipy through intercycle.sim.geometry); twin.compile itself stays Isaac-safe.
+CPU_ONLY: tuple[str, ...] = ("twin.build_worlds",)
 # (repo-relative file, top-level package) -> why the lazy (function-level) import is not Isaac-side.
 LAZY_EXCEPTIONS: dict[tuple[str, str], str] = {
     ("twin/schemas/tables.py", "pyarrow"): "validate_table() checks parquet files on the CPU side only",
