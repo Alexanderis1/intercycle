@@ -125,7 +125,10 @@ def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float
     the mission start, the same for all three conditions. `scripts` = the generated day objects the plant files were
     written from (write_days); a day missing there is generated here. Returns (snapshots, stats)."""
     t_wall = time.time()
-    ob = OL.ObserverLive(ctx["spec"], OL.ObserverLiveConfig(margin_path=str(ctx["margin"])))
+    # the observer config follows the camera model that writes the observations (observer_live.config_for_camera, as
+    # the slice and the twin broadcaster do): stat_v1's fitted motion threshold, never the 0.5 placeholder (fail closed)
+    model = PL.make_camera(ctx["site"], world.seed, 1).provenance()["model"]
+    ob = OL.ObserverLive(ctx["spec"], OL.config_for_camera(model, str(ctx["margin"])))
     pending = sorted(slots, key=lambda s: s[2])
     last_day = max(d for d, _, _ in pending)
     snaps: dict[tuple[int, str], bytes] = {}
