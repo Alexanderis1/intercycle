@@ -379,6 +379,28 @@ def test_plant_uses_stat_v1_and_its_hold():
         plant.ObsAdapter(SITE)                         # type: ignore[call-arg]  # no default hold (fail closed)
 
 
+def test_observer_live_reads_the_stat_v1_motion_threshold(tmp_path):
+    """observer_live's threshold for stat_v1 zone_motion comes from twin/stat_v1_params.json (not the 0.5
+    placeholder), with its source recorded, and observer_live does not import twin.camera (a truth reader)."""
+    import ast
+
+    from twin import observer_live as OL
+    thr, src = OL.stat_v1_motion_thr()
+    assert thr == CAM.MOTION_THR and thr > 1.0                 # idle median 1.0: 0.5 would read every press as motion
+    assert src.startswith("stat_v1") and "energy.motion_thr" in src
+    cfg = OL.config_for_stat_v1("unused_margin.json")
+    assert cfg.motion_thr == thr and cfg.motion_thr_source == src
+    assert not str(cfg.motion_thr_source).upper().startswith("PLACEHOLDER")
+    tree = ast.parse((CAM.REPO / "twin" / "observer_live.py").read_text(encoding="utf-8"))
+    mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)} | {
+        a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert not any(m and m.startswith("twin") for m in mods), mods
+    bad = tmp_path / "p.json"
+    bad.write_text(json.dumps({"contract": "other"}), encoding="utf-8")
+    with pytest.raises(ValueError):
+        OL.stat_v1_motion_thr(bad)
+
+
 def _site_v1_plant(tmp_path, world: int, seconds: float, intents=(), segments=()):
     """A twin plant on twin/site.yaml (the real site: 6 presses, all running), with a safety file derived from
     twin/safety.yaml for the site's id and presses (twin/safety.yaml covers site_v0 only)."""
