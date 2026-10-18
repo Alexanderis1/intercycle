@@ -24,6 +24,7 @@ Frames: plan (x along the line, z across) -> ROS map frame x = plan x, y = plan 
 from __future__ import annotations
 
 import math
+import os
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -175,6 +176,38 @@ def to_occupancy_data(g: np.ndarray):
 
 
 # ------------------------------------------------------------------------------------------------ site (public map)
+def run_cfg_scenario(cfg: dict) -> str | None:
+    """The episode's scenario file from its run_cfg (PLAN_TWIN S1b: S.load(path) threaded through run_cfg).
+
+    No / empty "scenario" key -> None = body-shop mode (intercycle.scenario.DEFAULT). A relative path is resolved
+    against run_cfg["world_dir"] (the twin's compiled scenario ships with the world files); absolute paths are kept.
+    Anything else fails closed."""
+    sp = cfg.get("scenario")
+    if sp is None or sp == "":
+        return None
+    if not isinstance(sp, str):
+        raise TypeError(f"run_cfg scenario must be a path string, got {type(sp).__name__}")
+    if not os.path.isabs(sp):
+        wd = cfg.get("world_dir")
+        if not wd:
+            raise ValueError(f"run_cfg scenario {sp!r} is relative but run_cfg has no world_dir")
+        sp = os.path.join(wd, sp)
+    return sp
+
+
+def scenario_ros_arg(cfg: dict) -> str:
+    """The ROS argument that hands the same scenario to the robot-side processes (observer_bridge -> Site, timing_planner
+    -> TimingCore): " -p scenario:=<path>", or "" in body-shop mode. The robot side never opens run_cfg.json (it holds
+    the plant seed, which is truth): the cfg builder appends this to their launch commands instead. A relative path
+    becomes $IC_WORLD/<path> (the episode exports IC_WORLD = run_cfg["world_dir"] to every launched command)."""
+    sp = cfg.get("scenario")
+    if sp is None or sp == "":
+        return ""
+    if not isinstance(sp, str) or any(c in sp for c in " \t\n'\"`;&|$"):
+        raise ValueError(f"run_cfg scenario must be a plain path string, got {sp!r}")
+    return f" -p scenario:={sp if os.path.isabs(sp) else '$IC_WORLD/' + sp}"
+
+
 @dataclass
 class Site:
     """The robot's provisioned public site map: machine ids (broadcast index order), hazard-zone rectangles."""

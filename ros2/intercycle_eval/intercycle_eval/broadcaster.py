@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 
 from nacl.signing import SigningKey
@@ -51,6 +52,79 @@ def _models_patch(path: str):
     offs = tuple(d["offsets"])
     OL.learned_models = lambda scn, seed=OL.TRAIN_SEED, window=OL.TRAIN_WINDOW: (models, offs)  # noqa: E731
     return d
+
+
+# Any assignment of a parameter named `scenario`, whatever precedes it: ' -p scenario:=', a node prefix
+# ('timing_planner:scenario:='), or quotes ("'scenario:=", '"scenario:='). Matching with no '-p' required is the
+# fail-closed side (a 'scenario:=' remap or launch argument counts too). The value stops at whitespace or a quote.
+_ROS_SCENARIO = re.compile(r"(?<!\w)scenario:=([^\s'\"]*)")
+# A ROS params file could set `scenario` where this check cannot see it: refused in robot-side commands.
+_PARAMS_FILE = re.compile(r"--params-file|(?<!\w)params_file:=")
+BRIDGE_MODULE = "intercycle_nav.observer_bridge"
+
+
+def _cmd_text(name: str, cmd) -> str:
+    """A launch command as text: a shell string as is, an argv list (episode._start_cmd's list form, $VAR expansion)
+    joined by spaces. Anything else fails closed."""
+    if isinstance(cmd, str):
+        return cmd
+    if isinstance(cmd, list) and all(isinstance(c, (str, int, float)) for c in cmd):
+        return " ".join(str(c) for c in cmd)
+    raise TypeError(f"run_cfg {name} must be a shell string or an argv list, got {cmd!r}")
+
+
+def check_robot_scenario(cfg: dict) -> None:
+    """Fail closed on a half-threaded scenario (S1b item 3, audit fix1 / fix2).
+
+    The robot side (observer_bridge -> masks.Site, timing_planner -> TimingCore) gets the scenario ONLY through the
+    ' -p scenario:=...' ROS argument in its launch strings (masks.scenario_ros_arg); it never reads run_cfg. If the
+    broadcaster loaded run_cfg["scenario"] while those strings lack the argument, it would sign frames with the twin
+    site_id, the robot would load the body shop, and every frame would be rejected as 'wrong_site' (a counted
+    rejection, not an error): the learned / oracle conditions would silently run without a feed. So: goal_cmd and
+    every observer_bridge command in extra_launch must carry exactly one scenario assignment (any form, see
+    _ROS_SCENARIO) equal to scenario_ros_arg(cfg), none in body-shop mode (the reverse mismatch), and no ROS params
+    file. In twin mode both commands must exist. Commands are shell strings or argv lists.
+
+    It compares launch strings only and needs no world_dir (a relative scenario is $IC_WORLD/<rel> in the strings),
+    so the EVAL runner can call it when it BUILDS each cfg, before episode.py adds world_dir; resolving the path is
+    load_scenario's job at run time. Raises ValueError (TypeError for malformed commands)."""
+    from intercycle_nav.masks import scenario_ros_arg
+
+    arg = scenario_ros_arg(cfg)                            # validates the key; needs no world_dir
+    want = [arg.split(":=", 1)[1]] if arg else []
+    goal = _cmd_text("goal_cmd", cfg.get("goal_cmd") or "")
+    extra = cfg.get("extra_launch") or []
+    if not isinstance(extra, list):
+        raise TypeError("run_cfg extra_launch must be a list of commands")
+    bridges = [c for c in (_cmd_text("extra_launch item", x) for x in extra) if BRIDGE_MODULE in c]
+    if want and not goal:
+        raise ValueError(f"run_cfg scenario {cfg['scenario']!r} is set but there is no goal_cmd (timing_planner) to "
+                         "carry it to the robot side")
+    if want and not bridges:
+        raise ValueError(f"run_cfg scenario {cfg['scenario']!r} is set but extra_launch has no {BRIDGE_MODULE} "
+                         "command to carry it to the robot side")
+    for name, cmd in [("goal_cmd", goal)] + [(BRIDGE_MODULE, c) for c in bridges]:
+        if _PARAMS_FILE.search(cmd):
+            raise ValueError(f"{name} loads a ROS params file, which could set `scenario` unseen by this check: "
+                             "pass parameters with -p only on the robot-side launch strings")
+        got = _ROS_SCENARIO.findall(cmd)
+        if got != want:
+            raise ValueError(f"{name} carries scenario argument(s) {got}, run_cfg wants {want or 'none (body shop)'}: "
+                             f"append masks.scenario_ros_arg(cfg) = {arg!r} to the robot-side launch strings")
+
+
+def load_scenario(cfg: dict):
+    """(Scenario, path) of the episode: run_cfg["scenario"] (twin mode: the compiled twin scenario; relative = inside
+    world_dir), else the body-shop default (path None). The robot side gets the same path as a ROS parameter
+    (intercycle_nav.masks.scenario_ros_arg), never by reading run_cfg; check_robot_scenario refuses the run first if
+    its launch strings do not carry exactly that argument, then run_cfg_scenario resolves the path (a relative one
+    needs the world_dir that episode.py adds to run_cfg)."""
+    from intercycle import scenario as S
+    from intercycle_nav.masks import run_cfg_scenario
+
+    check_robot_scenario(cfg)
+    sp = run_cfg_scenario(cfg)
+    return (S.load(sp) if sp else S.load()), sp
 
 
 class OracleFeed:
@@ -99,14 +173,13 @@ def main() -> None:
     pcfg = cfg.get("plant") or {}
     log = open(os.path.join(out_dir, "broadcaster.jsonl"), "a")
 
-    from intercycle import scenario as S
     from intercycle.observer import mapping as M
     from intercycle.sim.world import Freeze, World
     from intercycle.types import DAY0_UNIX
     from intercycle_nav.broadcast import Broadcaster, pack_map_for_key
     from intercycle_nav.feed import FeedWriter
 
-    scn = S.load()
+    scn, scn_path = load_scenario(cfg)
     seed, t0 = int(pcfg["seed"]), float(pcfg["plant_t0"])
     T = float(cfg.get("seconds", 600.0))
     world = World(scn, seed, t0, t0 + T + 120.0)
@@ -118,7 +191,8 @@ def main() -> None:
     lm = M.LayeredMap.load(os.path.join(wdir, a.map))
     bundle = pack_map_for_key(lm, key, version=1, issue_time=DAY0_UNIX + t0 - 60.0)
     info = {"t_wall": time.time(), "condition": a.condition, "seed": seed, "plant_t0": t0,
-            "map": a.map, "map_bytes": bundle.stats.get("compressed_bytes"), "verify_key": vk}
+            "map": a.map, "map_bytes": bundle.stats.get("compressed_bytes"), "verify_key": vk,
+            "scenario": scn_path or "default"}
     if a.condition == "learned":
         from intercycle.sim.observer_learned import LearnedObserver
 
