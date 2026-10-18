@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> dict:
     out.mkdir(parents=True, exist_ok=True)
 
     t = time.time()
-    e = evaluate(seeds, t0=T0, t1=T0 + args.hours * 3600, workers=workers)
+    e = evaluate(seeds, t0=T0, t1=T0 + round(args.hours * 3600), workers=workers)
     wall = time.time() - t
     cmd = "python -m intercycle.eval.bodyshop " + (
         "--quick" if args.quick else f"--seeds {args.seeds} --hours {args.hours:g}")
