@@ -220,8 +220,7 @@ class ObserverBridge(Node):
         """Reactive arm: the learned light-curtain zone rule on its own-camera windows; no map, no speed mask."""
         assert self.reactive is not None
         held = self.site.zone_of(*xy, pad=0.5) if xy is not None else None      # same held_pad_m as masks.snapshot
-        kg, floor, kinfo = R.reactive_masks(self.grid, self.site, self.reactive.windows(t), t, self.p.horizon_s,
-                                            self.p.static_margin_m, held)
+        kg, floor, kinfo = R.reactive_masks(self.grid, self.site, self.reactive.windows(t), t, self.p.horizon_s, held)
         sg, sinfo = self.grid.zeros(), {"speed_cells": 0}
         clear = xy if self._robot_in_keepout(xy) else None
         kg, sg = K.enforce_monotone(kg, sg, floor, self.site, self.grid, robot_xy=clear, self_clear_r=self.p.self_clear_r)

@@ -310,12 +310,13 @@ def zone_open(windows, t: float, horizon_s: float) -> bool:
     return any(a <= t and b >= t + horizon_s for a, b in windows or [])
 
 
-def reactive_masks(grid, site, windows: dict, t: float, horizon_s: float, static_margin_m: float,
+def reactive_masks(grid, site, windows: dict, t: float, horizon_s: float,
                    held_id: str | None) -> tuple[np.ndarray, np.ndarray, dict]:
-    """(keep-out, floor, info) for the reactive arm, with the learned arm's light-curtain rule: a hazard zone is keep-out
-    unless its own-camera window covers [t, t + H] or the robot is inside it (held). No map: no L1 envelopes, no
-    UNKNOWN cells, no speed mask (those are the observer's product). Keep-out and floor are the same here (the floor is
-    what nothing may free)."""
+    """(keep-out, floor, info) for the reactive arm, with the learned arm's light-curtain rule (masks.keepout_mask /
+    keepout_floor): a hazard zone's BARE rectangle is keep-out unless its own-camera window covers [t, t + H] or the
+    robot is inside it (held); the site's hard keep-outs always. No map: no L1 envelopes, no UNKNOWN cells, no speed
+    mask (those are the observer's product). Keep-out and floor are the same here (the floor is what nothing may
+    free)."""
     from intercycle_nav.masks import KEEP_OUT
 
     g = grid.zeros()
@@ -325,8 +326,7 @@ def reactive_masks(grid, site, windows: dict, t: float, horizon_s: float, static
         op = mid == held_id or zone_open(windows.get(mid), t, horizon_s)
         per[mid] = "open" if op else "closed"
         if not op:
-            m = static_margin_m
-            grid.fill_boxes(g, [(r[0] - m, r[1] - m, r[2] + m, r[3] + m)], KEEP_OUT)
+            grid.fill_boxes(g, [r], KEEP_OUT)               # the bare rect, as learned (no static margin)
     return g, g.copy(), {"condition": CONDITION, "source": "own_camera", "zones": per,
                          "keepout_cells": int((g > 0).sum())}
 

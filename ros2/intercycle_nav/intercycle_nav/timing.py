@@ -12,7 +12,8 @@ least `need_s` left (inside travel + dwell + exit + margin) and (b) the robot's 
 target machine, `confirm_n` consecutive fresh observations spanning at least `local_check_latency_s`.
 Per condition:  learned / oracle -> (a) and (b);  none -> (b) only (no map);  static -> never enter, inspect
 from the wait pose at the boundary;  reactive (E-W4 baseline) -> (a) and (b) exactly as learned, with the windows from its
-own camera (`reactive.py`); a machine it has no fresh view of is planned as reachable so it goes there to look.
+own camera (`reactive.py`); a machine with no window now (unseen, stale, moving or too little history) is planned as
+reachable, so it goes to the boundary to wait and look (its windows never cover a future still run).
 """
 from __future__ import annotations
 
@@ -125,8 +126,12 @@ class TimingCore:
             if condition == "none":
                 return None
             w = windows.get(n[3:])
-            if condition == "reactive" and w is None:
-                return None                              # reactive: never seen / stale -> go to the boundary and look
+            if condition == "reactive" and not w:
+                # reactive: its windows only ever cover the CURRENT still run, never a future one, so "no window now"
+                # (never seen, stale, moving, or too little history: None or []) is planned like an unseen machine:
+                # the inside node is reachable, the robot goes to the wait pose, and the open-window check (a) and the
+                # camera check (b) at the boundary (wait_for_entry) and the dwell cut decide whether it enters
+                return None
             # the robot crosses the boundary right after leaving the wait node, so the zone must already be idle at
             # departure: arrival inside is allowed from window start + entry time
             return [] if w is None else [(float(a) + self.enter_time(self._tg_of[n]), float(b)) for a, b in w]

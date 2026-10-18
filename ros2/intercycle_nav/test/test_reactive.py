@@ -173,12 +173,28 @@ def test_planner_explores_unknown_and_waits_on_observed():
     t0, xy = 1000.0, (4.0, 32.0)
     unknown = core.plan_target(tgs["HEM1"], t0, xy, {}, "reactive")
     assert unknown is not None and unknown.inside_xy is not None             # never seen: go and look
-    assert core.plan_target(tgs["HEM1"], t0, xy, {"HEM1": []}, "reactive") is None   # seen, no window: not now
-    w = {"HEM1": [(t0 + 100.0, t0 + 130.0)], "SEAL1": [(t0 + 300.0, t0 + 330.0)]}
+    seen = core.plan_target(tgs["HEM1"], t0, xy, {"HEM1": []}, "reactive")   # seen, no window now: still go and wait
+    assert seen is not None and seen.inside_xy is not None
+    assert core.plan_target(tgs["HEM1"], t0, xy, {"HEM1": []}, "learned") is None   # learned: [] means no window
+    w ={"HEM1": [(t0 + 100.0, t0 + 130.0)], "SEAL1": [(t0 + 300.0, t0 + 330.0)]}
     a = core.choose([tgs["HEM1"], tgs["SEAL1"]], t0, xy, w, "reactive")
     b = core.choose([tgs["HEM1"], tgs["SEAL1"]], t0, xy, w, "learned")
     assert a is not None and b is not None
     assert (a.target.id, a.t_depart_wait, a.t_goal) == (b.target.id, b.t_depart_wait, b.t_goal)   # same SIPP planner
+
+
+def test_all_targets_seen_without_window_still_plan_the_nearest_boundary():
+    """Audit fix 1: every remaining machine seen with [] (moving or too little history) must give a plan, never None
+    (None -> the robot stands still and skips the target after max_wait without ever waiting at its boundary)."""
+    core = T.TimingCore.from_scenario(S.load())
+    tgs = [t for t in core.graph.mission() if t.kind == "machine"]
+    t0, xy = 1000.0, (4.0, 32.0)
+    w = {t.machine: [] for t in tgs}
+    a = core.choose(tgs, t0, xy, w, "reactive")
+    b = core.choose(tgs, t0, xy, {}, "none")                   # no window logic at all: the nearest boundary first
+    assert a is not None and a.inside_xy is not None
+    assert b is not None and a.target.id == b.target.id and a.t_arrive_wait == pytest.approx(b.t_arrive_wait)
+    assert core.choose(tgs, t0, xy, w, "learned") is None       # learned keeps its rule: [] = no idle window known
 
 
 def test_reactive_masks_follow_the_learned_zone_rule():
@@ -190,11 +206,16 @@ def test_reactive_masks_follow_the_learned_zone_rule():
     t = 50.0
     for wins, held, closed in (({}, None, True), ({mid: [(40.0, 53.0)]}, None, True),     # window ends inside H = 6 s
                                ({mid: [(40.0, 80.0)]}, None, False), ({}, mid, False)):
-        keep, floor, info = R.reactive_masks(grid, site, wins, t, 6.0, 0.15, held)
+        keep, floor, info = R.reactive_masks(grid, site, wins, t, 6.0, held)
         assert bool(keep[c].any()) is closed and np.array_equal(keep, floor)
         assert info["zones"][mid] == ("closed" if closed else "open")
-    keep, _, _ = R.reactive_masks(grid, site, {}, t, 6.0, 0.15, None)
+    keep, _, _ = R.reactive_masks(grid, site, {}, t, 6.0, None)
     assert all(keep[grid.box_slice(*r)].all() for r in site.rects.values())    # nothing known: every zone keep-out
+    # audit fix 5: a closed zone is the BARE rect, exactly as learned's keepout_floor (no static margin)
+    p = K.MaskParams()
+    snap = K.Snapshot(t, True, 1, True, 0.0, 0, [K.MachineView(m, i, "UNKNOWN", None, None) for i, m in enumerate(site.ids)])
+    learned_floor = K.keepout_floor(grid, "learned", site, snap, object(), p)       # every zone closed (no window)
+    assert np.array_equal(keep, learned_floor)
 
 
 def test_snapshot_json_shape_matches_what_the_planner_reads():
