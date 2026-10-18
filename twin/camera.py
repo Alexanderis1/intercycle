@@ -386,6 +386,7 @@ class CameraStatV1:
         self.press_centre = {p.id: np.asarray(p.footprint.value, float).mean(0) for p in site.presses}
         self.press_prism = {p.id: _poly_prism(p.footprint.value, PRESS_H_M) for p in site.presses}
         self.tracks: dict[str, _Track] = {}
+        self._pboxes: dict[str, list[tuple[tuple, float]]] | None = None
         self.hold_s = self._hold_s()
         self.err_log: list[tuple[str, float, float]] | None = None   # tests: (mover, dx, dz) per true detection
         self.stats = {"ticks": 0, "true": 0, "seen": 0, "hidden": 0, "occluded": 0, "missed": 0, "gross": 0,
@@ -415,6 +416,18 @@ class CameraStatV1:
         if not ok.all():
             return None
         return _bbox(raw)
+
+    def _press_boxes(self) -> dict[str, list[tuple[tuple, float]]]:
+        """Image boxes and depths of the press prisms per framing (static: computed once per camera)."""
+        if self._pboxes is None:
+            out: dict[str, list[tuple[tuple, float]]] = {}
+            for pid, prism in self.press_prism.items():
+                for fid in self.zones[self.presses[pid].zone].framings:
+                    b = self._box(fid, prism)
+                    if b is not None:
+                        out.setdefault(fid, []).append((b, self._depth(fid, self.press_centre[pid])))
+            self._pboxes = out
+        return self._pboxes
 
     def _depth(self, fid: str, xz: Any) -> float:
         return float(np.hypot(*(np.asarray(xz, float) - self.true[fid].nadir)))
@@ -491,13 +504,7 @@ class CameraStatV1:
             dep = self._depth(fid, (m.x, m.z))
             seen.append((m, fid, raw, box, dep))
             boxes.setdefault(fid, []).append((box, dep, m.id))
-        press_boxes: dict[str, list[tuple[tuple, float]]] = {}
-        for pid, prism in self.press_prism.items():
-            zid = self.presses[pid].zone
-            for fid in self.zones[zid].framings:
-                b = self._box(fid, prism)
-                if b is not None:
-                    press_boxes.setdefault(fid, []).append((b, self._depth(fid, self.press_centre[pid])))
+        press_boxes = self._press_boxes()
         cls_l: list[str] = []
         xs: list[float] = []
         zs: list[float] = []
