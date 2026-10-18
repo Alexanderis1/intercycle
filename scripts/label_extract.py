@@ -10,7 +10,7 @@ writes to $INTERCYCLE_DATA/labelling/dev/ (gitignored; the images show unmasked 
 * kymo <sample_id> x0 x1       space-time strips of a stroke window (column mean of native x0..x1 per frame)
 
     python scripts/label_extract.py frames | windows [--sample labels/dev/sample_s1.json]
-    python scripts/label_extract.py crop <sample_id> x0 y0 x1 y1 [--step 20] | kymo <sample_id> x0 x1
+    python scripts/label_extract.py crop <sample_id> x0 y0 x1 y1 [--step 20] | kymo <sample_id> x0 x1 [y0 y1]
 """
 from __future__ import annotations
 
@@ -158,10 +158,12 @@ def cmd_crop(sid: str, x0: int, y0: int, x1: int, y1: int, step: int, out: Path 
     return out
 
 
-def cmd_kymo(sid: str, x0: int, x1: int, frames_per_img: int = 90, px_per_frame: int = 8, yscale: int = 4) -> list[Path]:
+def cmd_kymo(sid: str, x0: int, x1: int, y_lo: int | None = None, y_hi: int | None = None, frames_per_img: int = 90,
+             px_per_frame: int = 8, yscale: int = 4, trace: bool = False) -> list[Path]:
     """Space-time strip of a stroke window: for native columns x0..x1 (inclusive), the column-mean grey of every
-    decoded frame of windows/<sid>.npz, one strip column per frame, upscaled; native y on the left, PTS ticks on
-    every frame (labelled every 4th). The labeller reads the BDC (lowest image position of the ram band) off it."""
+    decoded frame of windows/<sid>.npz, one strip column per frame, upscaled; native y on the left (optionally only
+    rows y_lo..y_hi), PTS ticks on every frame (labelled every 4th, with a faint vertical line). The labeller reads the
+    BDC (lowest image position of the ram band) off it."""
     import cv2
 
     s = store()
@@ -171,7 +173,12 @@ def cmd_kymo(sid: str, x0: int, x1: int, frames_per_img: int = 90, px_per_frame:
     a, b = x0 - bx0, x1 - bx0 + 1
     if a < 0 or b > crops.shape[2] or a >= b:
         raise SystemExit(f"columns {x0}-{x1} outside the window crop x {bx0}-{bx0 + crops.shape[2] - 1}")
-    grey = crops[..., a:b, :].astype(np.float32).mean(axis=(2, 3))          # (N frames, h)
+    ra = 0 if y_lo is None else max(0, y_lo - by0)
+    rb = crops.shape[1] if y_hi is None else min(crops.shape[1], y_hi - by0 + 1)
+    if ra >= rb:
+        raise SystemExit(f"rows {y_lo}-{y_hi} outside the window crop")
+    by0 += ra
+    grey = crops[:, ra:rb, a:b, :].astype(np.float32).mean(axis=(2, 3))     # (N frames, h)
     outs: list[Path] = []
     (s / "kymo").mkdir(exist_ok=True)
     for start in range(0, len(pts), frames_per_img):
@@ -187,13 +194,22 @@ def cmd_kymo(sid: str, x0: int, x1: int, frames_per_img: int = 90, px_per_frame:
             x = pad_left + k * px_per_frame + px_per_frame // 2
             cv2.line(canvas, (x, pad_top - 6 if k % 4 else pad_top - 14), (x, pad_top - 1), (0, 255, 255), 1)
             if k % 4 == 0:
+                cv2.line(canvas, (x, pad_top), (x, canvas.shape[0] - 1), (0, 90, 90), 1)
                 cv2.putText(canvas, f"{pts[start + k]:.2f}", (x - 14, 10 + 10 * ((k // 4) % 2)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.33, (0, 255, 255), 1)
+        if trace:      # viewing aid: per frame, the rows of the strongest bright-above (red) / dark-above (green) edge
+            prof = cv2.GaussianBlur(seg.astype(np.float32), (1, 5), 0)
+            edge = prof[:-2, :] - prof[2:, :]                               # (h-2, n): g(y-1) - g(y+1)
+            for k in range(seg.shape[1]):
+                cx = pad_left + k * px_per_frame + px_per_frame // 2
+                for yy, col in ((int(np.argmax(edge[:, k])) + 1, (0, 0, 255)),
+                                (int(np.argmin(edge[:, k])) + 1, (0, 200, 0))):
+                    cv2.circle(canvas, (cx, pad_top + yy * yscale + yscale // 2), 2, col, -1)
         for yy in range(0, seg.shape[0], 10):
             y = pad_top + yy * yscale
             cv2.putText(canvas, str(by0 + yy), (2, y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (0, 0, 255), 1)
             cv2.line(canvas, (pad_left - 4, y), (pad_left - 1, y), (0, 0, 255), 1)
-        out = s / "kymo" / f"{sid}_k{x0}_{x1}_{start}.png"
+        out = s / "kymo" / f"{sid}_k{x0}_{x1}_y{by0}{'_tr' if trace else ''}_{start}.png"
         cv2.imwrite(str(out), canvas)
         outs.append(out)
     return outs
@@ -212,8 +228,9 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "windows":
         cmd_windows(sample)
     elif a.cmd == "kymo":
-        sid, xa, xb = a.args
-        for o in cmd_kymo(sid, int(xa), int(xb)):
+        sid, xa, xb, *yr = a.args
+        ylo, yhi = (int(yr[0]), int(yr[1])) if yr else (None, None)
+        for o in cmd_kymo(sid, int(xa), int(xb), ylo, yhi, yscale=8 if yr else 4):
             print(o)
     else:
         sid, *xy = a.args
