@@ -121,3 +121,11 @@ record and is never edited.
   rule moved groups out of test. The real-clip test reports per stratum.
 - **custodian_fetch.py hardened** (extra-file check by full name, no mkdir in --verify-only, CRLF-normalised manifest
   compare) and `.gitattributes` pins LF for `sealed/*`, `prereg/*.csv` and `prereg/ACTIVE_SPLIT`.
+- **Custodian on the desktop (user approval, Sun ~06:25 CEST: "Run the sealed clip test from this machine, you have my
+  approval").** No laptop custodian session appeared. The custodian steps (test-clip download to
+  `C:\intercycle_sealed`, MANIFEST, hashed test sample list, test labellers, LABELS.sha256, seeds at FREEZE,
+  sealed_run.py) now run on the desktop, in dedicated custodian and labeller agents whose outputs to the lead carry only
+  ids, counts and hashes. The lead session and every builder lane still never read `C:\intercycle_sealed`. The seal is
+  therefore procedural on one machine (agent separation, `C:\intercycle_sealed\access.log`, committed hashes), not a
+  machine boundary as PLAN §4/§6 planned. The test labels are made by two fresh labeller agents (person frames;
+  stroke windows) instead of one, to fit before FREEZE; both read only `labels/TEST_RULES.md` and the test images.
