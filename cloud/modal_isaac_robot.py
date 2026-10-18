@@ -111,10 +111,30 @@ image = (
 
 
 # --------------------------------------------------------------------------------------------- remote functions
-def _episode(cfg: dict, world: dict[str, bytes]) -> dict:
+# Twin runs: files only the PLANT process opens (its day event script) are written here, outside the episode work dir
+# and outside $IC_WORLD (the world dir every robot-side process is given); cfg["plant"] names them by path.
+PLANT_DIR = "/root/plant"
+
+
+def write_plant_files(tag: str, plant_files: dict[str, bytes] | None, root: str = PLANT_DIR) -> str | None:
+    """Write the plant-only files of episode `tag` into <root>/<tag>/ (plain names only). Returns that dir or None."""
+    if not plant_files:
+        return None
+    d = os.path.join(root, tag)
+    os.makedirs(d, exist_ok=True)
+    for name, data in plant_files.items():
+        if os.path.basename(name) != name or name in ("", ".", ".."):
+            raise ValueError(f"plant file name {name!r} must be a plain file name")
+        with open(os.path.join(d, name), "wb") as f:
+            f.write(data)
+    return d
+
+
+def _episode(cfg: dict, world: dict[str, bytes], plant_files: dict[str, bytes] | None = None) -> dict:
     sys.path.insert(0, REMOTE_PKG)
     from intercycle_sim.episode import run_episode
 
+    write_plant_files(cfg["tag"], plant_files)
     out = run_episode(cfg, world, vol_root=f"{VOL}/episodes")
     vol.commit()
     return out
@@ -148,10 +168,11 @@ def check() -> dict:
 
 
 @app.function(image=image, cpu=8, memory=8192, timeout=1800, volumes={VOL: vol})
-def fake_episode(cfg: dict, world: dict[str, bytes]) -> dict:
-    """CPU: the bridge + Nav2 driven by the kinematic TEST DOUBLE (not a result; checks wiring before GPU time)."""
+def fake_episode(cfg: dict, world: dict[str, bytes], plant_files: dict[str, bytes] | None = None) -> dict:
+    """CPU: the bridge + Nav2 driven by the kinematic TEST DOUBLE (not a result; checks wiring before GPU time).
+    plant_files: twin runs' plant-only files (written to PLANT_DIR/<tag>/, outside $IC_WORLD)."""
     cfg = dict(cfg, sim="fake")
-    return _episode(cfg, world)
+    return _episode(cfg, world, plant_files)
 
 
 def fake_episode_cpu(cpu: float = 0):
@@ -161,15 +182,15 @@ def fake_episode_cpu(cpu: float = 0):
 
 
 @app.function(image=image, gpu="L4", cpu=8, memory=24576, timeout=3600, volumes={VOL: vol})
-def isaac_episode_l4(cfg: dict, world: dict[str, bytes]) -> dict:
+def isaac_episode_l4(cfg: dict, world: dict[str, bytes], plant_files: dict[str, bytes] | None = None) -> dict:
     """L4: Isaac Lab ANYmal-D episode (physics only) + bridge + optional Nav2."""
-    return _episode(dict(cfg, sim="isaac", gpu="L4"), world)
+    return _episode(dict(cfg, sim="isaac", gpu="L4"), world, plant_files)
 
 
 @app.function(image=image, gpu="L40S", cpu=8, memory=24576, timeout=3600, volumes={VOL: vol})
-def isaac_episode_l40s(cfg: dict, world: dict[str, bytes]) -> dict:
+def isaac_episode_l40s(cfg: dict, world: dict[str, bytes], plant_files: dict[str, bytes] | None = None) -> dict:
     """L40S fallback (only if the L4 fails or is too slow)."""
-    return _episode(dict(cfg, sim="isaac", gpu="L40S"), world)
+    return _episode(dict(cfg, sim="isaac", gpu="L40S"), world, plant_files)
 
 
 # --------------------------------------------------------------------------------------------- local side
