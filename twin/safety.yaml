@@ -1,5 +1,6 @@
 # twin/safety.yaml - guard type per press, reset distribution, entry rules (contract twin.safety/1,
 # twin/schemas/safety.py; owner S5a + user; U4, W-W4, R-W2). Read by twin/plant.py.
+# Site esk_press_v1 (twin/site.yaml, 6 presses); the G0 stub site_v0 uses twin/safety_v0.yaml (same rules, P9a / P14a).
 # U4 (user, Sat ~21:10): guard types cannot be seen from 4 m, so EVERY press is ASSUMED: a light curtain with manual
 # reset, reset time lognormal median 240 s, p90 900 s; the 60-900 s sweep is descriptive only.
 # Entry rules (what the safety system does when the robot ENTERS the dilated danger polygon in a press state):
@@ -19,7 +20,7 @@
 # U4 descriptive sweep: cfg plant.reset_override_s (a fixed reset inside sweep_s) replaces every reset draw; such a
 # run is tagged a sweep run in plant_summary.json and the log rows, never a primary-metric run.
 contract: twin.safety/1
-site_id: esk_press_v0
+site_id: esk_press_v1
 presses:
 - press: P9a
   guard: {type: ASSUMED, device: light_curtain, reset: manual}
@@ -35,7 +36,39 @@ presses:
   - {press_state: tripped, action: hold}
   - {press_state: held, action: hold}
   - {press_state: resetting, action: hold}
+- press: P9b
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
 - press: P14a
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
+- press: P14b
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
+- press: P14c
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
+- press: P14d
   guard: {type: ASSUMED, device: light_curtain, reset: manual}
   reset:
     family: lognormal

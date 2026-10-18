@@ -129,3 +129,181 @@ record and is never edited.
   therefore procedural on one machine (agent separation, `C:\intercycle_sealed\access.log`, committed hashes), not a
   machine boundary as PLAN §4/§6 planned. The test labels are made by two fresh labeller agents (person frames;
   stroke windows) instead of one, to fit before FREEZE; both read only `labels/TEST_RULES.md` and the test images.
+
+## Amendment 2 (A2): split freeze, cut design, three user decisions, no tuning
+
+- **Decided:** Sun 18 Oct 2026, ~07:00 CEST. Items 1-5 by the user; item 6 by the lead (session intercycle-74, under
+  the user's autonomy grant of ~01:40). Written into PREREG v1 (`prereg/PREREG_TWIN.md`) by lane PREREG-final before
+  PREREG v1 is committed on main, so before any dev-world run, any dev robot run and any test seed.
+- **Evidence:** the time left before the planned single FREEZE at 08:30 (PLAN_TWIN §4) is too short for the five-
+  condition, 320-cell robot design, the 32-world S7b calibration and the tuning runs, while the real-clip part
+  (PERC, labels, scoring) is ready earlier. No dev-world or test result was seen before this amendment.
+
+1. **Split freeze (user).** `prereg/FREEZE_REALCLIP` = the sha of the commit that freezes the real-clip test, at 08:30
+   CEST; the real-clip test runs once at 09:15 CEST. `prereg/FREEZE` = the sha of the commit that freezes the robot
+   part, at ~10:15 CEST. Test seeds come from drand only after the robot FREEZE. If the robot part is not ready by
+   10:15 it is reported as descriptive dev results, with no H1-H3 claim (PREREG §2.1).
+   *Deviation:* PLAN §4 has one FREEZE at 08:30 for everything; the 09:55 last re-run moves to the time the lead
+   writes into the FREEZE commit (PREREG §6).
+2. **Cut design (user).** CPU double: 3 conditions (static, learned, best reactive) × 16 test worlds × days 9-10 ×
+   zones 9 and 14 = 192 cells; no timing oracle, no no-map. H1-H3 as `twin_eval` implements them on that design; the
+   oracle share is not reported. The S7b fixed-margin fallback (latency p99, PREREG §7) replaces the 32-world
+   calibration on dev worlds 100-131 (not run). Isaac, movers and A-lite are descriptive only and outside
+   `sealed_run.py`. *Deviation:* U12's 320 runs (5 conditions) and PLAN §5's oracle share; S7b's LTT certificate.
+3. **Stop entry (user): keep as is and disclose.** The learned arm never enters a STOPPED press (learner TTL ≤ ~2.6 s,
+   below need_s); the reactive arm does (own-camera KM still-run window). Pinned by
+   `ros2/intercycle_nav/test/test_stop_entry.py` (lane S5b-entry fix1).
+4. **Real-clip occlusion (user).** For REAL clips the image-space ram-ROI rule
+   (`intercycle/observer/occlusion.py` `box_hits_roi` / `roi_missing_series`) replaces the floor rule; the twin keeps
+   its rule.
+5. **Stroke time (user).** PERC `detect_strokes` emits the BDC (bottom) time, the label definition; the stroke
+   tolerance stays ±0.25 s.
+6. **No tuning (lead).** Neither arm is tuned: both run their committed default configs, hashed in PREREG §9
+   (reactive `ReactiveConfig().sha256()` = `8e9dbfee6379f212931f6da750c27632f14df8705e270afb0a52da70258c262a`; learned
+   = the git blobs of its code at main 6b0ea6b). Equal for both arms and disclosed. *Deviation:* PLAN §5's equal
+   tuning budget (8 configs × 4 dev worlds per arm) and the separate baseline tuner are not used.
+
+- **PREREG v1 also records** (same lane, no rule change): the desktop-custodian amendment above (procedural seal on one
+  machine, two test labeller agents), the `scripts/sealed_run.py` blob on main (`c6e7d530…`, replacing the
+  lane/S1a-slice-fix1 blob `6d87cefc…` that the S1a-prereg draft cited), and the code that must change before FREEZE to
+  match the text (PREREG §1).
+
+Lane notes under A2 item 4 and the split freeze (lane RC-freeze-fix1):
+
+- **Real-clip occlusion -> MISSING, limitation (lane RC-freeze-fix1, dev figures, results/dev/realclip_dev.json).**
+  Under the image-space ram-ROI rule (USER DECISION Sun ~07:00) the T-W6 claim is partial on the dev clips: inside the
+  labelled hidden spans 336/428 PERC samples (0.785) are flagged missing, so 92 (21.5 %) are not, and 31/35 2 Hz
+  Observation ticks (0.886) are MISSING, so 4 stay finite: a stroke can be emitted from an occluded ram ROI. On the
+  windows' non-hidden ticks 145/292 (0.497) are also MISSING, mostly from the M-W10 watchdog (ok on 487/763 = 0.638 of
+  all adapter ticks) and frame 0; the split of that base rate into watchdog, frame-0 and no-flow parts is not computed
+  yet. Both rates are reported beside the test figure.
+- **Sealed real-clip scoring (lane RC-freeze-fix1).** `scripts/sealed_run.py score` is the pre-registered analysis of
+  the real-clip test: same refusals as the clips stage, then the dev scorer (intercycle.eval.realclip.run) on the
+  LABELS-checked test labels with split test. Test stroke windows are scored by the dev status rules; reserves
+  (`-rN`) count only while their press has fewer than 10 scored windows, in list order, and a press that ends below
+  10 is reported (counts.short_presses), not refused. The watchdog's TRAIN keyframes and the inventory are read from
+  `$INTERCYCLE_DATA` (outside the repo, so not hash-guarded by the freeze).
+
+## Amendment 3 (A3): real-clip freeze time, robot launcher, exact fixed margin, PREREG-v1 disclosures
+
+- **Decided / recorded:** Sun 18 Oct 2026, ~08:00-08:10 CEST. Item 1 by the user (allowance relayed by the lead,
+  session intercycle-74, to lane PREREG-v1 at ~08:00 CEST); items 2-3 by the lead under the user's autonomy grant of
+  ~01:40 (fixed by committing PREREG v1); items 4-9 are disclosures with no rule or code change (user decisions of
+  ~07:00 and ~08:00 as relayed by the lead). Written into PREREG v1 by lane PREREG-v1 before PREREG v1 is committed on
+  main, so before any dev-world run, any dev robot run, any test seed and FREEZE_REALCLIP.
+- **Evidence:** the real-clip code is still being merged (lane RC-final: split-freeze checks, sealed scoring, BDC
+  strokes); `scripts/sealed_run.py` on main has `STAGES = ("clips",)` (no robot stage), and the robot launcher
+  (`scripts/run_double.py`, `intercycle/eval/twin_batch.py`) is on lane double-modal with
+  `SEALED_BACKEND_READY = False`. No dev-world, real-clip test or robot test result was seen before this amendment.
+
+1. **FREEZE_REALCLIP time (user).** The real-clip freeze may move from 08:30 up to 10:15 CEST; target ~09:15, with
+   the real-clip run (`sealed_run.py run --stages clips`, then `score`, from a detached worktree at the
+   FREEZE_REALCLIP commit) right after it. *Deviation:* A2's 08:30 freeze and 09:15 run.
+2. **Real-clip paths named in full (lead).** PREREG §2.1 "Covers" lists every path the real-clip run executes (the
+   static import closure of sealed_run.py, sealed_ingest.py, modal_perc.py, esk_ingest.py, realclip.py,
+   pixel_adapter.py, dev_labels.py, incl. the PERC modules and `twin/schemas`) and, of `twin_eval.py`, only
+   `h4_recall`. Consequence, disclosed: `learn_cycles.py`, `mapping.py`, `occlusion.py`, `scenario.py` and
+   `twin/schemas` are frozen for the robot part too from FREEZE_REALCLIP on.
+3. **Robot launcher and the 10:15 condition (lead).** The sealed robot batch runs through the `double` stage of
+   `sealed_run.py` calling `scripts/run_double.py::run_sealed` (`intercycle/eval/twin_batch.py`). If it is not merged
+   and dry-run on dev worlds by 10:15, the robot results are descriptive dev results and no H1-H3 claim is made.
+4. **Exact fixed margin (lead).** k = ceil(age_p99 × v_max / cell_m − 1e-9), margin_m = round(k × cell_m, 2), with
+   age_p99, v_max = 1.792664 m/s and cell_m = 0.25 m as PREREG §7 defines them; fail closed (no file, robot part
+   descriptive) if margin_m is off the H3 grid (0-4 m, 0.05 m steps) or above the observer's 1.0 m grid margin
+   (`twin_spec(margin=1.0)`), i.e. age_p99 > 0.5578 s. Replaces "ceil(age_p99 × v_max / cell_m) × cell_m" of the
+   PREREG-final draft (same value except on float ties).
+5. **Custodian on the desktop and two test labeller agents** (record of the A1 lead-notes entry above, unchanged).
+6. **`labels_frames.json` format fix.** A fresh labeller agent added an empty `stroke_windows` list to the test
+   person-frame file; no label was changed; its sha256 before and after are in `C:\intercycle_sealed\access.log`.
+7. **P9a test stroke windows: 1 of 13**, because the test split holds only one c9_f0 clip.
+8. **Robot use of the maps.** Binary keep-out mask over a 6 s look-ahead, timing gates and speed limits in busy
+   areas; no graded costs. **No event-triggered learning:** the observer learns clock-time bins only (future work).
+9. **No tuning** (A2 item 6, repeated): no tuning run, no value chosen from dev or test results.
+
+## Amendment 4 (A4): the twin's Observation uses the real clips' ram-ROI occlusion rule (T-W6)
+
+- **Numbering (integration):** lane twin-roi wrote this as "Amendment 2"; it is renumbered A4 at the merge into
+  lane/integration because A2 (split freeze) and A3 (PREREG-v1) already exist. Text otherwise unchanged.
+
+- **Decided:** Sun 18 Oct 2026, ~08:25 CEST, by the user. **Implemented:** lane twin-roi (branch lane/twin-roi).
+- **User decision, verbatim:** "Same ROI rule in twin": the twin's observations use the SAME image-space ram-ROI
+  occlusion rule as the real clips (a person's image box covering the press's ram ROI makes that press's zone_motion
+  MISSING, with the same hold), not the floor rule.
+- **Reason (evidence):** on the v1 artifacts the floor rule (a person / vehicle detection within r + 0.5 m of the
+  press's danger rect + 1 m) marked zone_motion MISSING on most learning ticks, because operators stand at the
+  presses, so the learned observer learned nothing (period 0 on P9a / P9b, confidence 0 on every press).
+- **Rule change:** `intercycle/observer/occlusion.RoiOcclusion` (`box_hits_roi`, box padded ROI_PAD_FRAC = 0.15, plus
+  the track hold) is the streaming form of `roi_missing_series`, the real-clip ingest's rule (one implementation;
+  tests/test_occlusion_missing.py checks equal output). twin/camera.py stat_v1 applies it per press with
+  `hold_s_by_press` (camera 9: 34 s, camera 14: 7.5 s, unchanged). The plant's ObsAdapter takes an explicit rule:
+  `occlusion="roi"` for stat_v1 turns the floor rule off on every press (`ObsV2Converter(floor_rule=...)`) and keeps
+  the camera's MISSING; a press without an ROI is MISSING on every tick (fail closed). `"floor"` stays only for the
+  G0 stand-in camera_v0 (stub site) and the body-shop shim. cam_floor_ok and the M-W10 watchdog are unchanged.
+- **Measured** (v1 slice, world 0, day 9, the 20 min learning period, 2,400 ticks; `scripts/slice.py --world 0
+  --day 9 --zone z14`; "before" = the same code with the ObsAdapter on the floor rule):
+
+  | press | zone_motion MISSING, floor rule (before) | ROI rule (after) | learned period after (s) | dynamics.json period (s) | confidence after |
+  |---|---|---|---|---|---|
+  | P9a | 100.0 % | 80.0 % | 1.60 | 1.94 (observed) | 0 |
+  | P9b | 99.9 % | 0.0 % | 1.54 | 1.69 (observed) | 0 |
+  | P14a | 80.1 % | 66.8 % | 4.95 | 4.0 (assumed prior) | 0 |
+  | P14b | 78.2 % | 51.1 % | 53.86 | 4.0 (assumed prior) | 0 |
+  | P14c | 79.9 % | 43.0 % | 9.87 | 4.0 (assumed prior) | 0 |
+  | P14d | 73.7 % | 34.6 % | 26.62 | 4.0 (assumed prior) | 0 |
+
+- **Still open (not tuned here):** every press stays at confidence 0 and the slice's stop-in-Observation assertion is
+  still red (the zone-14 trip probe waits 240 s at P14d and sees no stroke). The remaining MISSING is the camera's own
+  image-space ROI rule with its hold; on zone 14 only 8-16 % of the finite samples exceed the motion threshold, about
+  the idle false-positive rate (0.12), so those presses look idle in this window.
+
+## Amendment 5 (A5): PREREG v1 on main, blob re-record (append-only), user decisions of 18 Oct, disclosures
+
+- **Decided / recorded:** Sun 18 Oct 2026, ~09:40 CEST, lead session intercycle-74, at the main commit that merges
+  lane/integration and so adds prereg/PREREG_TWIN.md to main. Before any dev-world run, any dev robot run, any test
+  seed, FREEZE_REALCLIP and FREEZE.
+- **Why append-only:** PREREG §1 says that if a blob at this main commit differs from the §1 table, the table blob is
+  updated in the same commit and the change listed here. The automated permission check blocked edits of the hashes
+  inside PREREG_TWIN.md; the user chose, verbatim, "Append-only amendment now": "Merge to main, keep the PREREG text
+  untouched, and list every old to new hash in a new AMENDMENTS entry, stated as replacing the table update".
+  **This list replaces the §1 table update.** For each path below, the "new" blob is the binding one;
+  `git rev-parse HEAD:<path>` at this commit gives it. The PREREG_TWIN.md text is unchanged.
+
+  | path | §1 table blob (old) | blob at this main commit (binding) |
+  |---|---|---|
+  | intercycle/eval/twin_eval.py | 61a671af115bbcac309b6be21880136b99951879 | cb4336d52d61317caebbf14a900b976bc07aec4a |
+  | intercycle/eval/twin_design.py | b2a2c0c2aa959cbca400ce0b005a9cdf24924026 | 323e99b3327f45becf7a2c9ac91071520405ea49 |
+  | scripts/sealed_run.py | c6e7d5306b06e3a8083c4db0ace190e9348307fe | 2bbcabf0a1c04139b63f0c5ec9ce7e5bda83492e |
+  | intercycle/eval/realclip.py | ad04ba3f889601a70f9b5ed64b092c0fd3e83290 | 95ca740bba59c943f9087d4aa9ee285487722626 |
+  | intercycle/observer/occlusion.py | 981b697491105f93b20c32c83d31d27334b74852 | 7ebe879be2eb6f7e82fc5cf252e817d0dd60c003 |
+  | intercycle/perception/press_motion.py | 6fe191a2275975cb95b2bc1e329017809dec1265 | 8ff28d13ee9552ad39301f74a8efe3ccc6ce96b5 |
+  | ros2/intercycle_nav/intercycle_nav/timing.py | 0c3555c25bbbfcda748b869ae1642b312ae95ede | b879b2e330824294be3b819e4567b0045256c62d |
+  | ros2/intercycle_nav/intercycle_nav/timing_planner.py | 2ea9a0e0f3396c0fa01450ae4a1ed7b6d6ae7e13 | ae4c57d66a516fa4f671e295898d439d84538d9d |
+  | ros2/intercycle_nav/intercycle_nav/masks.py | a9c67f66a2b80272e6e971bf9ae2c24838e0ee54 | 552c3a083400f690e7e0173d9433543713f6c2d3 |
+  | intercycle/observer/learn_cycles.py | ee28cccf08d9731fab70ce0a2181a4a04f578504 | de8d4233aacd7d9d40fda21367b7d8606315811c |
+  | twin/observer_live.py | a99a99dad5c28ae2c6f32031938258e6ca5db473 | f8e07701be17ab4aba7ad4f1504adec43d8b532c |
+  | ros2/intercycle_nav/config/nav2.yaml | 156409cdb7332bed843b937868ba67c114fda619 | 9342e36d3730996041519581b380a73fe44ab747 |
+
+  Unchanged (table blob = blob at this commit): scripts/classify_invalid.py, reactive.py, intercycle/robot/predict.py.
+  The changes come from the lanes merged in lane/integration after the §1 table was written (RC-final,
+  double-modal-fix1, observer-fix-fix1, obs-speed, observer-learn, freeze-glue, twin-roi as A4).
+
+- **User decisions of Sun 18 Oct (verbatim answers, CEST, approximate):**
+  1. Freezes: "Both at 10:15": FREEZE_REALCLIP and FREEZE on one commit at 10:15 CEST (A3 item 1 allowed up to 10:15).
+  2. Stop entry: "Keep as is, disclose".
+  3. Real-clip occlusion: "Image ROI rule"; then "Make real clips ROI-only" (the floor rule is off on real clips too).
+  4. Twin occlusion: "Same ROI rule in twin" (A4).
+  5. Strokes: "Detector emits BDC".
+  6. Observer learning (~08:35): "Try days 1-8, else 20 min". Days 1-8 were measured at ~90 s wall per 1,200 s
+     simulated, about 14.4 h per world, so they cannot finish before submission: **the observer learns for 20 min
+     before each mission** (the fallback the user chose).
+  7. "Approve 1200 s" for keep_max_s.
+  8. Robot part: "Approve fix (a), still try": the press timing limits are matched to the 2 Hz observation tick
+     (jitter and LS/ACF consistency limits) so P9b can be learned. This is the only change to a learning limit; it
+     is chosen from the tick period, not from a dev or test result.
+  9. Claude vision test: "Yes, after the freeze": a descriptive running/stopped test on dev press crops only, not part
+     of any claim.
+- **No tuning** (A2 item 6, A3 item 9): apart from item 8, no value was chosen from dev or test results.
+- **Disclosures (for the README / results):** two test labeller agents; the `labels_frames.json` format fix (A3
+  item 6); P9a has 1 of 13 test stroke windows (A3 item 7); the custodian runs on the desktop (A1 lead notes); the
+  observer learns clock-time bins only, so event-triggered effects "cannot show" (A3 item 8); with 20 min learning,
+  the v1 slice gave confidence 0 on every press before fix (a) (A4 "Still open").

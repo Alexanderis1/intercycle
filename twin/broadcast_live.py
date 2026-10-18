@@ -45,6 +45,7 @@ from twin import observer_live as OL
 SPEC_FILE = "observer_spec.json"
 MARGIN_FILE = "m7_margin.json"
 LEARN_FILE = "learn_obs.jsonl"
+SNAPSHOT_FILE = "observer_snapshot.pkl"     # = scripts/run_double.SNAPSHOT (the batch's learned-arm start state)
 VK_FILE = "observer_vk.txt"
 SPEC_CONTRACT = "twin.observer_spec/1"
 
@@ -55,13 +56,17 @@ def episode_key() -> tuple[SigningKey, str]:
     return key, f"{key_id_of(key.verify_key)}:{key.verify_key.encode().hex()}"
 
 
-def spec_record(spec: dict, zone: str, zone_machines: list[str]) -> dict:
-    """observer_spec.json: the site-wide twin_spec and the mission zone's machine ids (zone scenario order)."""
+def spec_record(spec: dict, zone: str, zone_machines: list[str], camera_model: str) -> dict:
+    """observer_spec.json: the site-wide twin_spec, the mission zone's machine ids (zone scenario order) and the camera
+    model that writes the Observation (the plant's `camera.provenance()["model"]`; it picks the observer config,
+    `observer_live.config_for_camera`, fail closed)."""
     ids = [m["id"] for m in spec["machines"]]
     bad = [m for m in zone_machines if m not in ids]
     if bad or not zone_machines:
         raise ValueError(f"zone {zone} machines {zone_machines} are not all in the observer spec {ids}")
-    return {"contract": SPEC_CONTRACT, "zone": zone, "zone_machines": list(zone_machines), "spec": spec}
+    OL.config_for_camera(camera_model, "")             # refuse a camera model without a twin-run config now
+    return {"contract": SPEC_CONTRACT, "zone": zone, "zone_machines": list(zone_machines), "camera_model": camera_model,
+            "spec": spec}
 
 
 class ZoneView:
@@ -80,20 +85,25 @@ class ZoneView:
         return replace(f, machines=[replace(f.machines[i], index=k) for k, i in enumerate(self.idx)])
 
 
-def load_inputs(world: Path, work: Path) -> tuple[dict, list[str], str, Path]:
-    """(spec, zone machines, margin path, learn obs path under work/learn/obs_v2.jsonl)."""
+def load_inputs(world: Path, work: Path) -> tuple[dict, list[str], str, Path, str]:
+    """(spec, zone machines, margin path, learn obs path under work/learn/obs_v2.jsonl, camera model). A spec record
+    without a camera model is refused (fail closed)."""
     rec = json.loads((world / SPEC_FILE).read_text(encoding="utf-8"))
     if rec.get("contract") != SPEC_CONTRACT:
         raise ValueError(f"{SPEC_FILE}: contract {rec.get('contract')!r} != {SPEC_CONTRACT!r}")
+    if not rec.get("camera_model"):
+        raise ValueError(f"{SPEC_FILE}: no camera_model (the observer config depends on it)")
     learn = work / "learn" / OL.OBS_FILE
     learn.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(world / LEARN_FILE, learn)
-    return rec["spec"], list(rec["zone_machines"]), str(world / MARGIN_FILE), learn
+    return rec["spec"], list(rec["zone_machines"]), str(world / MARGIN_FILE), learn, str(rec["camera_model"])
 
 
-def learned_observer(spec: dict, margin_path: str, learn_path: Path) -> tuple[OL.ObserverLive, float, int]:
-    """An ObserverLive that has ingested the learning period. Returns (observer, newest delivery time, ticks)."""
-    ob = OL.ObserverLive(spec, OL.ObserverLiveConfig(margin_path=margin_path))
+def learned_observer(spec: dict, margin_path: str, learn_path: Path,
+                     camera_model: str) -> tuple[OL.ObserverLive, float, int]:
+    """An ObserverLive (config by camera model, `OL.config_for_camera`) that has ingested the learning period.
+    Returns (observer, newest delivery time, ticks)."""
+    ob = OL.ObserverLive(spec, OL.config_for_camera(camera_model, margin_path))
     rd = OL.ObsV2Reader(learn_path, ob.M, len(spec["cameras"]))
     t_now, n = -math.inf, 0
     for o in rd.poll():
@@ -103,6 +113,24 @@ def learned_observer(spec: dict, margin_path: str, learn_path: Path) -> tuple[OL
     if n == 0:
         raise ValueError(f"{learn_path}: no learning-period observations (the learned condition needs them)")
     return ob, t_now, n
+
+
+def snapshot_observer(world: Path, t0: float) -> tuple[OL.ObserverLive, float, int]:
+    """The CPU-double batch's learned arm: the observer state pickled by the batch's observer phase
+    (scripts/run_double.py observer_phase: days 1-8 + the robot-free stream of the scored day up to the mission start,
+    all of it Observation v2 only), shipped as <world>/observer_snapshot.pkl. Fail closed: the file must hold an
+    ObserverLive whose newest ingested capture predates the mission start t0 (plant seconds). The pickle is our own
+    observer-phase output (same image, same python), never a viewer- or network-supplied file.
+    Returns (observer, its newest capture time, ticks ingested)."""
+    import pickle
+
+    with open(world / SNAPSHOT_FILE, "rb") as f:
+        ob = pickle.load(f)
+    if not isinstance(ob, OL.ObserverLive):
+        raise ValueError(f"{SNAPSHOT_FILE}: not an ObserverLive ({type(ob).__name__})")
+    if ob.t_last is None or not float(ob.t_last) < float(t0):
+        raise ValueError(f"{SNAPSHOT_FILE}: newest capture {ob.t_last} does not predate the mission start {t0}")
+    return ob, float(ob.t_last), int(ob.n_ticks)
 
 
 def write_vk(work: Path, vk: str) -> None:
@@ -119,13 +147,23 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--log", default="", help="JSONL log (default <obs dir>/broadcast_live.jsonl)")
     ap.add_argument("--fast-every", type=float, default=0.5)
     ap.add_argument("--slow-every", type=float, default=10.0)
+    ap.add_argument("--snapshot-t0", type=float, default=None,
+                    help="start from <world>/observer_snapshot.pkl (the CPU-double batch), which must predate this "
+                         "mission start (plant seconds); default: re-ingest learn_obs.jsonl (the slice)")
     a = ap.parse_args(argv)
     work, world, obs_path = Path(a.work), Path(a.world), Path(a.obs)
     log = open(a.log or obs_path.parent / "broadcast_live.jsonl", "a", encoding="utf-8")
     key, vk = episode_key()
+    if a.snapshot_t0 is not None:
+        rec = json.loads((world / SPEC_FILE).read_text(encoding="utf-8"))
+        if rec.get("contract") != SPEC_CONTRACT:
+            raise ValueError(f"{SPEC_FILE}: contract {rec.get('contract')!r} != {SPEC_CONTRACT!r}")
+        spec, zone_machines = rec["spec"], list(rec["zone_machines"])
+        ob, t_now, n_learn = snapshot_observer(world, float(a.snapshot_t0))
+    else:
+        spec, zone_machines, margin_path, learn_path, camera_model = load_inputs(world, work)
+        ob, t_now, n_learn = learned_observer(spec, margin_path, learn_path, camera_model)
     write_vk(work, vk)
-    spec, zone_machines, margin_path, learn_path = load_inputs(world, work)
-    ob, t_now, n_learn = learned_observer(spec, margin_path, learn_path)
     bundle = pack_map_for_key(ob.map_snapshot(), key, version=1, issue_time=DAY0_UNIX + t_now)
     zv = ZoneView(ob, zone_machines)
     diag = ob.diagnostics()

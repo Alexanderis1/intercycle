@@ -11,8 +11,9 @@ truth reader of EVAL, in the truth allowlist's EVAL slot; this module opens no t
 
 Design (fail closed, PLAN_TWIN §5 "Design"): on the test split the design is explicit, never taken from the runs that
 happen to be present: the world list (--worlds, required), the scored days (default 9 and 10) and the conditions (the
-CPU double: all five). For the double on the test split the sealed design is enforced: K_TEST = 16 worlds, days {9, 10}
-and all five conditions (5 x 16 x 2 x 2 = 320 missions); anything else is refused. Every absent (world, day, zone,
+CPU double: the cut design's SEALED_CONDITIONS). For the double on the test split the sealed CUT design is enforced
+(USER DECISION Sun ~07:00 CEST): K_TEST = 16 worlds, days {9, 10} and exactly static, learned, reactive (3 x 16 x 2 x 2
+= 192 missions; no oracle, no no-map, so the oracle share is not reported); anything else is refused. Every absent (world, day, zone,
 condition) is scored as a missing failure, and a test run outside the design is refused. (`allow_partial_design`, an
 API argument only, lets the synthetic tests use fewer worlds; the report then says `"fixed": false`.) On the dev split
 worlds and days default to the runs present.
@@ -89,15 +90,16 @@ import numpy as np
 from scipy import stats
 
 from intercycle.eval.conformal_margin import UnitCounts, per_world_miss_share, stream_units
-from intercycle.eval.twin_design import (CELL_KEYS, CONDITIONS, K_TEST, REQUIRED, RUN_MARKERS, TEST_DAYS, Cell,
-                                         Design, EvalError, Run, attempt_of, find_runs, index_cells, is_bad, listed,
-                                         load_classified, load_invalid, make_design, mission_orders, parse_run_id,
-                                         placed, placeholder_runs, read_summary)
+from intercycle.eval.twin_design import (CELL_KEYS, CONDITIONS, K_TEST, REQUIRED, RUN_MARKERS, SEALED_CONDITIONS,
+                                         TEST_DAYS, Cell, Design, EvalError, Run, attempt_of, find_runs, index_cells,
+                                         is_bad, listed, load_classified, load_invalid, make_design, mission_orders,
+                                         parse_run_id, placed, placeholder_runs, read_summary)
 from intercycle.margin_inflate import Margin, load_margin
 from twin.schemas.common import MISSION_T_S
 from twin.schemas.runs import CheckpointOutcome, MissionMetric, PrimaryMetric, require_primary, world_values
 
-__all__ = ["CELL_KEYS", "CONDITIONS", "K_TEST", "REQUIRED", "RUN_MARKERS", "TEST_DAYS", "Cell", "Design", "EvalError",
+__all__ = ["CELL_KEYS", "CONDITIONS", "K_TEST", "REQUIRED", "RUN_MARKERS", "SEALED_CONDITIONS", "TEST_DAYS", "Cell",
+           "Design", "EvalError",
            "Run", "find_runs", "is_bad", "load_classified", "load_invalid", "make_design", "mission_orders",
            "parse_run_id", "placed", "placeholder_runs", "run_eval", "main"]
 

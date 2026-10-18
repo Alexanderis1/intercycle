@@ -51,10 +51,21 @@ class ZoneTasks(Strict):
     mission_order: list[str] = Field(min_length=1)
 
 
+class InspectionWindow(Strict):
+    """When an inside_danger checkpoint may be entered (S2 TASKS): a press stop, or a gap between strokes of at least
+    inside_s + margin_s (inside_s = the time the robot spends inside the danger rect: entry, dwell, exit)."""
+    kinds: list[Literal["press_stop", "stroke_gap"]] = Field(min_length=1)
+    margin_s: float = Field(ge=0)
+    definition: str = Field(min_length=1)
+
+
 class Inspection(Strict):
     defect_rate: float = Field(ge=0, le=1)   # 0.25 per PLAN_TWIN §4 (S2 TASKS)
     zoom_max: float = Field(ge=1, le=20)
     detectability: str = Field(min_length=1)  # the written detectability formula (E-W3)
+    capture_model: str | None = None         # the 20x zoom head model (S2 TASKS); None in the G0 stub
+    thermal_model: str | None = None         # the thermal camera model (S2 TASKS); None in the G0 stub
+    window: InspectionWindow | None = None   # the press inspection window (S2 TASKS); None in the G0 stub
 
 
 class Tasks(Strict):

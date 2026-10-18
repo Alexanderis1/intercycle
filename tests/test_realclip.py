@@ -175,11 +175,18 @@ def test_adapter_watchdog_feeds_cam_floor_ok_and_missing():
     assert not o.cam_ok[0] and not np.asarray(o.cam_floor_ok)[0] and np.isnan(np.asarray(o.zone_motion)[0])
 
 
-def test_adapter_occluder_in_zone_is_missing():
+def test_adapter_occlusion_is_the_image_space_flag():
+    """Real clips: MISSING comes from PERC's image-space ram-ROI flag only; a person whose FOOT lies in the machine
+    zone does not make the press MISSING (the twin's floor rule is not applied to real clips)."""
     ref = WD.reference_from_frames([_frame(i) for i in range(3)])
     ad = PA.PixelAdapter(_geom(), ref, WD.WatchdogParams(recover_s=0.0))
-    o = ad.step(0.0, pd.DataFrame({"class": ["person"], "u": [11.0], "v": [11.0]}), _frame(7), {"P1": 0.5})
-    assert bool(np.asarray(o.cam_floor_ok)[0]) and o.machine[0] == 0 and np.isnan(np.asarray(o.zone_motion)[0])  # T-W6
+    det = pd.DataFrame({"class": ["person"], "u": [11.0], "v": [11.0]})
+    o = ad.step(0.0, det, _frame(7), {"P1": 0.5})
+    assert bool(np.asarray(o.cam_floor_ok)[0]) and o.machine[0] == 0
+    assert np.asarray(o.zone_motion)[0] == pytest.approx(0.5)                     # no floor rule
+    flagged = PA.motion_at({"P1": pd.DataFrame({"t": [0.5], "roi_energy": [0.5], "missing": [True]})}, 0.5)
+    o = ad.step(0.5, det, _frame(8), flagged)
+    assert np.isnan(np.asarray(o.zone_motion)[0])                                 # PERC's ROI flag -> MISSING
     assert np.isnan(PA.motion_at({"P1": pd.DataFrame({"t": [0.0], "roi_energy": [1.0], "missing": [True]})}, 0.0)["P1"])
     assert np.isnan(PA.motion_at({"P1": pd.DataFrame({"t": [2.0], "roi_energy": [1.0], "missing": [False]})}, 0.0)["P1"])
 
@@ -229,13 +236,55 @@ def test_site_adapter_unoccluded_tick_is_finite(framing):
     assert (zv[seen] == 1.0).all() and np.isnan(zm[~seen]).all() and (zv[~seen] == 0.0).all()
 
 
-def test_site_adapter_person_in_zone_is_missing():
+def test_site_adapter_roi_occluder_is_missing():
+    """Real site geometry, image-space rule end to end: a box over P9a's ram ROI on c9_f1 makes PERC's
+    roi_missing_series flag True, which makes P9a MISSING in the Observation; a person whose foot lies in P9a's
+    machine zone but whose box is not on the ROI leaves it finite (no floor rule on real clips)."""
+    from intercycle.observer.occlusion import roi_missing_series
+    from twin.schemas import load
+    from twin.schemas.site import Site
+
+    site = load(Site, ROOT / "twin" / "site.yaml")
+    rois = {p.id: [r.polygon_px for r in p.ram_roi.value if r.framing == "c9_f1"][0]
+            for p in site.presses if p.id in ("P9a", "P9b")}
     g, ad = _site_adapter("c9_f1")
+    poly = np.asarray(rois["P9a"], float)
+    box = [float(poly[:, 0].min()), float(poly[:, 1].min()), float(poly[:, 0].max()), float(poly[:, 1].max())]
+    t = np.array([0.0, 0.5])
+    flags = {p: roi_missing_series(t, [[box], []], rois[p], 0.0) for p in rois}
+    assert flags["P9a"].tolist() == [True, False]
+    mach = {p: pd.DataFrame({"t": t, "roi_energy": [0.5, 0.5], "missing": flags[p]}) for p in rois}
+    o = ad.step(0.0, NO_DETS, _frame(12), PA.motion_at(mach, 0.0))
+    zm = np.asarray(o.zone_motion)
+    assert np.isnan(zm[0]) and np.isfinite(zm[1]) == (not bool(flags["P9b"][0]))
     uu, vv = np.meshgrid(np.arange(0, 1920, 16.0), np.arange(0, 1080, 16.0))
     uv = np.c_[uu.ravel(), vv.ravel()]
     m = PA.machine_of(PA.project_uv(uv, g), g.rects)
     j = int(np.flatnonzero(m == 0)[0])                        # a pixel whose foot point lands in P9a's machine zone
     det = pd.DataFrame({"class": ["person"], "u": [uv[j, 0]], "v": [uv[j, 1]]})
-    o = ad.step(0.0, det, _frame(12), {"P9a": 0.5, "P9b": 0.5})
+    o = ad.step(0.5, det, _frame(13), PA.motion_at(mach, 0.5))
     assert bool(np.asarray(o.cam_floor_ok)[0]) and o.machine[0] == 0
-    assert np.isnan(np.asarray(o.zone_motion)[0])                                  # T-W6: occluded -> MISSING
+    assert np.asarray(o.zone_motion)[0] == pytest.approx(0.5)                     # no floor rule on real clips
+
+
+def test_danger_rect_rule_equals_the_twin_plant_rule():
+    """pixel_adapter keeps its own copy of the danger-rect rule (it may not import the truth module twin.plant)."""
+    from twin import plant
+
+    for poly, grow in (([(0.0, 0.0), (2.0, 1.0), (1.0, 3.0)], 0.0), ([(-1.5, 2.0), (4.0, -3.0)], 0.6)):
+        assert PA._bbox(poly, grow) == plant._bbox(poly, grow)
+
+
+def test_run_reads_tables_and_clips_from_the_given_dirs(tmp_path):
+    """Sealed scoring passes perc / clips_dir: a missing PERC table is looked for there, not under data."""
+    from types import SimpleNamespace as NS
+
+    inv = pd.DataFrame({"clip_id": ["0_te1"], "camera": [9], "framing_id": ["c9_f1"], "group_id": ["g"],
+                        "class": [0], "duration": [4.0], "sha256": ["x"], "split": ["test"], "dup_of": [None],
+                        "dup_classes": [None]})
+    inv.to_parquet(tmp_path / "inventory.parquet")
+    sd = NS(frames=[NS(clip_id="0_te1", t_pts=1.0, boxes=[], sample_id="f1")], windows=[], hidden={}, ignore={})
+    site = Path(__file__).resolve().parents[1] / "twin" / "site.yaml"
+    with pytest.raises(FileNotFoundError, match="0_te1"):
+        RC.run(None, tmp_path, site, ("test",), watchdog=False, scored=sd, perc=tmp_path / "perc",
+               clips_dir=tmp_path / "clips")

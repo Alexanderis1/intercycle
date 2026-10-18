@@ -7,11 +7,15 @@ Pipeline (one record per step in <out>/slice_report.json; the process exits 1 if
   1. build    site.yaml (or the G0 stub site_v0) -> twin/compile.py + intercycle_sim/world.py (twin/build_worlds.py)
               -> per zone boxes.json, static.usda, mesh.npz, map.pgm/.yaml. tasks.yaml falls back to the G0 stub
               twin/tasks_v0.yaml while S2 TASKS has not landed (compile.default_inputs(allow_stubs=True), logged).
-  2. day      the stub day generator (twin/daygen_stub.py): 30 min, 2 presses, Poisson walkers, 1 forklift.
+  2. day      30 min of a generated day. On the G0 stubs: the stub generator (twin/daygen_stub.py; 2 presses,
+              Poisson walkers, 1 forklift). On the v1 artifacts: DAYGEN v1 (twin/daygen.py; every site press, the
+              resampled TRAIN walkers / forklifts; >= 1 walker required, forklifts reported).
   3. engine   the twin plant (twin/plant.py) runs the engine and writes the realised stream (2 Hz) of the first
               20 min with the robot parked off the visible floor (robot off while the observer learns).
-  4. adapter  camera_v0 (MEASURED_SHIM) + the plant's ObsAdapter write Observation v2 at 2 Hz (obs_v2.jsonl).
-  5. observer twin/observer_live.py learns 20 min from obs_v2.jsonl only and signs the slow / fast / map layers; the
+  4. adapter  the plant's camera model (twin/camera.py stat_v1) + ObsAdapter write Observation v2 at 2 Hz (obs_v2.jsonl).
+  5. observer twin/observer_live.py learns 20 min from obs_v2.jsonl only and signs the slow / fast / map layers; its
+              config is chosen by the plant's camera model (`observer_live.config_for_camera`: stat_v1's fitted
+              motion threshold; any other camera model is refused, fail closed), the same in the broadcaster; the
               receiver checks use an explicit keyring and must fail closed (empty keyring, foreign key, tampered
               blob, key outside the keyring).
   6. mission  one 10 min mission of the "learned" condition in one zone:
@@ -74,14 +78,16 @@ from nacl.signing import SigningKey  # noqa: E402
 
 from intercycle.codec import maplayer as ML  # noqa: E402
 from intercycle.codec.trust import TrustError, TrustStore, issue_cert  # noqa: E402
-from intercycle.margin_inflate import SCHEMA as MARGIN_SCHEMA, Margin, inflation_spec  # noqa: E402
+from intercycle.margin_inflate import SCHEMA as MARGIN_SCHEMA, Margin, inflation_spec, load_margin  # noqa: E402
 from intercycle.observer import mapping as OM  # noqa: E402
 from intercycle.types import DAY0_UNIX  # noqa: E402
 from twin import build_worlds as BW  # noqa: E402
 from twin import compile as C  # noqa: E402
+from twin import daygen as DG1  # noqa: E402
 from twin import daygen_stub as DG  # noqa: E402
 from twin import observer_live as OL  # noqa: E402
 from twin import plant as PL  # noqa: E402
+from twin.rng import DEV_SEED_MAX  # noqa: E402
 from twin.schemas import json_schema, load  # noqa: E402
 from twin.schemas.dayscript import FILE_SUFFIX  # noqa: E402
 from twin.schemas.dynamics import Dynamics  # noqa: E402
@@ -98,13 +104,23 @@ DT = 0.1                         # local double step (= the plant's SAFETY_DT)
 SPEED = 0.5                      # local double walking speed (m/s; timing.TimingCore's nominal speed)
 HOLD_EXTRA_S = 1.0               # the local double dwells dwell_s + this (the plant's capture needs HOLD_S of stillness)
 PROBE_WAIT_S = 240.0             # trip probe: give up waiting for a stroking press after this long and enter anyway
-PROBE_LOOKBACK_S = 4.5           # trip probe: "stroking" = a motion tick within this window (period prior 4 s)
+PROBE_LOOKBACK_S = 6.0           # trip probe: "stroking" is judged on the Observation ticks of this window
+PROBE_MIN_TICKS = 8              # ... which must hold at least this many finite (not MISSING) zone_motion values
+PROBE_MIN_FRAC = 0.6             # ... of which at least this share report motion (> the run's motion_thr). One tick
+                                 # is not enough on stat_v1: its idle ROI energy exceeds the threshold on ~12 % of
+                                 # ticks (stat_v1_params.json energy.motion_thr fpr_idle), so a single-tick rule sent
+                                 # the probe into idle presses (no trip); P(>= 60 % of 8 idle ticks) = binom.sf(4, 8,
+                                 # 0.1189) ~ 1e-3 (worst case 8 ticks; assumes independent ticks, which consecutive
+                                 # ROI energies may not be, so the true rate can be higher)
 PARK = (-5.0, -5.0)              # robot parked off every zone's visible floor while the observer learns
 TICK_S = 0.5                     # Observation / realised stream tick (2 Hz)
 GUARD_TESTS = ("tests/test_truth_allowlist.py", "tests/test_isaac_deps.py")
 FILES_STEP1 = ("boxes.json", "static.usda", "mesh.npz", "map.pgm", "map.yaml")
 REMOTE_REPO = "/root/repo"       # cloud/modal_isaac_robot.py mounts twin/, intercycle/ and scenario/ here
 STUB_MARGIN = dict(margin_m=0.5, cell_m=0.25)
+L1_GRID_MARGIN_M = 1.0          # the observer grid margin around the zone (twin_spec default); grown to fit a larger margin_m
+SEALED_ENV = "INTERCYCLE_SEALED_RUN"
+SAFETY = ("safety.yaml", "safety_v0.yaml")   # (twin/site.yaml's safety file, the G0 stub site_v0's)
 
 
 class SliceError(RuntimeError):
@@ -146,19 +162,20 @@ def read_log(run_dir: Path) -> list[dict]:
     return rows
 
 
-def inputs(allow_stubs: bool = True) -> dict[str, Path]:
-    """The contract files in force, plus safety.yaml. tasks.yaml absent (S2 TASKS later) -> the tasks_v0 stub.
-
-    The slice's day step is the STUB day generator (twin/daygen_stub.py, v0 dynamics keys) and a v1 site / dynamics
-    does not compile with the v0 tasks stub (site_id differs), so as soon as one contract falls back to its stub the
-    slice runs on the WHOLE G0 v0 stub set (logged, and recorded per contract in the build step's `stubs`); the slice
-    on the v1 artifacts needs tasks.yaml and the real generator (twin/daygen.py) in step 2."""
+def inputs(allow_stubs: bool = True, stubs: bool = False) -> dict[str, Path]:
+    """The contract files in force, plus the site's safety file (SAFETY). `stubs` = the whole G0 v0 stub set (site_v0, dynamics_v0,
+    tasks_v0) on purpose (the slice's stub run). A v1 site / dynamics does not compile with the v0 tasks stub
+    (site_id differs), so as soon as one contract falls back to its stub the slice runs on the WHOLE G0 v0 stub set
+    (logged, and recorded per contract in the build step's `stubs`). On the v1 artifacts step 2 runs DAYGEN v1
+    (twin/daygen.py), on the stubs the stub generator (`step_day`)."""
+    if stubs:
+        return {**{k: C.TWIN / stub for k, (_, stub) in C.INPUT_FILES.items()}, "safety": C.TWIN / SAFETY[1]}
     paths = dict(C.default_inputs(allow_stubs=allow_stubs))
     if allow_stubs and any(C.is_stub(k, p) for k, p in paths.items()):
         paths = {k: C.TWIN / stub for k, (_, stub) in C.INPUT_FILES.items()}
         logging.getLogger(__name__).warning("slice: a contract file is missing, running on the whole G0 v0 stub set %s",
                                             {k: p.name for k, p in paths.items()})
-    paths["safety"] = C.TWIN / "safety.yaml"
+    paths["safety"] = C.TWIN / SAFETY[int(any(C.is_stub(k, p) for k, p in paths.items()))]
     return paths
 
 
@@ -257,22 +274,36 @@ def step_build(out: Path, paths: dict[str, Path]) -> tuple[dict, dict[str, C.Com
 
 
 def step_day(out: Path, paths: dict[str, Path], world: int, day: int) -> tuple[dict, Path, Any]:
+    """Step 2. The generator follows the dynamics file: the G0 stub dynamics -> the stub generator (2 presses, 1
+    forklift, >= 1 walker); the v1 dynamics -> DAYGEN v1 (every site press present, >= 1 walker; forklifts are
+    reported, not required: their rate is the generator's own)."""
     site, dyn = load(Site, paths["site"]), load(Dynamics, paths["dynamics"])
-    script = DG.generate_day(world, day, site=site, dynamics=dyn, duration_s=DAY_S)
+    stub = C.is_stub("dynamics", paths["dynamics"])
+    if stub != C.is_stub("site", paths["site"]):
+        raise SliceError("site and dynamics must both be the G0 stubs or both the v1 artifacts")
+    if stub:
+        script = DG.generate_day(world, day, site=site, dynamics=dyn, duration_s=DAY_S)
+    else:
+        script = DG1.generate_day(world, day, inputs=DG1.load_inputs(site=site, dynamics=dyn), duration_s=DAY_S)
     presses = list(script.presses)
     forklifts = sorted({m.entity for m in script.mover_intents if m.cls == "forklift"})
     walkers = sorted({m.entity for m in script.mover_intents if m.cls == "person"})
-    if len(presses) != 2 or len(forklifts) != 1 or not walkers:
+    if stub and (len(presses) != 2 or len(forklifts) != 1 or not walkers):
         raise SliceError(f"stub day: {len(presses)} presses, {len(forklifts)} forklifts, {len(walkers)} walkers "
                          "(want 2, 1, >= 1)")
-    path = DG.write_day(script, out / f"w{world}_d{day}{FILE_SUFFIX}")
+    if not stub and (sorted(presses) != sorted(p.id for p in site.presses) or not walkers):
+        raise SliceError(f"DAYGEN v1 day: presses {presses} (want every site press), {len(walkers)} walkers (want >= 1)")
+    path = (DG.write_day if stub else DG1.write_day)(script, out / f"w{world}_d{day}{FILE_SUFFIX}")
     rec = {"file": path.name, "duration_s": script.duration_s, "t0_s": script.t0_s, "presses": presses,
-           "forklifts": len(forklifts), "walkers": len(walkers), "generator": script.generator}
+           "forklifts": len(forklifts), "walkers": len(walkers), "generator": script.generator,
+           "generator_version": script.generator_version}
     return rec, path, script
 
 
-def run_learn(out: Path, paths: dict[str, Path], script_path: Path, t0: float, zone: str, world: int) -> tuple[dict, Path]:
-    """Steps 3-4: the plant over the first LEARN_S s with the robot parked off the floor."""
+def run_learn(out: Path, paths: dict[str, Path], script_path: Path, t0: float, zone: str,
+              world: int) -> tuple[dict, Path, PL.ObsAdapter]:
+    """Steps 3-4: the plant over the first LEARN_S s with the robot parked off the floor. Returns (record, its
+    obs_v2.jsonl, the plant's ObsAdapter: press / camera order and the camera model's holds)."""
     run_dir = out / "runs" / "learn"
     plant = PL.make(plant_cfg(paths, script_path, run_dir, run_id="slice_learn", zone=zone, world=world, t0=t0,
                               seconds=LEARN_S))
@@ -286,16 +317,36 @@ def run_learn(out: Path, paths: dict[str, Path], script_path: Path, t0: float, z
     if not all(o.is_v2 for o in obs):
         raise SliceError("non-v2 observation in obs_v2.jsonl")
     lat = float(np.median([o.t - o.t_cap for o in obs]))
+    cam = plant.camera.provenance()
     return ({"run_dir": str(run_dir), "n_obs": len(obs), "hz": 1.0 / TICK_S, "latency_s": lat,
-             "t_cap0": float(caps[0]), "t_cap1": float(caps[-1]), "robot": "parked off the visible floor"},
-            plant.obs_path)
+             "t_cap0": float(caps[0]), "t_cap1": float(caps[-1]), "robot": "parked off the visible floor",
+             "camera_model": cam["model"], "camera_cal_source": cam["cal_source"]},
+            plant.obs_path, plant.adapter)
 
 
-def margin_path(out: Path) -> tuple[Path, str]:
-    """S7b's frozen twin/m7_margin.json when it exists; otherwise a slice-local STUB margin (on stubs only)."""
+def stub_margin_refusal(world: int | None = None, freeze: bool = False) -> str | None:
+    """Why the 0.5 m STUB margin must not be used (None = allowed): a sealed run (INTERCYCLE_SEALED_RUN=1), a freeze
+    world (`freeze`: the world is built for FREEZE / the sealed test) or a test world seed (outside the dev seeds
+    0..DEV_SEED_MAX). The stub is a dev-slice placeholder; a freeze or sealed world needs the frozen twin/m7_margin.json."""
+    if os.environ.get(SEALED_ENV) == "1":
+        return f"{SEALED_ENV}=1"
+    if freeze:
+        return "a freeze world is being built (--freeze)"
+    if world is not None and not (0 <= int(world) <= DEV_SEED_MAX):
+        return f"world seed {world} is a test seed (dev seeds are 0..{DEV_SEED_MAX})"
+    return None
+
+
+def margin_path(out: Path, *, world: int | None = None, freeze: bool = False) -> tuple[Path, str]:
+    """S7b's frozen twin/m7_margin.json when it exists; otherwise a slice-local STUB margin (dev slices on stubs only:
+    refused in a sealed run and for a freeze or sealed world, `stub_margin_refusal`)."""
     frozen = C.TWIN / "m7_margin.json"
     if frozen.exists():
         return frozen, "twin/m7_margin.json (S7b, frozen)"
+    why = stub_margin_refusal(world, freeze)
+    if why:
+        raise SliceError(f"twin/m7_margin.json is missing and the 0.5 m STUB margin is refused ({why}): "
+                         "write the frozen margin (scripts/write_fixed_margin.py) first")
     mg = Margin(**STUB_MARGIN)
     p = out / "m7_margin.json"
     p.write_text(json.dumps(dict(schema=MARGIN_SCHEMA, frozen=True, status="ok", inflation=inflation_spec(mg),
@@ -304,8 +355,11 @@ def margin_path(out: Path) -> tuple[Path, str]:
     return p, "slice stub (0.5 m on 0.25 m cells; S7b's frozen margin not merged)"
 
 
-def observer_spec(site: Site, compiled: dict[str, C.CompiledZone], adapter: PL.ObsAdapter) -> dict:
-    """The site-wide observer spec in the plant adapter's order (machines = press danger rects, cameras = zones)."""
+def observer_spec(site: Site, compiled: dict[str, C.CompiledZone], adapter: PL.ObsAdapter,
+                  margin_m: float = 0.0) -> dict:
+    """The site-wide observer spec in the plant adapter's order (machines = press danger rects, cameras = zones).
+    The L1 grid margin is max(L1_GRID_MARGIN_M, margin_m) so ObserverLive (which refuses margin_m > spec["margin"])
+    accepts the frozen margin; for margin_m <= 1.0 m the grid is the unchanged 1.0 m one."""
     zones = {z.id: z for z in site.zones}
     floors = [np.asarray(zones[z].floor_polygon.value, float) for z in adapter.zone_ids]
     allp = np.vstack(floors)
@@ -313,18 +367,32 @@ def observer_spec(site: Site, compiled: dict[str, C.CompiledZone], adapter: PL.O
     machines = [dict(id=pid, kind="press", rect=tuple(r)) for pid, r in zip(adapter.press_ids, adapter.rects)]
     cams = [(float(f[:, 0].mean()), float(f[:, 1].mean())) for f in floors]
     scn = next(iter(compiled.values())).scenario
-    return OL.twin_spec(machines, extent, cams, site_id=scn.site_id, key_id=scn.key_id)
+    return OL.twin_spec(machines, extent, cams, site_id=scn.site_id, key_id=scn.key_id,
+                        margin=max(L1_GRID_MARGIN_M, float(margin_m)))
 
 
-def step_observer(out: Path, spec: dict, obs_path: Path, t_end: float) -> tuple[dict, OL.ObserverLive]:
-    mp, msrc = margin_path(out)
-    ob = OL.ObserverLive(spec, OL.ObserverLiveConfig(margin_path=str(mp)), obs_path=obs_path)
+def _spec_step(out: Path, site: Site, ctx: dict, world: int, freeze: bool) -> tuple[dict, dict]:
+    """The observer spec with an L1 grid margin that fits the margin file in force (refuses the stub where it must)."""
+    mp, _ = margin_path(out, world=world, freeze=freeze)
+    margin_m = load_margin(mp).margin_m
+    spec = observer_spec(site, ctx["compiled"], ctx["adapter"], margin_m)
+    return {"margin_m": margin_m, "grid_margin_m": spec["margin"]}, spec
+
+
+def step_observer(out: Path, spec: dict, obs_path: Path, t_end: float,
+                  camera_model: str, *, stub_run: bool = False, world: int | None = None,
+                  freeze: bool = False) -> tuple[dict, OL.ObserverLive]:
+    """Step 5: the observer config follows the camera model that wrote the Observation (`OL.config_for_camera`,
+    fail closed on any model other than stat_v1; the G0 stand-in camera_v0 only when the slice runs on the whole G0
+    v0 stub set, `stub_run`). The margin file follows `margin_path` (the stub margin is refused for a freeze world)."""
+    mp, msrc = margin_path(out, world=world, freeze=freeze)
+    ob = OL.ObserverLive(spec, OL.config_for_camera(camera_model, str(mp), stub_run=stub_run), obs_path=obs_path)
     n = ob.advance(t_end + 10.0)
     if n < int(LEARN_S / TICK_S) - 1:
         raise SliceError(f"observer ingested {n} ticks")
     diag = ob.diagnostics()
-    return {"ticks": n, "margin": msrc, "models": diag["models"], "availability": diag["availability"],
-            "tags": diag["tags"]}, ob
+    return {"ticks": n, "margin": msrc, "camera_model": camera_model, "motion_thr": ob.cfg.motion_thr,
+            "models": diag["models"], "availability": diag["availability"], "tags": diag["tags"]}, ob
 
 
 def step_signatures(ob: OL.ObserverLive, t: float) -> dict:
@@ -380,9 +448,9 @@ def step_signatures(ob: OL.ObserverLive, t: float) -> dict:
 
 
 def step_mission_local(out: Path, paths: dict[str, Path], script_path: Path, cz: C.CompiledZone, t0: float,
-                       zone: str, world: int) -> dict:
+                       zone: str, world: int, motion_thr: float) -> dict:
     """Step 6 (local scripted double): one MISSION_S mission in mission order; the first press checkpoint is the
-    trip probe (see the module docstring)."""
+    trip probe (see the module docstring). `motion_thr` = the run's observer threshold (its camera model's)."""
     run_dir = out / "runs" / "mission_local"
     plant = PL.make(plant_cfg(paths, script_path, run_dir, run_id=f"slice_w{world}_{zone}_learned_local", zone=zone,
                               world=world, t0=t0, seconds=MISSION_S))
@@ -397,9 +465,9 @@ def step_mission_local(out: Path, paths: dict[str, Path], script_path: Path, cz:
     def stroking(pid: str) -> bool:
         seen.extend(reader.poll())
         i = plant.adapter.press_ids.index(pid)
-        recent = [o for o in seen if o.t_cap >= plant.t0 + drv.t - PROBE_LOOKBACK_S]
-        return any(np.isfinite(o.zone_motion[i]) and o.zone_motion[i] > OL.ObserverLiveConfig.motion_thr
-                   for o in recent)
+        recent = [float(o.zone_motion[i]) for o in seen if o.t_cap >= plant.t0 + drv.t - PROBE_LOOKBACK_S]
+        fin = [v for v in recent if np.isfinite(v)]
+        return len(fin) >= PROBE_MIN_TICKS and sum(v > motion_thr for v in fin) >= PROBE_MIN_FRAC * len(fin)
 
     here = "DOCK"
     for tg in g.mission():
@@ -606,7 +674,7 @@ def modal_cfg(tag: str, paths: dict[str, Path], script_name: str, cz: C.Compiled
 
 
 def world_bytes(zone_dir: Path, learn_obs: Path, spec: dict, zone_machines: list[str], margin: Path,
-                zone: str) -> dict[str, bytes]:
+                zone: str, camera_model: str) -> dict[str, bytes]:
     """The world files every process of the episode may read (the robot side is given this dir as $IC_WORLD): the
     zone's built world (incl. scenario.yaml and inputs.json: the planner's TwinSiteGraph), and for the twin broadcaster the observer spec, the
     frozen M-W7 margin and the learning period's Observation v2 lines. No truth: the day script ships separately
@@ -615,7 +683,7 @@ def world_bytes(zone_dir: Path, learn_obs: Path, spec: dict, zone_machines: list
 
     files = {f: (zone_dir / f).read_bytes() for f in BW.FILES if (zone_dir / f).exists()}
     files["factory_l0.usda"] = files["static.usda"]   # the name the Isaac backend opens (isaac_backend.py)
-    files[BL.SPEC_FILE] = json.dumps(BL.spec_record(spec, zone, zone_machines)).encode()
+    files[BL.SPEC_FILE] = json.dumps(BL.spec_record(spec, zone, zone_machines, camera_model)).encode()
     files[BL.MARGIN_FILE] = margin.read_bytes()
     files[BL.LEARN_FILE] = learn_obs.read_bytes()
     return files
@@ -687,11 +755,11 @@ def check_modal_mission(rec: dict) -> dict:
 # ------------------------------------------------------------------------------------------------ main
 
 def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: str = "", cpu: float = 4.0,
-        max_rtf: float = 2.0, guard_tests: bool = True) -> dict:
+        max_rtf: float = 2.0, guard_tests: bool = True, stubs: bool = False, freeze: bool = False) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     rep: dict = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "head": git_head(), "world": world, "day": day,
-                 "zone": zone, "steps": {}, "assertions": {}}
-    ctx: dict = {}
+                 "zone": zone, "stubs_requested": stubs, "freeze": freeze, "steps": {}, "assertions": {}}
+    ctx: dict = {"freeze": freeze}
 
     def do(name: str, fn: Callable[[], Any], kind: str = "steps") -> Any:
         t = time.time()
@@ -704,7 +772,7 @@ def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: st
             rep[kind][name] = {"ok": False, "wall_s": round(time.time() - t, 2), "error": repr(e)[:2000]}
             return None
 
-    paths = inputs()
+    paths = inputs(stubs=stubs)
     r = do("1_build", lambda: step_build(out, paths))
     if r:
         ctx["compiled"] = r[1]
@@ -715,17 +783,27 @@ def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: st
         t0 = float(ctx["script"].t0_s)
         r = do("3_4_engine_adapter", lambda: run_learn(out, paths, ctx["script_path"], t0, zone, world))
         if r:
-            ctx["learn_obs"] = r[1]
+            ctx["learn_obs"], ctx["camera_model"], ctx["adapter"] = r[1], r[0]["camera_model"], r[2]
             site = load(Site, paths["site"])
-            ctx["adapter"] = PL.ObsAdapter(site)
-            spec = ctx["spec"] = observer_spec(site, ctx["compiled"], ctx["adapter"])
-            r = do("5_observer", lambda: step_observer(out, spec, ctx["learn_obs"], t0 + LEARN_S))
+            stub_run = all(C.is_stub(k, paths[k]) for k in ("site", "dynamics", "tasks"))
+            r = do("5_observer_spec", lambda: _spec_step(out, site, ctx, world, freeze))
             if r:
-                ctx["observer"] = r[1]
+                spec = ctx["spec"] = r[1]
+                r = do("5_observer", lambda: step_observer(out, spec, ctx["learn_obs"], t0 + LEARN_S,
+                                                           ctx["camera_model"], stub_run=stub_run, world=world,
+                                                           freeze=freeze))
+            if r:
+                ctx["observer"], ctx["motion_thr"] = r[1], r[1].cfg.motion_thr
                 do("signatures", lambda: step_signatures(ctx["observer"], t0 + LEARN_S), "assertions")
         cz = ctx["compiled"][zone]
         planned = [t.id for t in cz.graph.mission()]
-        r = do("6_mission_local", lambda: step_mission_local(out, paths, ctx["script_path"], cz, t0 + LEARN_S, zone, world))
+        if "motion_thr" in ctx:
+            r = do("6_mission_local", lambda: step_mission_local(out, paths, ctx["script_path"], cz, t0 + LEARN_S,
+                                                                 zone, world, ctx["motion_thr"]))
+        else:
+            r = None
+            rep["steps"]["6_mission_local"] = {"ok": False, "wall_s": 0.0,
+                                               "error": "steps 3-5 failed: no observer threshold for the run's camera"}
         if r:
             rd = Path(r["run_dir"])
             m = do("7_8_log_metric", lambda: mission_metric(rd, planned))
@@ -736,8 +814,8 @@ def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: st
                 do("inspection_attempt", lambda: _attempts(info), "assertions")
             if "adapter" in ctx:
                 do("stop_in_observation", lambda: check_stop_propagation(
-                    rd, rd / OL.OBS_FILE, ctx["adapter"], OL.ObserverLiveConfig.motion_thr), "assertions")
-        if modal and "spec" in ctx:
+                    rd, rd / OL.OBS_FILE, ctx["adapter"], ctx["motion_thr"]), "assertions")
+        if modal and "spec" in ctx and "motion_thr" in ctx:
             run_modal_steps(out, rep, do, ctx, paths, cz, planned, t0 + LEARN_S, zone, world, modal, cpu, max_rtf)
         elif modal:
             rep["steps"]["6_mission_modal"] = {"ok": False, "wall_s": 0.0, "error": "steps 3-5 failed: no learned observer"}
@@ -757,9 +835,9 @@ def run_modal_steps(out: Path, rep: dict, do: Callable[..., Any], ctx: dict, pat
     planners = ("timing", "probe") if modal == "timing" else (modal,)
     tags = {pl: f"slice_{'wiring_' if pl == 'patrol' else ''}{pl}_{stamp}" for pl in planners}
     cfgs = [modal_cfg(tags[pl], paths, ctx["script_path"].name, cz, t0, zone, world, pl, max_rtf) for pl in planners]
-    mp, _ = margin_path(out)
+    mp, _ = margin_path(out, world=world, freeze=ctx.get("freeze", False))
     wb = world_bytes(out / "worlds" / zone, ctx["learn_obs"], ctx["spec"], [m.id for m in cz.scenario.machines], mp,
-                     zone)
+                     zone, ctx["camera_model"])
     pf = dict([PL.day_script_payload(ctx["script_path"])])
     recs = do("6_mission_modal", lambda: {"missions": run_modal(out, cfgs, wb, pf, cpu)})
     if not recs:
@@ -795,7 +873,7 @@ def run_modal_steps(out: Path, rep: dict, do: Callable[..., Any], ctx: dict, pat
         def _stops() -> dict:
             if not stops:
                 raise SliceError("no robot-caused press stop in the Modal missions: the propagation is not exercised")
-            return {pl: check_stop_propagation(rd, rd / OL.OBS_FILE, ctx["adapter"], OL.ObserverLiveConfig.motion_thr)
+            return {pl: check_stop_propagation(rd, rd / OL.OBS_FILE, ctx["adapter"], ctx["motion_thr"])
                     for pl, rd in stops}
         do("stop_in_observation_modal", _stops, "assertions")
 
@@ -817,10 +895,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cpu", type=float, default=4.0)
     ap.add_argument("--max-rtf", type=float, default=2.0)
     ap.add_argument("--skip-guard-tests", action="store_true")
+    ap.add_argument("--stubs", action="store_true", help="run on the whole G0 v0 stub set (default: the v1 artifacts)")
+    ap.add_argument("--freeze", action="store_true",
+                    help="build a freeze/sealed world: the 0.5 m stub margin is refused, twin/m7_margin.json is required")
     a = ap.parse_args(argv)
     out = Path(a.out) if a.out else REPO / "out" / "slice" / time.strftime("%m%d_%H%M%S")
     rep = run(out, world=a.world, day=a.day, zone=a.zone, modal=a.modal, cpu=a.cpu, max_rtf=a.max_rtf,
-              guard_tests=not a.skip_guard_tests)
+              guard_tests=not a.skip_guard_tests, stubs=a.stubs,
+              freeze=a.freeze)
     for k in ("steps", "assertions"):
         for name, v in rep[k].items():
             print(f"{'OK  ' if v['ok'] else 'FAIL'} {k[:-1]:<9} {name:<26} {v['wall_s']:>7}s {(v.get('error') or '')[:300]}")

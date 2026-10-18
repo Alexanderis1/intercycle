@@ -1,12 +1,45 @@
 """The sealed test run (PLAN_TWIN §5 "Sealed-test enforcement", §4 FREEZE row). Run by the CUSTODIAN only, on the laptop.
 
-    python scripts/sealed_run.py check   [--sealed-root C:\\intercycle_sealed]    # the refusals only; writes nothing
-    python scripts/sealed_run.py derive  [--sealed-root ...] [--fallback]        # custodian: seeds after FREEZE
+    python scripts/sealed_run.py check --stages clips [--sealed-root C:\\intercycle_sealed]  # refusals only; no writes
+    python scripts/sealed_run.py derive  [--sealed-root ...] [--fallback]        # custodian: seeds after the ROBOT FREEZE
     python scripts/sealed_run.py run --stages clips [--sealed-root ...]         # refusals, RUNLOG, then the stages
-    python scripts/sealed_run.py dev-dry-run --dev-root D --clips 0_dv1,3_dv2   # the clips stage on DEV clips only
+    python scripts/sealed_run.py score [--attempt N] [--sealed-root ...]        # real-clip scoring of a done clips attempt
+    python scripts/sealed_run.py dev-dry-run --dev-root D --clips 0_dv1,3_dv2 [--labels labels/dev]  # DEV clips only
+    python scripts/sealed_run.py dev-score --dev-root D --labels labels/dev      # score a dev dry run as `score` does
 
-Refusals (every one fails closed, before INTERCYCLE_SEALED_RUN=1 is set and before anything is read from the sealed
-root apart from the hash checks):
+SPLIT FREEZE (USER DECISION, Sun ~07:00 CEST). There are two freezes and each stage checks its own:
+
+* the REAL-CLIP freeze `prereg/FREEZE_REALCLIP` (target ~09:15 CEST, at the latest 10:15; the sha of the commit whose code runs the real-clip test). The
+  `clips` stage checks ONLY it (no G2 files, no seeds: the real-clip test uses none):
+  C1. the tree is clean (as 1 below);
+  C2. prereg/FREEZE_REALCLIP holds a 40-hex commit sha, and that commit is an ancestor of HEAD;
+  C3. `git diff --name-only --no-renames <FREEZE_REALCLIP> HEAD` lists nothing but prereg/FREEZE_REALCLIP and
+      results/sealed/** (so prereg/FREEZE, TEST_SEED_COMMIT and every later robot commit are refused);
+  C3b. RUNLOG append-only from the FREEZE_REALCLIP tree (as 3b);
+  C4. MANIFEST and LABELS are tracked in the FREEZE_REALCLIP tree and the working files hash to those blobs, then the
+      clip and label files of the sealed root are checked against them exactly as in 4.
+  The real-clip run (right after that freeze) is therefore made from a DETACHED WORKTREE at the commit that wrote prereg/FREEZE_REALCLIP
+  (`git worktree add --detach <dir> <that commit>`, then `run --stages clips` from <dir>), never from main once the
+  robot work has moved on (docs/probes/REALCLIP_RUN.md: the custodian commands).
+  `score` (same detached worktree, right after `run --stages clips`) re-checks C1-C4, takes the last `done` clips
+  attempt of RUNLOG (or --attempt N), re-hashes its PERC outputs against the RUNLOG's outputs_sha256, loads the
+  LABELS-checked test labels (twin.dev_labels.load_scored_test: same status rules as dev) and runs the SAME scorer as
+  the dev results (intercycle.eval.realclip.run, split "test", pixel adapter with the M-W10 watchdog on the decoded test
+  clips; the watchdog's TRAIN keyframes and the inventory come from $INTERCYCLE_DATA). The full result (per-frame and
+  per-window records: they carry label content) goes to <sealed-root>/scores/attempt_NNN_realclip_test.json; the
+  summary without per-item records to results/sealed/realclip_test_attempt_NNN.json. The scoring code is in the
+  clips-stage closure, so it is frozen by FREEZE_REALCLIP and guarded by robot check 5.
+* the ROBOT freeze `prereg/FREEZE` (~10:15), checked by the robot stage (`double`; Isaac stays outside sealed_run) by refusals 1-4 below
+  as before, plus TEST_SEED_COMMIT, plus:
+  5. prereg/FREEZE_REALCLIP exists, names a commit that is an ancestor of the FREEZE commit, and NO real-clip input
+     differs between FREEZE_REALCLIP and FREEZE: the static import closure of the clips stage (CLIPS_STAGE_ROOTS and
+     every repo module they import, at either commit, with their parent packages), the labels schema, every file
+     under sealed/, the active split (prereg/ACTIVE_SPLIT and the split csv it names), the press ROI file and the
+     detector-input record prereg/r0_v1.json (REALCLIP_DATA_PATHS). The robot stages run from scripts/sealed_robot.py (ROBOT_MODULE, outside that closure,
+     so wiring them does not touch a frozen real-clip file); without it they are refused ("not wired").
+
+Refusals of the robot stages (every one fails closed, before INTERCYCLE_SEALED_RUN=1 is set and before anything is
+read from the sealed root apart from the hash checks):
 
 1. the tree is clean (`git status --porcelain --untracked-files=all` is empty, except results/sealed/RUNLOG.json,
    which every attempt appends to and the custodian may commit);
@@ -56,7 +89,12 @@ is a new attempt with its own records; nothing earlier is rewritten.
   scripts/sealed_ingest.py, shipped with `add_local_python_source` and imported by name in the container (not
   cloudpickled: the client and image Pythons differ). Outputs go to a FRESH <sealed-root>/perc/attempt_<NNN>/ per
   attempt (test tracks never enter the repo); only their sha256 go into RUNLOG.
-* the CPU-double and Isaac batches belong to the EVAL runner; their stages are not wired here yet (refused).
+* `double`: the sealed CPU-double batch (USER DECISION Sun ~07:00 CEST, the CUT design: static, learned, reactive x 16
+  test worlds x days 9-10 x zones = 192 missions), run by scripts/sealed_robot.py (ROBOT_MODULE, imported by name so
+  it stays outside the real-clip closure) through scripts/run_double.py `run_sealed` with the 16 revealed test seeds
+  (world i = seed_ints[i]) after every refusal passed (so after the robot FREEZE), into a FRESH
+  <repo>/out/sealed_double/attempt_<NNN>/ (the twin_eval runs root is its runs/). run_double refuses unless the
+  sealed flag is set. Isaac stays outside sealed_run (descriptive only; refused here).
 
 `dev-dry-run` exercises the clips stage end to end on DEV clips before the sealed run: it copies the named clips (each
 must be a `dev` row of the active split) from $INTERCYCLE_DATA/clips into a scratch dev root (never the sealed root),
@@ -82,7 +120,10 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
+
+if TYPE_CHECKING:
+    from twin.dev_labels import ScoredDev
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
@@ -95,12 +136,14 @@ from twin.schemas.prereg import SealedHashes, active_split_path, camera_class_of
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 DEFAULT_SEALED_ROOT = Path(r"C:\intercycle_sealed")
 FREEZE = "prereg/FREEZE"
+FREEZE_REALCLIP = "prereg/FREEZE_REALCLIP"   # the real-clip freeze (split freeze, USER DECISION Sun ~07:00)
 SEED_COMMIT = "prereg/TEST_SEED_COMMIT"
 RUNLOG = "results/sealed/RUNLOG.json"
 RUNLOG_CONTRACT = "twin.sealed_runlog/2"
 RUNLOG_STATUS = ("started", "done", "error")
 ALLOWED_DIRTY = (RUNLOG,)                  # the only path that may be dirty / untracked (each attempt appends to it)
 ALLOWED_AFTER_FREEZE = (FREEZE, SEED_COMMIT, RUNLOG)
+ALLOWED_AFTER_FREEZE_REALCLIP = (FREEZE_REALCLIP, RUNLOG)
 RESULTS_SEALED = "results/sealed/"         # sealed_run's own outputs: exempt from the FREEZE..HEAD diff rule (re-runs)
 INPUTS = {"manifest": "sealed/MANIFEST.sha256", "labels": "sealed/LABELS.sha256",
           "generator": "twin/daygen.py", "dynamics": "twin/dynamics.json", "engine": "twin/engine.py",
@@ -120,7 +163,30 @@ INGEST_CONTAINER_MODULE = "sealed_ingest"         # scripts/sealed_ingest.py: th
 PERC_IMAGE_MODULE = "cloud/modal_perc.py"   # the dev batch: its image (detector weights, tracker, versions) is reused
 DRAND_URL = "https://api.drand.sh"
 CLIPS_PER_CALL = 16                         # one detector load per call; 126 clips -> 8 calls
-STAGES = ("clips",)
+CLIP_STAGES = ("clips",)
+# The robot stages sealed_run runs: only the CPU double (USER DECISION Sun ~07:00 CEST: Isaac, movers and A-lite are
+# descriptive and stay OUTSIDE sealed_run; an "isaac" stage is refused as not wired).
+ROBOT_STAGES = ("double",)
+STAGES = CLIP_STAGES + ROBOT_STAGES
+ROBOT_MODULE = "sealed_robot"               # scripts/sealed_robot.py: run_stage(stage, record, repo=, double_runner=)
+# Robot check 5: the real-clip inputs that must be byte-identical between FREEZE_REALCLIP and FREEZE. The import closure
+# is walked from these roots (static `import` / `from` statements, also inside functions; a root missing from a tree is
+# skipped: an added or removed file shows in the diff anyway). esk_ingest is a root because the container imports it by
+# name (importlib), sealed_ingest because sealed_run imports it by name, modal_perc because it is loaded by file path.
+CLIPS_STAGE_ROOTS: tuple[str, ...] = ("scripts/sealed_run.py", "scripts/sealed_ingest.py", PERC_IMAGE_MODULE,
+                                      "intercycle/perception/esk_ingest.py",
+                                      # the sealed scorer (score): imported inside score(), listed so it is guarded
+                                      "intercycle/eval/realclip.py", "intercycle/observer/pixel_adapter.py",
+                                      "twin/dev_labels.py")
+LABELS_SCHEMA = "twin/schemas/labels.py"
+R0_RECORD = "prereg/r0_v1.json"   # the detector-input record (PREREG v1 §2.1 "Covers": real-clip data)
+REALCLIP_DATA_PATHS: tuple[str, ...] = (LABELS_SCHEMA, "prereg/ACTIVE_SPLIT", "docs/probes/S3a-P4_rois.json",
+                                        "twin/site.yaml", "labels/TEST_RULES.md",   # site: H, ROIs, danger rects
+                                        R0_RECORD)
+SITE = "twin/site.yaml"
+LABELS_DIR = "labels/"                        # in the sealed root: every LABELS path (test labels, sample list)
+SCORES_DIR = "scores"                         # in the sealed root: the full sealed scoring output (label content)
+SEALED_DIR = "sealed/"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SHA64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -166,34 +232,39 @@ def check_clean(repo: Path) -> None:
         raise Refusal("the tree is not clean:\n" + "\n".join(dirty))
 
 
-def read_freeze(repo: Path) -> str:
-    p = repo / FREEZE
+def read_freeze(repo: Path, rel: str = FREEZE) -> str:
+    """The commit sha a freeze file (prereg/FREEZE or prereg/FREEZE_REALCLIP) names; refused unless it is a commit."""
+    p = repo / rel
     if not p.is_file():
-        raise Refusal(f"{FREEZE} does not exist")
+        raise Refusal(f"{rel} does not exist")
     try:
         sha = first_value(p.read_text(encoding="utf-8")).lower()
     except Refusal as e:
-        raise Refusal(f"{FREEZE}: {e}") from None
+        raise Refusal(f"{rel}: {e}") from None
     if not SHA40.match(sha):
-        raise Refusal(f"{FREEZE} must hold a full 40-hex commit sha, got {sha!r}")
+        raise Refusal(f"{rel} must hold a full 40-hex commit sha, got {sha!r}")
     got = git(repo, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}", ok_codes=(0, 1))
     if got.returncode != 0 or got.stdout.decode().strip() != sha:
-        raise Refusal(f"{FREEZE} names {sha}, which is not a commit of this repo")
+        raise Refusal(f"{rel} names {sha}, which is not a commit of this repo")
     return sha
 
 
-def check_ancestor(repo: Path, sha: str) -> None:
-    p = git(repo, "merge-base", "--is-ancestor", sha, "HEAD", ok_codes=(0, 1))
+def check_ancestor(repo: Path, sha: str, of: str = "HEAD", what: str = "FREEZE") -> None:
+    p = git(repo, "merge-base", "--is-ancestor", sha, of, ok_codes=(0, 1))
     if p.returncode != 0:
-        raise Refusal(f"the FREEZE commit {sha} is not an ancestor of HEAD")
+        raise Refusal(f"the {what} commit {sha} is not an ancestor of {of}")
 
 
-def check_diff(repo: Path, sha: str) -> list[str]:
-    names = [n for n in git(repo, "diff", "--name-only", "--no-renames", sha, "HEAD").stdout.decode("utf-8").splitlines()
-             if n]
-    extra = sorted(n for n in set(names) if n not in ALLOWED_AFTER_FREEZE and not n.startswith(RESULTS_SEALED))
+def _diff_names(repo: Path, a: str, b: str) -> list[str]:
+    return [n for n in git(repo, "diff", "--name-only", "--no-renames", a, b).stdout.decode("utf-8").splitlines() if n]
+
+
+def check_diff(repo: Path, sha: str, allowed: tuple[str, ...] = ALLOWED_AFTER_FREEZE, what: str = "FREEZE") -> list[str]:
+    names = _diff_names(repo, sha, "HEAD")
+    extra = sorted(n for n in set(names) if n not in allowed and not n.startswith(RESULTS_SEALED))
     if extra:
-        raise Refusal(f"files changed since FREEZE besides {[FREEZE, SEED_COMMIT]} and {RESULTS_SEALED}**: {extra}")
+        named = [a for a in allowed if a != RUNLOG]
+        raise Refusal(f"files changed since {what} besides {named} and {RESULTS_SEALED}**: {extra}")
     return names
 
 
@@ -221,10 +292,13 @@ def check_commit_dates(repo: Path) -> int:
     return ct
 
 
-def check_inputs(repo: Path, sha: str) -> dict[str, dict]:
-    """Every input is tracked in the FREEZE tree and the working file hashes to the FREEZE blob (LF-normalised)."""
+def check_inputs(repo: Path, sha: str, keys: Iterable[str] | None = None) -> dict[str, dict]:
+    """Every input is tracked in the FREEZE tree and the working file hashes to the FREEZE blob (LF-normalised).
+    `keys` (the clips stage: manifest, labels) checks only those inputs and skips the G2 record."""
     out = {}
-    for name, rel in INPUTS.items():
+    names = list(INPUTS) if keys is None else list(keys)
+    for name in names:
+        rel = INPUTS[name]
         work = repo / rel
         if not work.is_file():
             raise Refusal(f"input {name} ({rel}) does not exist")
@@ -235,7 +309,8 @@ def check_inputs(repo: Path, sha: str) -> dict[str, dict]:
         if h_work != h_frozen:
             raise Refusal(f"input {name} ({rel}) hash {h_work[:16]} != FREEZE {h_frozen[:16]}")
         out[name] = {"path": rel, "sha256": h_work}
-    check_g2_hashes(repo, sha, out)
+    if keys is None:
+        check_g2_hashes(repo, sha, out)
     return out
 
 
@@ -335,6 +410,8 @@ def check_label_files(sealed_root: Path, lab: SealedHashes) -> None:
     """Every LABELS file under <sealed_root> hashes to its line, and the sample list among them carries #sample_list."""
     samples = []
     for f in lab.files:
+        if not f.path.startswith(LABELS_DIR) or ".." in Path(f.path).parts:
+            raise Refusal(f"LABELS path {f.path} is not under {LABELS_DIR} of the sealed root")
         p = sealed_root / f.path
         if not p.is_file():
             raise Refusal(f"label file {f.path} is missing from the sealed root")
@@ -458,11 +535,129 @@ def check_seeds(repo: Path, sealed_root: Path, t_freeze: int, fetch: Callable[[s
             **src}
 
 
+# ------------------------------------------------------------------------------------------------ real-clip closure
+
+def _blob_text(repo: Path, rev: str, rel: str) -> str | None:
+    b = git(repo, "cat-file", "blob", f"{rev}:{rel}", ok_codes=(0, 128))
+    return b.stdout.decode("utf-8", "replace") if b.returncode == 0 else None
+
+
+def _tree_files(repo: Path, rev: str) -> set[str]:
+    return {n for n in git(repo, "ls-tree", "-r", "--name-only", rev).stdout.decode("utf-8").splitlines() if n}
+
+
+def _module_candidates(mod: str) -> list[str]:
+    base = mod.replace(".", "/")
+    return [f"{base}.py", f"{base}/__init__.py"]
+
+
+def import_closure(repo: Path, rev: str, roots: Iterable[str] = ()) -> set[str]:
+    """The repo files the clips stage executes at commit `rev`: the roots, every repo module they import statically
+    (`import a.b`, `from a.b import c` incl. c as a submodule, relative imports, imports inside functions; a top-level
+    name is also resolved next to the importing file, as `import sealed_ingest` from scripts/), transitively, plus the
+    parent packages' __init__.py. Non-repo modules (stdlib, numpy, modal, ...) are ignored. A file that does not parse
+    is refused (fail closed)."""
+    import ast
+
+    files = _tree_files(repo, rev)
+    todo = [r for r in (tuple(roots) or CLIPS_STAGE_ROOTS) if r in files]
+    seen: set[str] = set()
+
+    def add_module(mod: str, here: str) -> None:
+        parts = mod.split(".")
+        for k in range(1, len(parts) + 1):                   # parent packages execute their __init__.py
+            for cand in _module_candidates(".".join(parts[:k])):
+                if cand in files:
+                    todo.append(cand)
+        local = str(Path(here).parent.as_posix())
+        if local not in ("", "."):
+            for cand in _module_candidates(f"{local}/{mod}".replace("/", ".")):
+                if cand in files:
+                    todo.append(cand)
+
+    while todo:
+        rel = todo.pop()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        if not rel.endswith(".py"):
+            continue
+        text = _blob_text(repo, rev, rel)
+        if text is None:
+            continue
+        try:
+            tree = ast.parse(text, filename=rel)
+        except SyntaxError as e:
+            raise Refusal(f"{rev[:12]}:{rel} does not parse ({e}); the real-clip import closure cannot be checked") \
+                from None
+        pkg = rel.rsplit("/", 1)[0].replace("/", ".") if "/" in rel else ""
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    add_module(a.name, rel)
+            elif isinstance(n, ast.ImportFrom):
+                if n.level:
+                    up = pkg.split(".")[: len(pkg.split(".")) - (n.level - 1)] if pkg else []
+                    base = ".".join(up + ([n.module] if n.module else []))
+                else:
+                    base = n.module or ""
+                if base:
+                    add_module(base, rel)
+                for a in n.names:
+                    if a.name != "*":
+                        add_module(f"{base}.{a.name}" if base else a.name, rel)
+    return seen
+
+
+def realclip_inputs(repo: Path, rev: str) -> set[str]:
+    """Every real-clip input path at commit `rev`: the clips stage's import closure, REALCLIP_DATA_PATHS, the split csv
+    prereg/ACTIVE_SPLIT names, and every file under sealed/."""
+    out = import_closure(repo, rev) | set(REALCLIP_DATA_PATHS)
+    act = _blob_text(repo, rev, "prereg/ACTIVE_SPLIT")
+    if act is not None and act.strip():
+        out.add(f"prereg/{act.strip().splitlines()[0].strip()}")
+    out |= {f for f in _tree_files(repo, rev) if f.startswith(SEALED_DIR)}
+    return out
+
+
+def check_realclip_unchanged(repo: Path, freeze_sha: str) -> dict:
+    """Robot check 5: prereg/FREEZE_REALCLIP names an ancestor of the FREEZE commit and no real-clip input path (at
+    either commit) differs between the two."""
+    rc = read_freeze(repo, FREEZE_REALCLIP)
+    check_ancestor(repo, rc, of=freeze_sha, what="FREEZE_REALCLIP")
+    guarded = realclip_inputs(repo, rc) | realclip_inputs(repo, freeze_sha)
+    changed = sorted(n for n in _diff_names(repo, rc, freeze_sha) if n in guarded)
+    if changed:
+        raise Refusal(f"real-clip inputs differ between FREEZE_REALCLIP {rc[:12]} and FREEZE {freeze_sha[:12]}: "
+                      f"{changed}")
+    return {"freeze_realclip_sha": rc, "n_realclip_inputs": len(guarded)}
+
+
 # ------------------------------------------------------------------------------------------------ preflight
 
+def preflight_clips(repo: Path, sealed_root: Path) -> dict:
+    """The clips stage's refusals C1-C4 against prereg/FREEZE_REALCLIP (no G2 files, no seeds). Same return shape as
+    preflight (freeze_sha = the FREEZE_REALCLIP sha)."""
+    check_clean(repo)
+    sha = read_freeze(repo, FREEZE_REALCLIP)
+    check_ancestor(repo, sha, what="FREEZE_REALCLIP")
+    changed = check_diff(repo, sha, ALLOWED_AFTER_FREEZE_REALCLIP, "FREEZE_REALCLIP")
+    runlog = check_runlog(repo, sha)
+    inputs = check_inputs(repo, sha, keys=("manifest", "labels"))
+    man = load_sealed(repo, "manifest", "MANIFEST")
+    lab = load_sealed(repo, "labels", "LABELS")
+    jobs = check_manifest_files(repo, sealed_root, man)
+    check_label_files(sealed_root, lab)
+    head = git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+    return {"head": head, "freeze": FREEZE_REALCLIP, "freeze_sha": sha, "changed_since_freeze": changed,
+            "inputs": inputs, "manifest_aggregate": man.aggregate, "labels_aggregate": lab.aggregate,
+            "n_clips": len(jobs), "jobs": jobs, "runlog": runlog}
+
+
 def preflight(repo: Path, sealed_root: Path, fetch: Callable[[str], dict] = drand_fetch) -> dict:
-    """Every PLAN §5 refusal, in order. Returns the RUNLOG record (without stages) plus the current RUNLOG records
-    ("runlog") and the clip jobs ("jobs"); raises Refusal."""
+    """The robot stages' refusals (PLAN §5, 1-4, then 5: the real-clip inputs are unchanged since FREEZE_REALCLIP),
+    in order. Returns the RUNLOG record (without stages) plus the current RUNLOG records ("runlog") and the clip jobs
+    ("jobs"); raises Refusal."""
     check_clean(repo)
     sha = read_freeze(repo)
     check_ancestor(repo, sha)
@@ -476,10 +671,12 @@ def preflight(repo: Path, sealed_root: Path, fetch: Callable[[str], dict] = dran
     t_freeze = check_commit_dates(repo)
     seeds = check_seeds(repo, sealed_root, t_freeze, fetch)
     inputs["test_seed_commit"] = {"path": SEED_COMMIT, "sha256": seeds["test_seed_commit"]}
+    realclip = check_realclip_unchanged(repo, sha)
     head = git(repo, "rev-parse", "HEAD").stdout.decode().strip()
-    return {"head": head, "freeze_sha": sha, "freeze_commit_time": t_freeze, "changed_since_freeze": changed,
-            "inputs": inputs, "manifest_aggregate": man.aggregate, "labels_aggregate": lab.aggregate,
-            "n_clips": len(jobs), "seeds": seeds, "jobs": jobs, "runlog": runlog}
+    return {"head": head, "freeze": FREEZE, "freeze_sha": sha, "freeze_commit_time": t_freeze,
+            "changed_since_freeze": changed, "inputs": inputs, "manifest_aggregate": man.aggregate,
+            "labels_aggregate": lab.aggregate, "n_clips": len(jobs), "seeds": seeds, "realclip_freeze": realclip,
+            "jobs": jobs, "runlog": runlog}
 
 
 # ------------------------------------------------------------------------------------------------ RUNLOG (append-only)
@@ -594,6 +791,11 @@ def modal_runner(batches: list[list[dict]]) -> list[dict]:
     if spec is None or spec.loader is None or not (REPO / PERC_IMAGE_MODULE).is_file():
         raise Refusal(f"{PERC_IMAGE_MODULE} is missing (PERC not merged)")
     mp = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: Modal resolves the image's build-step function (modal_perc._prefetch_weights) through
+    # inspect.getmodule; an unregistered module makes it a SERIALIZED function, which Modal refuses when the client
+    # Python (3.14) differs from the image's (3.12). Registered, it is a FILE function (cloud/modal_perc.py, imported
+    # by name in the build container), as under `modal run cloud/modal_perc.py`. Found by the RC-freeze dry run.
+    sys.modules[spec.name] = mp
     spec.loader.exec_module(mp)
     si = _ingest_module()
     fs = modal_function_spec()
@@ -651,37 +853,71 @@ def _now_iso() -> str:
 
 
 def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str], dict] = drand_fetch,
-        runner: Callable[[list[list[dict]]], list[dict]] | None = None) -> dict:
-    """One sealed attempt: refusals, then a `started` RUNLOG record, the stages, and the closing record."""
+        runner: Callable[[list[list[dict]]], list[dict]] | None = None,
+        double_runner: Callable[[Path, list[int]], dict] | None = None) -> dict:
+    """One sealed attempt: refusals, then a `started` RUNLOG record, the stages, and the closing record. The clips
+    stage checks prereg/FREEZE_REALCLIP (preflight_clips); the robot stages check prereg/FREEZE (preflight); one
+    attempt never mixes them (they are frozen at different commits). `double_runner` (tests) stands in for
+    scripts/run_double.py run_sealed inside the robot module."""
     bad = sorted(set(stages) - set(STAGES))
     if bad or not stages:
         raise Refusal(f"stages {bad or stages} are not wired in sealed_run.py (known: {list(STAGES)})")
-    rec = preflight(repo, sealed_root, fetch)
+    robot = [s for s in stages if s in ROBOT_STAGES]
+    if robot and len(robot) != len(stages):
+        raise Refusal(f"stages {stages} mix the real-clip stage (FREEZE_REALCLIP) and robot stages (FREEZE): run them "
+                      "separately")
+    robot_mod = _robot_module() if robot else None
+    if robot_mod is not None and double_runner is None:
+        try:                                         # BEFORE preflight / drand / the RUNLOG started record
+            robot_mod.ready(robot)
+        except robot_mod.StageRefusal as e:
+            raise Refusal(str(e)) from None
+    rec = preflight(repo, sealed_root, fetch) if robot else preflight_clips(repo, sealed_root)
     known = rec.pop("runlog")
     jobs = rec.pop("jobs")
     attempt = 1 + sum(r["status"] == "started" for r in known)
     perc_rel = f"perc/attempt_{attempt:03d}"
-    if (sealed_root / perc_rel).exists():
+    if not robot and (sealed_root / perc_rel).exists():
         raise Refusal(f"{sealed_root / perc_rel} exists but RUNLOG has {attempt - 1} attempts: refusing to reuse it")
     os.environ[SEALED_ENV] = "1"                     # only after every refusal passed
-    for s in rec["seeds"]["seed_ints"]:
+    for s in (rec["seeds"]["seed_ints"] if robot else []):
         check_world_seed(s)                          # the generator's own guard now admits the test seeds
     start = dict(rec, contract=RUNLOG_CONTRACT, attempt=attempt, status="started", timestamp=_now_iso(),
-                 stages=list(stages), sealed_flag=SEALED_ENV + "=1", perc_dir=perc_rel)
+                 stages=list(stages), sealed_flag=SEALED_ENV + "=1", perc_dir=None if robot else perc_rel)
     known = append_runlog(repo, known, start)
     results: dict[str, dict] = {}
+    cur = stages[0]
     try:
         if "clips" in stages:
+            cur = "clips"
             results["clips"] = dict(run_clips(sealed_root, jobs, runner or modal_runner, sealed_root / perc_rel),
                                     status="done")
+        for st in robot:
+            cur = st
+            assert robot_mod is not None
+            results[st] = dict(robot_mod.run_stage(st, dict(start), repo=repo, double_runner=double_runner),
+                               status="done")
     except Exception as e:  # noqa: BLE001 - recorded, then re-raised
-        results["clips"] = {"status": "error", "error": repr(e)}
+        results[cur] = {"status": "error", "error": repr(e)}
         append_runlog(repo, known, {"attempt": attempt, "status": "error", "timestamp": _now_iso(),
                                     "head": rec["head"], "stages": results})
         raise
     known = append_runlog(repo, known, {"attempt": attempt, "status": "done", "timestamp": _now_iso(),
                                         "head": rec["head"], "stages": results})
-    return {"attempt": attempt, "perc_dir": perc_rel, "stages": results, "records": known}
+    return {"attempt": attempt, "perc_dir": None if robot else perc_rel, "stages": results, "records": known}
+
+
+def _robot_module():
+    """scripts/sealed_robot.py (ROBOT_MODULE), imported by name; refused when it does not exist yet."""
+    if not (REPO / "scripts" / f"{ROBOT_MODULE}.py").is_file():
+        raise Refusal(f"the robot stages are not wired: scripts/{ROBOT_MODULE}.py (run_stage(stage, record)) does not "
+                      "exist")
+    scripts = str(REPO / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import importlib
+
+    return importlib.import_module(ROBOT_MODULE)
 
 
 def derive(repo: Path, sealed_root: Path, fallback: bool, fetch: Callable[[str], dict] = drand_fetch,
@@ -717,16 +953,23 @@ def derive(repo: Path, sealed_root: Path, fallback: bool, fetch: Callable[[str],
     return {"seed_commit": seed_commit(salt, seeds), "reveal": str(rp), "source": rec["source"], "round": rec["round"]}
 
 
-def dev_dry_run(repo: Path, dev_root: Path, clip_ids: list[str], data_root: Path | None = None,
-                runner: Callable[[list[list[dict]]], list[dict]] | None = None) -> dict:
-    """The clips stage on DEV clips: a scratch dev root (never the sealed root) with the named dev clips and a dev
-    MANIFEST (make_sealed), then the same jobs / upload / container path with split "dev". No sealed flag, no RUNLOG."""
-    from twin.schemas.prereg import make_sealed, render_sealed
-
+def _dev_root(dev_root: Path) -> Path:
     root = dev_root.resolve()
     sealed = DEFAULT_SEALED_ROOT.resolve()
     if root == sealed or sealed in root.parents or root in sealed.parents:
         raise Refusal(f"the dev root {dev_root} must be outside the sealed root {DEFAULT_SEALED_ROOT}")
+    return root
+
+
+def dev_dry_run(repo: Path, dev_root: Path, clip_ids: list[str], data_root: Path | None = None,
+                runner: Callable[[list[list[dict]]], list[dict]] | None = None, labels: Path | None = None,
+                scorer: Callable[..., dict] | None = None) -> dict:
+    """The clips stage on DEV clips: a scratch dev root (never the sealed root) with the named dev clips and a dev
+    MANIFEST (make_sealed), then the same jobs / upload / container path with split "dev". No sealed flag, no RUNLOG.
+    With `labels` (a dev label dir), it then scores the dry run as `score` scores the test (dev_score)."""
+    from twin.schemas.prereg import make_sealed, render_sealed
+
+    root = _dev_root(dev_root)
     if not clip_ids:
         raise Refusal("dev-dry-run needs --clips (dev clip ids)")
     split = _split_rows(repo)
@@ -757,33 +1000,216 @@ def dev_dry_run(repo: Path, dev_root: Path, clip_ids: list[str], data_root: Path
     rec = {"dev_dry_run": True, "timestamp": _now_iso(), "head": git(repo, "rev-parse", "HEAD").stdout.decode().strip(),
            "clips": list(clip_ids), "manifest_aggregate": man.aggregate, "clips_stage": res}
     (root / "dev_dry_run.json").write_text(json.dumps(rec, indent=1) + "\n", encoding="utf-8", newline="\n")
+    if labels is not None:
+        rec["score"] = dev_score(repo, dev_root, labels, data_root, scorer)
     return rec
+
+
+DEV_LABEL_PAIR = ("labels.json", "sample.json")     # the dev base label set and the one sample list it answers
+
+
+def dev_score(repo: Path, dev_root: Path, labels: Path, data_root: Path | None = None,
+              scorer: Callable[..., dict] | None = None, pair: tuple[str, str] = DEV_LABEL_PAIR) -> dict:
+    """Score a dev dry run (dev_dry_run.json in `dev_root`) through `score`'s own core (score_labels_and_run) with
+    split "dev": the dev label file and its sample list are copied to <dev_root>/labels/, hashed into a dev LABELS
+    file (make_sealed, #sample_list = the sample list's items_sha256), re-checked by check_label_files; the dry run's
+    PERC outputs are re-hashed against dev_dry_run.json and the real scorer runs on them. The test loader takes ONE
+    sample list, so only the dev base pair (labels.json + sample.json) is scored here; the dev supplement
+    (labels_s1.json, its own sample list) is not. Writes <dev_root>/scores/dev_realclip.json (full) and returns the
+    provenance and the summary (no per-item records)."""
+    from twin.schemas.prereg import make_sealed, render_sealed
+
+    root = _dev_root(dev_root)
+    rec = json.loads((root / "dev_dry_run.json").read_text(encoding="utf-8"))
+    st = rec["clips_stage"]
+    out = Path(st["out"])
+    check_perc_outputs(out, st["outputs_sha256"])
+    man = parse_sealed((root / "MANIFEST.dev.sha256").read_text(encoding="utf-8"))
+    jobs = check_manifest_files(repo, root, man, split="dev")
+    files = []
+    for name in pair:
+        data = (labels / name).read_bytes()
+        dst = root / LABELS_DIR / name
+        if dst.exists() and dst.read_bytes() != data:
+            raise Refusal(f"{dst} exists with other content")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(data)
+        files.append((sha256(data), f"{LABELS_DIR}{name}"))
+    smp = SampleList.model_validate(json.loads((labels / pair[1]).read_bytes().decode("utf-8")))
+    lab = make_sealed("LABELS", files, sorted({i.clip_id for i in smp.items}), sample_list_sha256=smp.items_sha256)
+    (root / "LABELS.dev.sha256").write_text(render_sealed(lab), encoding="utf-8", newline="\n")
+    lab = parse_sealed((root / "LABELS.dev.sha256").read_text(encoding="utf-8"))
+    check_label_files(root, lab)
+    sd, res = score_labels_and_run(repo, root, lab, jobs, out, "dev", _data_root(data_root), scorer)
+    head = git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+    prov = {"contract": "twin.sealed_realclip_dev_dry/1", "timestamp": _now_iso(), "head": head, "split": "dev",
+            "perc_dir": str(out), "labels": [p for _, p in files], "labels_aggregate": lab.aggregate,
+            "manifest_aggregate": man.aggregate, "label_counts": sd.doc["counts"]}
+    full = root / SCORES_DIR / "dev_realclip.json"
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(json.dumps(dict(prov, result=res), indent=1, default=float) + "\n", encoding="utf-8",
+                    newline="\n")
+    summary = {k: v for k, v in res.items() if k not in ("frames", "windows", "clips")}
+    return dict(prov, full=str(full), result=summary)
+
+
+def _clips_attempt(runlog: list[dict], attempt: int | None) -> tuple[int, str, dict]:
+    """(attempt, perc_dir, outputs_sha256) of a `done` clips attempt in RUNLOG: `attempt`, else the last one."""
+    started = {r["attempt"]: r for r in runlog if r["status"] == "started"}
+    done = [r for r in runlog if r["status"] == "done" and "clips" in (r.get("stages") or {})
+            and started.get(r["attempt"], {}).get("perc_dir")]
+    if attempt is not None:
+        done = [r for r in done if r["attempt"] == attempt]
+    if not done:
+        raise Refusal(f"RUNLOG has no done clips attempt{'' if attempt is None else f' {attempt}'} to score")
+    r = done[-1]
+    return r["attempt"], started[r["attempt"]]["perc_dir"], r["stages"]["clips"]["outputs_sha256"]
+
+
+def check_perc_outputs(out: Path, want: dict[str, str]) -> None:
+    """The attempt's PERC tables are exactly the RUNLOG's outputs_sha256 (stats.jsonl aside), byte for byte."""
+    have = _files_under(out) - {"stats.jsonl"}
+    missing, extra = sorted(set(want) - have), sorted(have - set(want))
+    if missing or extra:
+        raise Refusal(f"{out} differs from RUNLOG outputs: {len(missing)} missing {missing[:5]}, {len(extra)} extra "
+                      f"{extra[:5]}")
+    for rel, h in want.items():
+        if sha256((out / rel).read_bytes()) != h:
+            raise Refusal(f"PERC output {rel} changed since the clips attempt (RUNLOG hash)")
+
+
+def sealed_label_files(sealed_root: Path, lab: SealedHashes) -> tuple[dict[str, bytes], str]:
+    """{LABELS path: bytes} of the label sets (twin.labels/1) and of the sample list, and the sample list's path (the
+    one whose items_sha256 is #sample_list). Every file is re-hashed against its LABELS line."""
+    blobs: dict[str, bytes] = {}
+    samples = None
+    for f in lab.files:
+        data = (sealed_root / f.path).read_bytes()
+        if sha256(data) != f.sha256:
+            raise Refusal(f"label file {f.path} changed (LABELS hash)")
+        try:
+            d = json.loads(data.decode("utf-8"))
+        except ValueError:
+            continue
+        if not isinstance(d, dict):
+            continue
+        if d.get("contract") == "twin.label_samples/1":
+            if SampleList.model_validate(d).items_sha256 != lab.sample_list_sha256:
+                continue
+            samples = f.path
+        elif d.get("contract") != "twin.labels/1":
+            continue
+        blobs[f.path] = data
+    if samples is None:
+        raise Refusal("no LABELS sample list matches #sample_list")
+    return blobs, samples
+
+
+def score_labels_and_run(repo: Path, root: Path, lab: SealedHashes, jobs: list[dict], out: Path, split: str,
+                         data_root: Path, scorer: Callable[..., dict] | None = None) -> tuple["ScoredDev", dict]:
+    """The scoring core shared by `score` (split test, the sealed root) and `dev-dry-run` (split dev, a scratch root):
+    the LABELS-checked label files under <root>/labels (sealed_label_files), twin.dev_labels.load_scored_test on them
+    (sha256 from the MANIFEST jobs), then intercycle.eval.realclip.run with that split, the attempt's PERC tables
+    `out` and the MANIFEST-checked clips <root>/clips. Returns (scored labels, scorer result)."""
+    from twin.dev_labels import load_scored_test
+
+    blobs, samples = sealed_label_files(root, lab)
+    try:
+        sd = load_scored_test(blobs, samples, {j["clip_id"]: j["sha256"] for j in jobs}, split=split)
+    except ValueError as e:
+        raise Refusal(f"{split} labels: {e}") from None
+    if scorer is None:
+        from intercycle.eval import realclip
+
+        scorer = realclip.run
+    res = scorer(None, data_root, repo / SITE, (split,), watchdog=True, scored=sd, perc=out, clips_dir=root / "clips")
+    return sd, res
+
+
+def _data_root(data_root: Path | None) -> Path:
+    if data_root is not None:
+        return data_root
+    env = os.environ.get("INTERCYCLE_DATA")
+    if not env:
+        raise Refusal("set INTERCYCLE_DATA (inventory and the watchdog's TRAIN keyframes)")
+    return Path(env)
+
+
+def score(repo: Path, sealed_root: Path, attempt: int | None = None, data_root: Path | None = None,
+          scorer: Callable[..., dict] | None = None) -> dict:
+    """Sealed real-clip scoring (module docstring, `score`). Refusals C1-C4 first; writes two fresh files. The test
+    labels are read ONLY from <sealed-root>/labels/ and only as listed in sealed/LABELS.sha256 (every file re-hashed
+    against its line, here and in check_label_files)."""
+    rec = preflight_clips(repo, sealed_root)
+    n, perc_rel, want = _clips_attempt(rec["runlog"], attempt)
+    out = sealed_root / perc_rel
+    check_perc_outputs(out, want)
+    lab = load_sealed(repo, "labels", "LABELS")
+    full = sealed_root / SCORES_DIR / f"attempt_{n:03d}_realclip_test.json"
+    summ = repo / RESULTS_SEALED / f"realclip_test_attempt_{n:03d}.json"
+    for p in (full, summ):
+        if p.exists():
+            raise Refusal(f"{p} exists; attempt {n} is scored once")
+    sd, res = score_labels_and_run(repo, sealed_root, lab, rec["jobs"], out, "test", _data_root(data_root), scorer)
+    prov = {"contract": "twin.sealed_realclip/1", "timestamp": _now_iso(), "head": rec["head"],
+            "freeze_realclip_sha": rec["freeze_sha"], "attempt": n, "perc_dir": perc_rel,
+            "perc_outputs_aggregate": sha256("".join(f"{k} {v}\n" for k, v in sorted(want.items())).encode()),
+            "labels_aggregate": rec["labels_aggregate"], "manifest_aggregate": rec["manifest_aggregate"],
+            "label_counts": sd.doc["counts"],
+            "note": "against independent Claude-agent labels (vision model), not human labels (PLAN U14)"}
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(json.dumps(dict(prov, result=res), indent=1, default=float) + "\n", encoding="utf-8",
+                    newline="\n")
+    summary = {k: v for k, v in res.items() if k not in ("frames", "windows", "clips")}
+    summ.parent.mkdir(parents=True, exist_ok=True)
+    summ.write_text(json.dumps(dict(prov, result=summary), indent=1, default=float) + "\n", encoding="utf-8",
+                    newline="\n")
+    return {"attempt": n, "full": str(full), "summary": str(summ)}
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="the sealed test run (PLAN_TWIN §5); custodian only")
-    ap.add_argument("command", choices=("check", "derive", "run", "dev-dry-run"))
+    ap.add_argument("command", choices=("check", "derive", "run", "score", "dev-dry-run", "dev-score"))
+    ap.add_argument("--attempt", type=int, default=None, help="score: the clips attempt (default: the last done one)")
     ap.add_argument("--sealed-root", type=Path, default=DEFAULT_SEALED_ROOT)
     ap.add_argument("--stages", default="clips")
     ap.add_argument("--fallback", action="store_true", help="derive: drand unreachable, R = secrets.token_hex(16)")
     ap.add_argument("--dev-root", type=Path, default=None, help="dev-dry-run: scratch dir (never the sealed root)")
     ap.add_argument("--clips", default="", help="dev-dry-run: comma-separated DEV clip ids")
+    ap.add_argument("--labels", type=Path, default=None,
+                    help="dev-dry-run / dev-score: a DEV label dir (labels/dev): score the dry run as `score` does")
     a = ap.parse_args(argv)
     try:
         if a.command == "check":
-            rec = preflight(REPO, a.sealed_root)
+            st = [s for s in a.stages.split(",") if s]
+            if not st or sorted(set(st) - set(STAGES)):
+                raise Refusal(f"check --stages {a.stages!r}: known {list(STAGES)}")
+            robot = any(s in ROBOT_STAGES for s in st)
+            if robot and not all(s in ROBOT_STAGES for s in st):
+                raise Refusal("check: the clips stage and the robot stages are frozen separately; check them apart")
+            rec = preflight(REPO, a.sealed_root) if robot else preflight_clips(REPO, a.sealed_root)
             rec.pop("jobs")
-            print(json.dumps({k: rec[k] for k in ("head", "freeze_sha", "inputs", "n_clips")}, indent=1))
+            print(json.dumps({k: rec[k] for k in ("head", "freeze", "freeze_sha", "inputs", "n_clips")}, indent=1))
             print(f"sealed_run: every refusal passed ({len(rec['runlog'])} RUNLOG records so far)")
         elif a.command == "derive":
             d = derive(REPO, a.sealed_root, a.fallback)
             print(f"write this line to {SEED_COMMIT} and commit only that file:\n{d['seed_commit']}")
             print(f"reveal kept at {d['reveal']} (source {d['source']}, round {d['round']})")
+        elif a.command == "score":
+            d = score(REPO, a.sealed_root, a.attempt)
+            print(f"sealed_run score: attempt {d['attempt']} scored -> {d['summary']} (full result in the sealed root)")
         elif a.command == "dev-dry-run":
             if a.dev_root is None:
                 raise Refusal("dev-dry-run needs --dev-root")
-            d = dev_dry_run(REPO, a.dev_root, [c for c in a.clips.split(",") if c])
+            d = dev_dry_run(REPO, a.dev_root, [c for c in a.clips.split(",") if c], labels=a.labels)
             print(f"sealed_run dev-dry-run: {d['clips_stage']['n_clips']} dev clips -> {d['clips_stage']['out']}")
+            if "score" in d:
+                print(f"sealed_run dev-dry-run: scored -> {d['score']['full']}")
+        elif a.command == "dev-score":
+            if a.dev_root is None or a.labels is None:
+                raise Refusal("dev-score needs --dev-root (a dev-dry-run dir) and --labels (labels/dev)")
+            d = dev_score(REPO, a.dev_root, a.labels)
+            print(f"sealed_run dev-score: scored -> {d['full']}")
         else:
             r = run(REPO, a.sealed_root, [s for s in a.stages.split(",") if s])
             print(f"sealed_run: attempt {r['attempt']} done; {RUNLOG} appended ({', '.join(r['stages'])})")

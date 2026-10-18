@@ -132,7 +132,10 @@ def summary() -> None:
         "day": 9, "zone": "z9", "condition": "learned", "T_s": 720.0, "status": "ok", "status_reason": None,
         "checkpoints_planned": 2, "attempted": 2, "passed": 1, "declined": 0, "robot_caused_press_stops": 0,
         "holds": 0, "incidents": 0, "press_time_lost_s": 0.0, "path_length_m": 41.5,
-        "code": {"head": "8c52e12", "generator_sha256": SHA, "dynamics_sha256": SHA}, "wall_s": 380.2})
+        "code": {"head": "8c52e12", "generator_sha256": SHA, "dynamics_sha256": SHA}, "wall_s": 380.2,
+        "camera": {"model": "stat_v1", "cal_source": "cal_v1 draws", "h_mode": "joint",
+                   "draw_index": {"9": 17, "14": 103}, "hold_s": 34.0, "hold_s_by_camera": {"9": 34.0, "14": 7.5},
+                   "params_sha256": SHA}})
 
 
 def primary_metric() -> None:

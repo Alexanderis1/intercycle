@@ -40,10 +40,34 @@ python scripts/custodian_fetch.py
   its labels to `C:\intercycle_sealed\labels\`.
 - **LABELS.sha256:** hash every label file (plus the frame/stroke-window sample list) into `sealed/LABELS.sha256` and
   commit only that file, before FREEZE (08:30).
-- **Seeds at FREEZE:** after the lead writes `prereg/FREEZE`, derive the 16 test seeds as seed_i = sha256(R ‖ i), with R
-  the randomness of the first drand round published after the FREEZE commit time (fallback `secrets.token_hex(16)`,
-  disclosed), and commit `prereg/TEST_SEED_COMMIT` = sha256(salt ‖ seeds); then run `scripts/sealed_run.py` when the lead
-  requests it.
+- **Split freeze (USER DECISION, Sun ~07:00 CEST).** Two freezes: `prereg/FREEZE_REALCLIP` (target ~09:15, at the latest 10:15 (user allowed), the real-clip
+  test) and `prereg/FREEZE` (~10:15, the robot part). `sealed_run.py` checks each stage against its own freeze; the
+  robot stages also refuse if any real-clip input (the clips stage's import closure, `twin/schemas/labels.py`,
+  `sealed/*`, the active split, the press ROI file) differs between the two.
+- **Real-clip run right after FREEZE_REALCLIP (from a DETACHED WORKTREE, never from main).** The exact commands,
+  the results commit and the dev dry run of the same path: `docs/probes/REALCLIP_RUN.md`. The lead commits `prereg/FREEZE_REALCLIP`
+  (one line: the sha of the frozen code commit) at ~09:15; call the commit that writes it `<RCW>`. The custodian then
+  runs, with no other change:
+  `git worktree add --detach C:\intercycle_rc <RCW>` ;
+  `cd C:\intercycle_rc` ;
+  `python scripts/sealed_run.py check --stages clips` (refusals only) ;
+  `python scripts/sealed_run.py run --stages clips` ;
+  `python scripts/sealed_run.py score` (same worktree, `INTERCYCLE_DATA` set to the dev data root: inventory and the
+  watchdog's TRAIN keyframes only).
+  `score` is the pre-registered real-clip analysis: it re-runs the same refusals, re-hashes the attempt's PERC tables
+  against RUNLOG, loads the LABELS-checked test labels (`twin.dev_labels.load_scored_test`, same status rules as dev;
+  reserves by list order) and runs the dev scorer `intercycle.eval.realclip.run` with split `test`. It writes the full
+  result (per-item records carry label content) to `C:\intercycle_sealed\scores\attempt_NNN_realclip_test.json` and the
+  summary (figures and n only) to `results/sealed/realclip_test_attempt_NNN.json`, which the custodian commits with the
+  RUNLOG. The lead reads only that summary.
+  The clips stage refuses unless HEAD differs from the FREEZE_REALCLIP commit only in `prereg/FREEZE_REALCLIP` and
+  `results/sealed/**`, so running it on main after later robot commits is refused by design. MANIFEST and LABELS must
+  hash to their FREEZE_REALCLIP blobs. No seeds are needed. The RUNLOG it appends (`results/sealed/RUNLOG.json` in
+  that worktree) may be committed there on a branch and merged into main: only `results/sealed/**` changes.
+- **Seeds at the ROBOT FREEZE:** after the lead writes `prereg/FREEZE` (~10:15), derive the 16 test seeds as
+  seed_i = sha256(R ‖ i), with R the randomness of the first drand round published after the FREEZE commit time
+  (fallback `secrets.token_hex(16)`, disclosed), and commit `prereg/TEST_SEED_COMMIT` = sha256(salt ‖ seeds); then run
+  the robot stages (`run --stages double` / `isaac`, once `scripts/sealed_robot.py` is wired) when the lead requests it.
 
 ## Test clips (from `prereg/split_a1.csv`; ids, sha256, group and framing only)
 
