@@ -23,12 +23,14 @@ ASSUMED (a stated value, no data).
    (person 1.75 m, forklift 2.2 m, robot 0.8 m; ASSUMED), each press a prism of its footprint (PRESS_H_M = 3.0 m,
    ASSUMED). The visible share of a mover's image box = 1 - the share covered by closer objects (raster). Visible
    share >= 0.8 (labels/RULES.md: "occluded" = more than ~20 % hidden): clean recall; 0.2-0.8: the occluded recall
-   (FITTED ratio occluded / clean); < 0.2: hidden.
-4. **Misses (FITTED).** A 2 Hz Gilbert chain per mover: stationary miss = 1 - clean recall (DEV labels, per class:
-   person, forklift; the robot uses the person value, ASSUMED), stay-in-miss probability from the DEV track gaps and
-   re-births per camera. Occlusion is an extra miss on top of the chain (keyed uniform), never a change of the chain.
+   (FITTED ratio occluded / clean, per camera); < 0.2: hidden.
+4. **Misses (FITTED, per camera).** A 2 Hz Gilbert chain per mover: stationary miss = 1 - clean recall (DEV labels,
+   per camera x class, Jeffreys posterior mean: camera 9 person 27/27, camera 14 person 13/15; the forklift has
+   labels on camera 14 only (11/17), used on both cameras, ASSUMED on camera 9; the robot uses the person value,
+   ASSUMED); occluded / clean ratio from the camera's own person labels (camera 9 15/55, camera 14 17/22); stay-in-miss
+   probability from the DEV track gaps and re-births per camera. Nothing is pooled across cameras. Occlusion is an extra miss on top of the chain (keyed uniform), never a change of the chain.
 5. **Foot-point noise (FITTED + SHIM).** Pixel error from DEV labels vs DEV tracks: median bias and robust sigma per
-   axis, AR(1) in time with rho per camera (DEV tracks). The noisy raw pixel is read through the nominal H; then a
+   axis PER CAMERA (camera 9 n = 27: sigma u / v 4.7 / 8.9 px; camera 14 n = 13: 9.6 / 2.6 px), AR(1) in time with rho per camera (DEV tracks). The noisy raw pixel is read through the nominal H; then a
    floor AR(1) term tops the floor covariance S (local Jacobian of the nominal map times the pixel sigma) up in S's
    eigenbasis (`floor_topup`): every eigen-direction with sigma < MEASURED_SHIM's 0.285 m is raised to 0.285 m, so
    sigma >= 0.285 m in every direction (per axis included) at every point.
@@ -56,8 +58,10 @@ ASSUMED (a stated value, no data).
     observer-side hold (`hold_s`) is what covers the missed case. `MOTION_THR` (FITTED, Youden J) is the matching
     observer_live motion threshold.
 12. **hold_s (FITTED).** The smallest hold k (ticks) such that k + 1 consecutive ticks with the occluder missed in
-    the image (chain miss, or the occluded-regime extra miss) have probability <= OCC_EPS, maximised over camera x
-    class (the forklift's lower recall sets it); hold_s = k / 2 Hz. Gross floor errors are not counted: a detected
+    the image (chain miss, or the occluded-regime extra miss) have probability <= OCC_EPS, at the per-camera
+    Jeffreys means, maximised over camera x class (camera 9's occluded recall sets it: person 21 s, the forklift
+    driver 34 s); hold_s = k / 2 Hz. `hold_detail` also gives each hold at the one-sided 95 % lower recall bounds
+    (camera 9 person 34 s, forklift 71 s; disclosed, not used: the twin simulates the mean model). Gross floor errors are not counted: a detected
     occluder makes the ROI MISSING through the image-space rule of item 11 wherever its floor position lands.
 
 Common random numbers: every draw comes from `twin.rng.keyed_rng(world_seed, day, entity, f"tick:{k}")`, k = the
@@ -144,17 +148,32 @@ class ClassNoise:
 
 
 def class_noise(params: dict, camera: int, cls: str) -> ClassNoise:
-    """Fitted per camera x class (the robot borrows the person values: ASSUMED)."""
+    """Fitted PER CAMERA x class (DEV labels; Jeffreys posterior means `labels.recall_jeffreys`, not the pooled
+    recalls: camera 9's occluded person recall is 0.28, camera 14's 0.76). Clean recall: the camera's own class
+    labels; the forklift has DEV labels on camera 14 only, so its clean recall is camera 14's on both cameras
+    (ASSUMED on camera 9, where it is seen as its driver). Occluded / clean ratio: the camera's own person labels, for
+    every class (forklift: 3 occluded labels, too few; ASSUMED). The robot borrows the person values (ASSUMED)."""
     lab, trk = params["labels"], params["tracks"]
-    rp = lab["recall_pooled"]
-    occ_ratio = rp["person_occluded"]["recall"] / rp["person_clean"]["recall"]
-    recall = rp["forklift_clean"]["recall"] if cls == "forklift" else rp["person_clean"]["recall"]
+    rj = lab["recall_jeffreys"]
+    pc, po = rj[f"c{camera}_person_clean"]["mean"], rj[f"c{camera}_person_occluded"]["mean"]
+    recall = rj["c14_forklift_clean"]["mean"] if cls == "forklift" else pc
     g = trk["gaps"][str(camera)]
     key = f"c{camera}_{'forklift' if cls == 'forklift' else 'person'}"
     idsw = trk["id_switch"].get(key) or trk["id_switch"][f"c{camera}_person"]
-    return ClassNoise(recall_clean=float(recall), occ_ratio=float(min(occ_ratio, 1.0)),
+    return ClassNoise(recall_clean=float(recall), occ_ratio=float(min(po / pc, 1.0)),
                       p_stay_miss=float(g["p_stay_miss"]), idsw_per_s=float(idsw["per_s"]),
                       rho=float(trk["ar1"][str(camera)]["rho"]))
+
+
+def class_noise_bound(params: dict, camera: int, cls: str) -> ClassNoise:
+    """`class_noise` at the one-sided 95 % Jeffreys LOWER recall bounds (disclosure of the hold's sensitivity): the
+    clean recall and the occluded recall at their `lo95`, so the occluded regime detects with probability lo95."""
+    rj = params["labels"]["recall_jeffreys"]
+    cn = class_noise(params, camera, cls)
+    pc, po = rj[f"c{camera}_person_clean"]["lo95"], rj[f"c{camera}_person_occluded"]["lo95"]
+    rc = rj["c14_forklift_clean"]["lo95"] if cls == "forklift" else pc
+    return ClassNoise(recall_clean=float(rc), occ_ratio=float(min(po / pc, 1.0)), p_stay_miss=cn.p_stay_miss,
+                      idsw_per_s=cn.idsw_per_s, rho=cn.rho)
 
 
 def hold_ticks_markov(cn: ClassNoise, extra_miss: float, eps: float = OCC_EPS, k_max: int = 2000) -> int:
@@ -343,9 +362,9 @@ class CameraStatV1:
         self.latency, self.hz, self.h_mode = latency_s, hz, h_mode
         self.p_exit_gross = 1.0 / (GROSS_MEAN_S * hz)
         self.p_enter_gross = self.gross_p * self.p_exit_gross / (1.0 - self.gross_p)
-        foot = self.P["labels"]["foot_px"]
-        self.sig_px = np.array([foot["sigma_u_px"], foot["sigma_v_px"]], float)
-        self.bias_px = np.array([foot["bias_u_px"], foot["bias_v_px"]], float)
+        foot = self.P["labels"]["foot_px"]["per_camera"]          # FITTED per camera (DEV labels vs DEV tracks)
+        self.sig_px = {int(c): np.array([v["sigma_u_px"], v["sigma_v_px"]], float) for c, v in foot.items()}
+        self.bias_px = {int(c): np.array([v["bias_u_px"], v["bias_v_px"]], float) for c, v in foot.items()}
         conf = self.P["labels"]["confusion"]
         self.c_pv, self.c_vp = float(conf["person_as_vehicle"]), float(conf["vehicle_as_person"])
         self.zones = {z.id: z for z in site.zones}
@@ -383,6 +402,7 @@ class CameraStatV1:
         self.noise = {(int(z.camera), c): class_noise(self.P, int(z.camera), c)
                       for z in site.zones for c in ("person", "forklift", "robot")}
         self.cam_of_zone = {z.id: int(z.camera) for z in site.zones}
+        self.cam_of_framing = {fid: int(z.camera) for z in site.zones for fid in z.framings}
         # presses: occluder prisms, ROI framing / box, energy pools
         en = self.P["energy"]["presses"]
         self.presses = {p.id: p for p in site.presses}
@@ -405,9 +425,16 @@ class CameraStatV1:
 
     # ---------------------------------------------------------------- fitted hold
     def _hold_s(self) -> float:
+        """max over camera x class of the hold at the per-camera Jeffreys means (the simulated miss process). The hold
+        at the one-sided 95 % lower recall bounds is kept in `hold_detail` for disclosure, not used."""
+        self.hold_detail: dict[str, dict[str, float]] = {}
         ks = []
-        for cn in self.noise.values():
-            ks.append(hold_ticks_markov(cn, 1.0 - cn.occ_ratio))
+        for (cam, cls), cn in self.noise.items():
+            k = hold_ticks_markov(cn, 1.0 - cn.occ_ratio)
+            ks.append(k)
+            lo = class_noise_bound(self.P, cam, cls)
+            self.hold_detail[f"c{cam}_{cls}"] = {"hold_s": k / self.hz,
+                                                 "hold_s_at_lo95": hold_ticks_markov(lo, 1.0 - lo.occ_ratio) / self.hz}
         return max(ks) / self.hz
 
     # ---------------------------------------------------------------- geometry
@@ -492,7 +519,7 @@ class CameraStatV1:
         pu = nom.floor_of(raw + np.array([d, 0.0]))[0]
         pv = nom.floor_of(raw + np.array([0.0, d]))[0]
         J = np.column_stack([(pu - p0) / d, (pv - p0) / d])
-        return J @ np.diag(self.sig_px ** 2) @ J.T
+        return J @ np.diag(self.sig_px[self.cam_of_framing[fid]] ** 2) @ J.T
 
     # ---------------------------------------------------------------- one tick
     def observe(self, tick: RealisedTick) -> Detections:
@@ -562,7 +589,7 @@ class CameraStatV1:
                 elif cam == 14 and out_cls == "vehicle" and g_u[3] < self.c_vp:
                     out_cls = "person"
             # position: true camera -> noisy raw px -> nominal H; floor top-up to SIGMA_MIN_M
-            noisy = raw + self.bias_px + self.sig_px * tk.e_px
+            noisy = raw + self.bias_px[cam] + self.sig_px[cam] * tk.e_px
             if not _in_image(noisy)[0]:
                 noisy = np.clip(noisy, [0.0, 0.0], [IMG_W - 1.0, IMG_H - 1.0])
             x, z = self.nominal[fid].floor_of(noisy)[0]

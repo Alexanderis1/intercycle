@@ -5,8 +5,11 @@
 Inputs (no TEST split is read: `esk.load` is called for "dev" and "train" only):
   * DEV labels (`labels/dev`, `twin.dev_labels.load_scored`, Claude-agent labels) vs the PERC DEV tracks
     ($INTERCYCLE_DATA/tracks/<clip>.parquet; u, v = foot point = bottom centre of the tracked box, full-res px):
-      - recall per camera and class, on clean boxes (not occluded, not truncated) and on occluded boxes;
-      - foot-point pixel error (track - label) of matched clean person boxes: robust sigma per axis (1.4826 MAD);
+      - recall per camera and class, on clean boxes (not occluded, not truncated) and on occluded boxes, with the
+        Jeffreys posterior mean and one-sided 95 % lower bound per camera x class x kind (`recall_jeffreys`; the
+        camera model uses these per camera, not the pooled recalls);
+      - foot-point pixel error (track - label) of matched clean person boxes: robust sigma per axis (1.4826 MAD)
+        and median bias, pooled and per camera (`foot_px.per_camera`, used by the camera model);
       - class confusion (class-agnostic matching, person <-> forklift), Jeffreys posterior mean;
     matching: per frame, the track rows within HALF_FRAME_S of the label PTS; greedy by foot distance, gate
     GATE_FRAC x the label box height.
@@ -16,7 +19,7 @@ Inputs (no TEST split is read: `esk.load` is called for "dev" and "train" only):
         ends); the 2 Hz Gilbert chain keeps the mean burst length in ticks given that a burst hits a tick;
       - ID switches: re-births per track-second;
       - temporal correlation of the foot-point noise (AR(1) rho at 2 Hz) from the second differences of the 2 Hz
-        person tracks, with the label sigma: Var(d2) = 2 sigma^2 (1 - rho)(3 - rho).
+        person tracks, with the camera's own label sigma: Var(d2) = 2 sigma^2 (1 - rho)(3 - rho).
   * TRAIN machines tables ($INTERCYCLE_DATA/machines/<press>/<clip>.parquet): ROI-energy quantiles per press for
     "moving" (running clip, |flow_v| >= the P4 trigger threshold), "quiet" (running clip, below it) and "idle"
     (clip with no stroke); running clip = >= 2 strokes (the P4 rule). Energies are divided by the press's median
@@ -34,6 +37,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import beta as beta_dist
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -169,13 +173,24 @@ def fit_labels(inv: pd.DataFrame) -> dict:
                     "share_beyond_5_sigma": round(float(np.mean((np.abs(du_a) > 5 * s_u) | (np.abs(dv_a) > 5 * s_v))), 4)
                     if len(du_a) else None,
                     "per_camera_n_sigma_u_v": {str(c): [len(v), round(_mad_sigma([e[0] for e in v]), 2),
-                                                        round(_mad_sigma([e[1] for e in v]), 2)] for c, v in by_cam.items()}},
+                                                        round(_mad_sigma([e[1] for e in v]), 2)] for c, v in by_cam.items()},
+                    "per_camera": {str(c): {"n": len(v),
+                                            "sigma_u_px": round(_mad_sigma([e[0] for e in v]), 2),
+                                            "sigma_v_px": round(_mad_sigma([e[1] for e in v]), 2),
+                                            "bias_u_px": round(float(np.median([e[0] for e in v])), 2),
+                                            "bias_v_px": round(float(np.median([e[1] for e in v])), 2)}
+                                   for c, v in sorted(by_cam.items())}},
+        # per camera x class x kind: Jeffreys posterior mean (the camera model's rate) and its one-sided 95 % lower
+        # bound (disclosed next to the hold sized at the mean); the camera model uses these, not the pooled values
+        "recall_jeffreys": {f"c{cam}_{cls}_{kind}": {"hit": k, "n": n, "mean": round(_jeffreys(k, n), 4),
+                                                     "lo95": round(float(beta_dist.ppf(0.05, k + 0.5, n - k + 0.5)), 4)}
+                            for (cam, cls, kind), (k, n) in sorted(rec.items()) if n},
     }
 
 
 # ------------------------------------------------------------------------------------------- tracks alone
 
-def fit_tracks(inv: pd.DataFrame, sigma_px: float) -> dict:
+def fit_tracks(inv: pd.DataFrame, sigma_px: dict[int, float]) -> dict:
     gaps = defaultdict(list)                     # cam -> gap durations (s)
     rebirth: Counter = Counter()
     track_s: defaultdict[tuple[int, str], float] = defaultdict(float)
@@ -243,7 +258,7 @@ def fit_tracks(inv: pd.DataFrame, sigma_px: float) -> dict:
         a = np.asarray(v, float)
         var = float(np.mean([_mad_sigma(a[:, 0]) ** 2, _mad_sigma(a[:, 1]) ** 2]))
         # 2 s^2 (1 - rho)(3 - rho) = var  ->  rho^2 - 4 rho + 3 - var / (2 s^2) = 0, root in [0, 1]
-        c = 3.0 - var / (2.0 * sigma_px ** 2)
+        c = 3.0 - var / (2.0 * sigma_px[cam] ** 2)       # the camera's own label sigma (per-axis RMS)
         disc = 16.0 - 4.0 * c
         rho = (4.0 - math.sqrt(disc)) / 2.0 if disc >= 0 else 0.0
         out["ar1"][str(cam)] = {"n": int(len(a)), "sigma_d2_px": round(math.sqrt(var), 3),
@@ -324,7 +339,8 @@ def main() -> int:
     dev = esk.load("dev")
     assert set(dev["split"]) == {"dev"}
     lab = fit_labels(dev)
-    sigma_px = float(np.hypot(lab["foot_px"]["sigma_u_px"], lab["foot_px"]["sigma_v_px"]) / math.sqrt(2))
+    pc = lab["foot_px"]["per_camera"]
+    sigma_px = {int(c): float(np.hypot(v["sigma_u_px"], v["sigma_v_px"]) / math.sqrt(2)) for c, v in pc.items()}
     trk = fit_tracks(dev, sigma_px)
     en = fit_energy()
     out = {"_doc": ("twin/camera.py stat_v1 parameters fitted by scripts/stat_v1_fit.py: detection, foot-point, burst, "

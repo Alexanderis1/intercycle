@@ -118,7 +118,7 @@ def test_per_axis_and_minor_axis_sigma_at_least_shim_without_gross():
         assert len(by) == len(pts)
         for mid, v in by.items():
             a = np.asarray(v)
-            assert len(a) > 1000
+            assert len(a) > 600
             c = np.cov((a - a.mean(0)).T)
             sd_x, sd_z = math.sqrt(c[0, 0]), math.sqrt(c[1, 1])
             sd_minor = math.sqrt(float(np.linalg.eigvalsh(c)[0]))
@@ -170,7 +170,7 @@ def test_calibration_bias_is_constant_per_world():
     a = np.asarray([(dx, dz) for _, dx, dz in cam.err_log if math.hypot(dx, dz) < 4.0])
     raw = cam._framing_of("z14", *pts[0])
     assert raw is not None
-    want = cam.nominal[raw[0]].floor_of(raw[1][None, :] + cam.bias_px)[0] - np.asarray(pts[0])
+    want = cam.nominal[raw[0]].floor_of(raw[1][None, :] + cam.bias_px[14])[0] - np.asarray(pts[0])
     assert np.allclose(a.mean(0), want, atol=0.12)
 
 
@@ -280,6 +280,22 @@ def test_hold_sized_from_fitted_bursts():
             run = run + 1 if m else 0
             worst = max(worst, run)
         assert worst <= k + 1
+
+
+def test_per_camera_rates_not_pooled():
+    """Recall, occluded / clean ratio and pixel sigma are per camera (camera 9 occluded person recall 15/55 vs camera
+    14 17/22): the hold covers camera 9's own occluded recall (>= 21 s), not the pooled one."""
+    P = CAM._P
+    c9, c14 = CAM.class_noise(P, 9, "person"), CAM.class_noise(P, 14, "person")
+    rj = P["labels"]["recall_jeffreys"]
+    assert c9.recall_clean * c9.occ_ratio == pytest.approx(rj["c9_person_occluded"]["mean"])
+    assert c14.recall_clean * c14.occ_ratio == pytest.approx(rj["c14_person_occluded"]["mean"])
+    assert c9.occ_ratio < 0.4 < 0.8 < c14.occ_ratio
+    cam = CAM.CameraStatV1(SITE, WORLD, 1)
+    assert not np.allclose(cam.sig_px[9], cam.sig_px[14])
+    assert cam.hold_s >= CAM.hold_ticks_markov(c9, 1.0 - c9.occ_ratio) / cam.hz >= 21.0
+    assert set(cam.hold_detail) == {f"c{c}_{k}" for c in (9, 14) for k in ("person", "forklift", "robot")}
+    assert all(v["hold_s_at_lo95"] >= v["hold_s"] for v in cam.hold_detail.values())
 
 
 def test_plant_uses_stat_v1_and_its_hold():

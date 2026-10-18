@@ -102,6 +102,66 @@
      9.58,
      2.61
     ]
+   },
+   "per_camera": {
+    "9": {
+     "n": 27,
+     "sigma_u_px": 4.67,
+     "sigma_v_px": 8.85,
+     "bias_u_px": 1.82,
+     "bias_v_px": 4.56
+    },
+    "14": {
+     "n": 13,
+     "sigma_u_px": 9.58,
+     "sigma_v_px": 2.61,
+     "bias_u_px": -3.58,
+     "bias_v_px": 6.8
+    }
+   }
+  },
+  "recall_jeffreys": {
+   "c9_person_clean": {
+    "hit": 27,
+    "n": 27,
+    "mean": 0.9821,
+    "lo95": 0.9319
+   },
+   "c9_person_occluded": {
+    "hit": 15,
+    "n": 55,
+    "mean": 0.2768,
+    "lo95": 0.184
+   },
+   "c9_person_truncated": {
+    "hit": 12,
+    "n": 13,
+    "mean": 0.8929,
+    "lo95": 0.7359
+   },
+   "c14_forklift_clean": {
+    "hit": 11,
+    "n": 17,
+    "mean": 0.6389,
+    "lo95": 0.4485
+   },
+   "c14_forklift_occluded": {
+    "hit": 1,
+    "n": 3,
+    "mean": 0.375,
+    "lo95": 0.0624
+   },
+   "c14_person_clean": {
+    "hit": 13,
+    "n": 15,
+    "mean": 0.8438,
+    "lo95": 0.6774
+   },
+   "c14_person_occluded": {
+    "hit": 17,
+    "n": 22,
+    "mean": 0.7609,
+    "lo95": 0.6053
    }
   }
  },
@@ -147,14 +207,14 @@
    "9": {
     "n": 8251,
     "sigma_d2_px": 4.693,
-    "rho_raw": 0.8927,
-    "rho": 0.8927
+    "rho_raw": 0.8955,
+    "rho": 0.8955
    },
    "14": {
     "n": 207,
     "sigma_d2_px": 9.02,
-    "rho_raw": 0.6454,
-    "rho": 0.6454
+    "rho_raw": 0.649,
+    "rho": 0.649
    }
   }
  },
