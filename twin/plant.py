@@ -16,7 +16,8 @@ Truth and files (the plant's output reaches the observer side ONLY through files
     a mover of class `robot`, written through `twin.engine.RealisedWriter` (fail closed: published on `finish` only).
   * `runs/<id>/obs_v2.jsonl`: the camera model runs IN the plant process and is the only consumer of the realised
     ticks (twin/camera.py stat_v1, `make_camera`; twin/camera_v0.py MEASURED_SHIM stays as the G0 reference). Each
-    tick becomes one Observation v2 line (T-W6 hold = the camera's fitted `hold_s`) (`intercycle.observer.mapping.obs_to_dict`), written to the file only once the sim clock has
+    tick becomes one Observation v2 line (T-W6 hold = the camera's fitted hold of the camera that sees each press,
+    `hold_s_by_press`) (`intercycle.observer.mapping.obs_to_dict`), written to the file only once the sim clock has
     reached its delivery time `t` (= t_cap + latency), so a consumer tailing the file live never sees an observation
     early. Lines still undelivered when the mission ends are written by `finish`. The broadcaster and observer_live
     read this file only; the plant writes no plant_state.json (the body-shop feed) and sends ROS nothing but the
@@ -379,8 +380,10 @@ class ObsAdapter:
     OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold): call it on every tick in time order."""
 
     def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None,
-                 *, hold_s: float, roi_vis: dict[str, dict[int, float]] | None = None):
-        # hold_s has no default: it is the camera model's own fitted hold (stat_v1 `hold_s`), never a silent fallback
+                 *, hold_s: float | dict[str, float], roi_vis: dict[str, dict[int, float]] | None = None):
+        # hold_s has no default: it is the camera model's own fitted hold, never a silent fallback. A dict is one hold
+        # per press (stat_v1 `hold_s_by_press`: the hold of the camera that sees the press, S3b fix2); every press of
+        # `press_ids` must have one (fail closed). A float is one hold for every press.
         self.press_ids = list(press_ids) if press_ids else [p.id for p in site.presses]
         self.zone_ids = list(zone_ids) if zone_ids else [z.id for z in site.zones]
         zones = {z.id: z for z in site.zones}
@@ -395,7 +398,14 @@ class ObsAdapter:
                     if cam in self.cams:                 # an ROI camera outside `zone_ids` is not seen: row 0, NaN
                         row[self.cams.index(cam)] = float(s)
                 self.share[i] = row
-        self.conv = OM.ObsV2Converter(self.share, self.rects, hold_s=hold_s)
+        if isinstance(hold_s, dict):
+            missing = [p for p in self.press_ids if p not in hold_s]
+            if missing:
+                raise ValueError(f"hold_s has no hold for presses {missing}")
+            hold = np.array([float(hold_s[p]) for p in self.press_ids], float)
+        else:
+            hold = float(hold_s)
+        self.conv = OM.ObsV2Converter(self.share, self.rects, hold_s=hold)
 
     def __call__(self, d: Detections) -> OM.Observation:
         n = len(d)
@@ -499,7 +509,7 @@ class Plant:
         self.written = -math.inf
         self.camera = make_camera(self.site, self.world_seed, self.day)
         self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"),
-                                  hold_s=float(self.camera.hold_s), roi_vis=self.camera.roi_vis)
+                                  hold_s=dict(self.camera.hold_s_by_press), roi_vis=self.camera.roi_vis)
         self.obs_path = self.run_dir / "obs_v2.jsonl"
         self._obs_f = open(self.obs_path, "w", encoding="utf-8", newline="\n")
         self._obs_buf: deque[OM.Observation] = deque()            # computed, not yet delivered (t > sim time)

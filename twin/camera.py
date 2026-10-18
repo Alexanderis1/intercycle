@@ -3,7 +3,7 @@
 Realised state (truth, 2 Hz) -> per-tick detections in the plan frame, as the real perception chain would give them.
 It runs in the plant process (`twin.plant.make_camera`), is the only reader of realised_state.jsonl besides the
 engine / plant / EVAL, and its output becomes runs/<id>/obs_v2.jsonl through `mapping.ObsV2Converter` with
-`hold_s = CameraStatV1.hold_s` (sized from the fitted miss bursts, below).
+`hold_s = CameraStatV1.hold_s_by_press` (per camera, sized from the fitted miss bursts, item 12).
 
 Parameters: `twin/stat_v1_params.json` (scripts/stat_v1_fit.py: DEV labels vs DEV PERC tracks, TRAIN ROI energy) and
 `twin/cal/h_draws_v1.json` (scripts/stat_v1_hdraws.py: the 200 CAL v1 joint bootstrap draws). Each item says where
@@ -60,27 +60,41 @@ ASSUMED (a stated value, no data).
     TRAIN quantiles: "moving" while the press runs unfrozen and its ram moves (ram > 0 or a stroke starts this tick),
     "quiet" while it runs with the ram at rest, "idle" otherwise. Camera-14 presses never run in the footage: their
     moving / quiet pools are the pooled P9a + P9b pools (ASSUMED). The press is seen through the framing of its first
-    ram ROI. T-W6: when a DETECTED mover's padded image box (ROI_PAD_FRAC) in the ROI's framing covers the ROI (any
-    depth, as the real ingest, which has no depth), the sample is MISSING (NaN) this tick, and stays MISSING for `hold_s` after the last such
-    tick, in image space, whatever the occluder's floor position (as `occlusion.roi_missing_series` in the real
-    ingest; the observer-side floor hold only arms on detections near the press zone). A blocked ROI outside that
-    hold (the occluder missed on its first ticks, before any detection) reads the "idle" pool for a standing mover
-    (fail-dangerous, as the real pipeline) or the "moving" pool for a walking one: the arrival leak, counted in
-    `stats["roi_blocked_unseen"]`. DISCLOSED GAP (zone 9): the DAYGEN v1 path library has no point at a press (0 of
-    13,217 zone-9 points in a footprint, all on the visible floor), so in generated days no zone-9 mover stands where
-    the real occluders stand. Replaying the library through this camera's geometry (scripts/stat_v1_roi_occluders.py,
-    twin/stat_v1_roi_occluders.json) gives unheld ROI-hit shares of P9a 26 % through the nominal camera but 0 % in
-    123 of the 200 CAL v1 draws (median 0 %, p95 23 %), P9b 0 % in every draw, against 29.3 % / 25.1 % in the TRAIN
-    boxes (machines MISSING 38.5 % / 34.1 %); zone 14: draw medians 6-37 % against 10-19 %. The camera handles at-press movers (image-only occluders) once the
-    day generator places operators there (S3a). `MOTION_THR` (FITTED, Youden J) is the matching
+    ram ROI. **The ROI is world-consistent (fix2):** the ROI was drawn in the real image, i.e. through the NOMINAL
+    camera; its 3-D anchor (`cam_geom.press_anchor`: each vertex ray on the vertical plane, facing the camera, where
+    the ROI-centre ray enters the press prism = the press's visible surface; the plane is ASSUMED) is projected
+    through the world's TRUE camera each world, like the press prism and the movers (`roi`; `roi_nominal` = the drawn
+    box). The fix1 camera kept the drawn pixels while the press moved with the draw (P9a's press moves a median 182 px
+    against a 108 px ROI), which suppressed P9a's ROI occlusion in most worlds. A world whose true camera puts the ROI
+    partly outside the image has roi_vis < 1, so that press is MISSING on every tick (fail closed; CAL v1 draws: P14d
+    32 / 200, P14a and P14c 2 / 200, P9a and P9b 0). T-W6: when a DETECTED mover's padded image box (ROI_PAD_FRAC) in
+    the ROI's framing covers the ROI (any depth, as the real ingest, which has no depth), the sample is MISSING (NaN)
+    this tick, and stays MISSING for the hold of the ROI's camera (item 12) after the last such tick, in image space,
+    whatever the occluder's floor position (as `occlusion.roi_missing_series` in the real ingest; the observer-side
+    floor hold only arms on detections near the press zone). A blocked ROI outside that hold (the occluder missed on
+    its first ticks, before any detection) reads the "idle" pool for a standing mover (fail-dangerous, as the real
+    pipeline) or the "moving" pool for a walking one: the arrival leak, counted in `stats["roi_blocked_unseen"]`.
+    Replaying the DAYGEN v1 path library through this camera's geometry (scripts/stat_v1_roi_occluders.py,
+    twin/stat_v1_roi_occluders.json `twin_replay_daygen_v1_library`) gives unheld ROI-hit shares over the 200 CAL v1
+    draws of P9a q5 / 50 / 95 24 / 25 / 26 % (nominal camera 25.8 %; TRAIN boxes 29.3 %), no draw at zero; zone 14
+    draw medians 13-38 % against TRAIN's 10-19 %. DISCLOSED GAP (P9b only): the library has no zone-9 point at a press
+    (0 of 13,217 in a footprint, all on the visible floor), and P9b's ROI is hit by no library point even through the
+    nominal camera (0 % in every draw, against 25.1 % in the TRAIN boxes, whose occluders stand in or at the
+    footprint): in generated days no mover stands where P9b's real occluders stand. The camera handles such at-press
+    movers (image-only occluders, item 2) once the day generator places operators there (S3a). The held MISSING
+    share the observer gets (`twin_replay_held_stat_v1_camera`, the camera itself on the library clips) is reported
+    next to TRAIN's machines MISSING share in the same file. `MOTION_THR` (FITTED, Youden J) is the matching
     observer_live motion threshold.
-12. **hold_s (FITTED).** The smallest hold k (ticks) such that k + 1 consecutive ticks with the occluder missed in
-    the image (chain miss, or the occluded-regime extra miss) have probability <= OCC_EPS, at the per-camera
-    Jeffreys means, maximised over camera x class (camera 9's occluded recall sets it: person 21 s, the forklift
-    driver 34 s); hold_s = k / 2 Hz. `hold_detail` also gives each hold at the one-sided 95 % lower recall bounds
-    (camera 9 person 34 s, forklift 71 s; disclosed, not used: the twin simulates the mean model). The same hold
-    is the camera's image-space ROI hold (item 11) and the converter's floor hold. Gross floor errors do not count:
-    the image-space hold runs on the detection in the image, wherever its floor position lands.
+12. **hold_s (FITTED, per camera).** The smallest hold k (ticks) such that k + 1 consecutive ticks with the occluder
+    missed in the image (chain miss, or the occluded-regime extra miss) have probability <= OCC_EPS, at the camera's
+    Jeffreys means, maximised over that camera's classes: camera 9 34 s (its occluded recall; person 21 s, the
+    forklift driver 34 s, ASSUMED forklift recall), camera 14 7.5 s (person 6 s, forklift 7.5 s); `hold_s_by_camera`,
+    k / 2 Hz. A press is held with the hold of the camera that sees it (`hold_s_by_press`: its ROI framing's camera),
+    in the camera's image-space ROI hold (item 11) and in the converter's floor hold (plant ObsAdapter, one hold per
+    press). `hold_s` = the largest (provenance). `hold_detail` also gives each hold at the one-sided 95 % lower
+    recall bounds (camera 9 person 34 s, forklift 71 s; disclosed, not used: the twin simulates the mean model).
+    Gross floor errors do not count: the image-space hold runs on the detection in the image, wherever its floor
+    position lands.
 
 Common random numbers: every draw comes from `twin.rng.keyed_rng(world_seed, day, entity, f"tick:{k}")`, k = the
 absolute 2 Hz tick, entity `cam:<mover>` (a fixed number of draws per call, whatever the state),
@@ -106,6 +120,7 @@ import numpy as np
 from intercycle.observer.mapping import FRAME_HZ, LATENCY_S, MEASURED_SHIM
 from intercycle.observer.occlusion import OCC_EPS, ROI_PAD_FRAC
 from twin.cam_geom import HEIGHT_M, IMG_H, IMG_W, CamGeom, _apply_h, _distort, _undistort  # noqa: F401
+from twin.cam_geom import PRESS_H_M, box_share_in_image, press_anchor, roi_box
 from twin.cam_geom import circle_prism as _circle_prism
 from twin.camera_v0 import Detections, detections_to_json
 from twin.rng import keyed_rng
@@ -124,7 +139,6 @@ SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 
 SIGMA_MIN_M = float(cast(float, MEASURED_SHIM["sigma_m"]))      # SHIM: per-axis floor sigma floor (0.285 m)
 GROSS_MEAN_S = 6.0                                   # ASSUMED (M-W2: gross errors persist 2-10 s)
-PRESS_H_M = 3.0                                      # ASSUMED press body height (occluder prism)
 VIS_CLEAN, VIS_HIDDEN = 0.8, 0.2                     # labels/RULES.md "occluded" = > ~20 % hidden; < 20 % visible = hidden
 MOVING_MPS = 0.2                                     # as camera_v0
 MOVING_WIN = 4                                       # ticks (2 s) for the noisy-position speed; ASSUMED
@@ -346,27 +360,49 @@ class CameraStatV1:
         # presses: occluder prisms, ROI framing / box, energy pools
         en = self.P["energy"]["presses"]
         self.presses = {p.id: p for p in site.presses}
+        self.press_centre = {p.id: np.asarray(p.footprint.value, float).mean(0) for p in site.presses}
+        # the ram ROI, world-consistent (item 11, S3b fix2): its 3-D anchor on the press (`cam_geom.press_anchor`,
+        # built through the NOMINAL camera, in which the ROI was drawn) is projected through the world's TRUE camera,
+        # like the press prism and the movers. `roi_nominal` keeps the drawn box. An ROI the true camera cannot
+        # project (behind the camera / outside the lens model) is lost: zone_motion NaN and roi_vis 0 (fail closed).
         self.roi: dict[str, tuple[str, tuple[float, float, float, float]]] = {}
+        self.roi_nominal: dict[str, tuple[str, tuple[float, float, float, float]]] = {}
+        self.roi_framing: dict[str, str] = {}
+        self.roi_anchor: dict[str, np.ndarray] = {}
         for p in site.presses:
             if p.id not in en:
                 raise ValueError(f"press {p.id}: no ROI-energy pools in stat_v1_params.json")
             if p.ram_roi.value:                  # no ROI: zone_motion is MISSING (NaN) for that press, always
                 r0 = p.ram_roi.value[0]
-                self.roi[p.id] = (r0.framing, _bbox(np.asarray(r0.polygon_px, float)))
+                fid = r0.framing
+                if fid not in self.nominal:
+                    raise ValueError(f"press {p.id}: ROI framing {fid} is not a framing of any zone")
+                poly = np.asarray(r0.polygon_px, float)
+                self.roi_framing[p.id] = fid
+                self.roi_nominal[p.id] = (fid, _bbox(poly))
+                self.roi_anchor[p.id] = press_anchor(self.nominal[fid], poly, p.footprint.value, PRESS_H_M)
+                tb = roi_box(self.true[fid], self.roi_anchor[p.id])
+                if tb is not None:
+                    self.roi[p.id] = (fid, tb)
         self.energy = en
-        # zone_vis of an ROI-sourced press = the share of its ROI box inside its framing's image (ObsAdapter roi_vis)
-        self.roi_vis: dict[str, dict[int, float]] = {}
-        for pid, (fid, (r0, s0, r1, s1)) in self.roi.items():
-            area = max(r1 - r0, 0.0) * max(s1 - s0, 0.0)
-            inside = max(min(r1, IMG_W) - max(r0, 0.0), 0.0) * max(min(s1, IMG_H) - max(s0, 0.0), 0.0)
-            self.roi_vis[pid] = {self.cam_of_framing[fid]: (inside / area) if area > 0 else 0.0}
-        self.press_centre = {p.id: np.asarray(p.footprint.value, float).mean(0) for p in site.presses}
+        # zone_vis of an ROI-sourced press = the share of its (true-camera) ROI box inside its framing's image
+        # (ObsAdapter roi_vis); a lost ROI has share 0
+        self.roi_vis: dict[str, dict[int, float]] = {
+            pid: {self.cam_of_framing[fid]: box_share_in_image(self.roi[pid][1] if pid in self.roi else None)}
+            for pid, fid in self.roi_framing.items()}
         self.press_prism = {p.id: _poly_prism(p.footprint.value, PRESS_H_M) for p in site.presses}
         self.zone_presses = {z.id: [p.id for p in site.presses if p.zone == z.id] for z in site.zones}
         self.tracks: dict[str, _Track] = {}
         self._pboxes: dict[str, list[tuple[tuple, float, str]]] | None = None
-        self.hold_s = self._hold_s()
+        self.hold_s_by_camera = self._hold_s()
+        self.hold_s = max(self.hold_s_by_camera.values())            # the largest per-camera hold (provenance)
+        self.hold_ticks_by_camera = {c: int(round(h * self.hz)) for c, h in self.hold_s_by_camera.items()}
         self.hold_ticks = int(round(self.hold_s * self.hz))
+        # per press: the hold of the camera that sees it (its ROI framing's camera, else its zone's camera); the
+        # camera's image-space ROI hold and the converter's floor hold (ObsAdapter) both use it
+        self.hold_s_by_press = {
+            p.id: self.hold_s_by_camera[self.cam_of_framing[self.roi_framing[p.id]] if p.id in self.roi_framing
+                                        else self.cam_of_zone[p.zone]] for p in site.presses}
         self.roi_last_hit: dict[str, int] = {}       # press -> last tick a DETECTED occluder covered its ROI (image)
         self.err_log: list[tuple[str, float, float]] | None = None   # tests: (mover, dx, dz) per true detection
         self.stats = {"ticks": 0, "true": 0, "seen": 0, "hidden": 0, "occluded": 0, "missed": 0, "gross": 0,
@@ -381,21 +417,23 @@ class CameraStatV1:
         canon = json.dumps(self.P, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return {"model": "stat_v1", "cal_source": self.cal_source, "h_mode": self.h_mode,
                 "draw_index": {str(c): int(i) for c, i in sorted(self.draw_index.items())},
-                "hold_s": float(self.hold_s), "params_sha256": hashlib.sha256(canon).hexdigest()}
+                "hold_s": float(self.hold_s),
+                "hold_s_by_camera": {str(c): float(h) for c, h in sorted(self.hold_s_by_camera.items())},
+                "params_sha256": hashlib.sha256(canon).hexdigest()}
 
     # ---------------------------------------------------------------- fitted hold
-    def _hold_s(self) -> float:
-        """max over camera x class of the hold at the per-camera Jeffreys means (the simulated miss process). The hold
-        at the one-sided 95 % lower recall bounds is kept in `hold_detail` for disclosure, not used."""
+    def _hold_s(self) -> dict[int, float]:
+        """Per camera: max over class of the hold at that camera's Jeffreys means (the simulated miss process). The
+        hold at the one-sided 95 % lower recall bounds is kept in `hold_detail` for disclosure, not used."""
         self.hold_detail: dict[str, dict[str, float]] = {}
-        ks = []
+        ks: dict[int, int] = {}
         for (cam, cls), cn in self.noise.items():
             k = hold_ticks_markov(cn, 1.0 - cn.occ_ratio)
-            ks.append(k)
+            ks[cam] = max(ks.get(cam, 0), k)
             lo = class_noise_bound(self.P, cam, cls)
             self.hold_detail[f"c{cam}_{cls}"] = {"hold_s": k / self.hz,
                                                  "hold_s_at_lo95": hold_ticks_markov(lo, 1.0 - lo.occ_ratio) / self.hz}
-        return max(ks) / self.hz
+        return {c: k / self.hz for c, k in sorted(ks.items())}
 
     # ---------------------------------------------------------------- geometry
     def _framing_of(self, zone_id: str, x: float, z: float) -> tuple[str, np.ndarray] | None:
@@ -694,7 +732,7 @@ class CameraStatV1:
                 self.roi_last_hit[p.id] = k
                 self.stats["roi_missing"] += 1
                 continue
-            if k - self.roi_last_hit.get(p.id, -10 ** 9) <= self.hold_ticks:
+            if k - self.roi_last_hit.get(p.id, -10 ** 9) <= self.hold_ticks_by_camera[self.cam_of_framing[fid]]:
                 out[p.id] = math.nan                              # ... held hold_s after the last such tick (image
                 self.stats["roi_held"] += 1                       # space, as roi_missing_series in the real ingest)
                 continue

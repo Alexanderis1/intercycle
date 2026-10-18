@@ -10,6 +10,7 @@ import numpy as np
 
 IMG_W, IMG_H = 1920, 1080
 HEIGHT_M = {"person": 1.75, "forklift": 2.2, "robot": 0.8}   # ASSUMED (plant PERSON_H, FORKLIFT_BOXES, ANYmal)
+PRESS_H_M = 3.0                                              # ASSUMED press body height (occluder prism, ROI anchor)
 
 
 def _undistort(pts: np.ndarray, k1: float, c: np.ndarray) -> np.ndarray:
@@ -105,6 +106,93 @@ class CamGeom:
     def floor_of(self, raw: np.ndarray) -> np.ndarray:
         """Raw px -> plan floor (x, z) through this camera's lens and H."""
         return _apply_h(self.H, _undistort(raw, self.k1, self.c))
+
+    def rays(self, raw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Raw px (n, 2) -> (camera centre (3,), ray directions (n, 3)) in plan coords (x, z, height): the points
+        centre + s * dir (s > 0) project to those pixels (inverse of `project`)."""
+        und = _undistort(raw, self.k1, self.c)
+        d_cam = np.linalg.solve(self.K, np.column_stack([und, np.ones(len(und))]).T).T
+        Minv = np.linalg.inv(self.M)
+        return -Minv @ self.t, d_cam @ Minv.T
+
+
+def _pip(x: float, y: float, poly: np.ndarray) -> bool:
+    """Point in polygon (even-odd ray casting)."""
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        (x0, y0), (x1, y1) = poly[i], poly[(i + 1) % n]
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def ray_prism_entry(C: np.ndarray, d: np.ndarray, footprint, hgt: float) -> float | None:
+    """Smallest s >= 0 at which the ray C + s d enters the vertical prism footprint x [0, hgt] (plan x, z, height),
+    or None if it never does. Exact: the candidates are the crossings of the footprint's edges and of the two height
+    planes; each interval between candidates is tested at its midpoint."""
+    P = np.asarray(footprint, float).reshape(-1, 2)
+    cand = [0.0]
+    for i in range(len(P)):
+        a, e = P[i], P[(i + 1) % len(P)] - P[i]
+        A = np.array([[d[0], -e[0]], [d[1], -e[1]]])
+        if abs(float(np.linalg.det(A))) < 1e-12:
+            continue
+        s, u = np.linalg.solve(A, a - C[:2])
+        if s > 0 and -1e-9 <= u <= 1.0 + 1e-9:
+            cand.append(float(s))
+    if abs(float(d[2])) > 1e-12:
+        cand += [float(s) for s in ((0.0 - C[2]) / d[2], (hgt - C[2]) / d[2]) if s > 0]
+    cand = sorted(set(cand))
+    for s0, s1 in zip(cand, cand[1:]):
+        X = C + 0.5 * (s0 + s1) * d
+        if 0.0 <= X[2] <= hgt and _pip(float(X[0]), float(X[1]), P):
+            return s0
+    return None
+
+
+def press_anchor(g_nom: CamGeom, poly_px, footprint, press_h: float) -> np.ndarray:
+    """3-D anchor (n, 3) of an image ROI drawn on a press (lane S3b fix2). The ROI shows what the camera sees: the
+    near surface of the press body. The NOMINAL camera's ray through the ROI centre enters the press prism
+    (footprint x [0, press_h]) at X*; each ROI vertex ray meets the vertical plane through X* that faces the camera
+    (normal = the horizontal direction camera -> X*). Projected through the nominal camera the anchor gives the ROI
+    back; projected through a world's TRUE camera it gives the ROI where that world's image shows the press (the ROI
+    moves with the press prism and the movers, all projected through the same true camera). The plane (the ram's
+    depth = the visible surface at the ROI centre) is ASSUMED. Fails closed (ValueError) when the centre ray misses
+    the prism or a vertex ray does not meet the plane in front of the camera."""
+    poly = np.asarray(poly_px, float).reshape(-1, 2)
+    C, D = g_nom.rays(np.vstack([poly.mean(0, keepdims=True), poly]))
+    s_c = ray_prism_entry(C, D[0], footprint, press_h)
+    if s_c is None:
+        raise ValueError(f"{g_nom.fid}: the ROI centre ray misses the press prism (height {press_h} m)")
+    Xc = C + s_c * D[0]
+    h = Xc[:2] - C[:2]
+    if float(np.hypot(*h)) < 1e-6:
+        raise ValueError(f"{g_nom.fid}: the ROI centre is under the camera, no anchor plane")
+    n = np.array([h[0], h[1], 0.0]) / float(np.hypot(*h))
+    den = D[1:] @ n
+    s = (Xc - C) @ n / np.where(np.abs(den) > 1e-12, den, np.nan)
+    if not (np.isfinite(s).all() and (s > 0).all()):
+        raise ValueError(f"{g_nom.fid}: an ROI vertex ray does not meet the press plane in front of the camera")
+    return C + s[:, None] * D[1:]
+
+
+def roi_box(g: CamGeom, anchor: np.ndarray) -> tuple[float, float, float, float] | None:
+    """Image bbox (u0, v0, u1, v1) of an ROI anchor through camera `g`, or None if a point is not projectable."""
+    raw, ok = g.project(anchor)
+    if not ok.all():
+        return None
+    return float(raw[:, 0].min()), float(raw[:, 1].min()), float(raw[:, 0].max()), float(raw[:, 1].max())
+
+
+def box_share_in_image(box) -> float:
+    """Share of an image bbox inside the IMG_W x IMG_H image (0 for None or an empty box)."""
+    if box is None:
+        return 0.0
+    r0, s0, r1, s1 = box
+    area = max(r1 - r0, 0.0) * max(s1 - s0, 0.0)
+    inside = max(min(r1, IMG_W) - max(r0, 0.0), 0.0) * max(min(s1, IMG_H) - max(s0, 0.0), 0.0)
+    return inside / area if area > 0 else 0.0
 
 
 def circle_prism(x: float, z: float, r: float, hgt: float, n: int = 8) -> np.ndarray:

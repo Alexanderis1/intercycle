@@ -47,12 +47,17 @@ def hold_ticks(p_miss: float, eps: float = OCC_EPS) -> int:
 
 class HoldGate:
     """Per-channel hold: missing(t) = a hit at some tick in [t - hold_s, t]. `step` must see non-decreasing times.
-    `value` (optional, per channel) is remembered at the last hit and returned while the hold lasts."""
+    `value` (optional, per channel) is remembered at the last hit and returned while the hold lasts. `hold_s` is one
+    hold for every channel or one per channel (shape (n,); e.g. the twin camera's per-press hold, S3b fix2)."""
 
-    def __init__(self, n: int, hold_s: float):
-        if hold_s < 0:
-            raise ValueError("hold_s must be >= 0")
-        self.n, self.hold_s = int(n), float(hold_s)
+    def __init__(self, n: int, hold_s: float | np.ndarray):
+        self.n = int(n)
+        h = np.asarray(hold_s, float)
+        if h.ndim > 1 or (h.ndim == 1 and h.shape != (self.n,)):
+            raise ValueError(f"hold_s must be a scalar or have shape ({self.n},), got {h.shape}")
+        if not np.isfinite(h).all() or (h < 0).any():
+            raise ValueError("hold_s must be finite and >= 0")
+        self.hold_s = float(h) if h.ndim == 0 else h.copy()
         self.reset()
 
     def reset(self) -> None:

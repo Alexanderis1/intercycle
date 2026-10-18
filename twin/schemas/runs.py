@@ -110,8 +110,19 @@ class CameraProvenance(Strict):
     cal_source: str                          # "cal_v1 draws" / "cal_v1 draws_fixed_scale" / "site framings (...)"
     h_mode: str
     draw_index: dict[str, int]               # camera id -> CAL v1 draw index (the world's true camera); {} = no draws
-    hold_s: float = Field(ge=0)
+    hold_s: float = Field(ge=0)              # the largest per-camera hold
+    hold_s_by_camera: dict[str, float]       # camera id -> the hold of the presses that camera sees (S3b fix2)
     params_sha256: str
+
+    @model_validator(mode="after")
+    def _holds(self):
+        if not self.hold_s_by_camera:
+            raise ValueError("hold_s_by_camera must name the hold of every camera")
+        if any(not (math.isfinite(h) and h >= 0) for h in self.hold_s_by_camera.values()):
+            raise ValueError("every per-camera hold must be finite and >= 0")
+        if abs(max(self.hold_s_by_camera.values()) - self.hold_s) > 1e-9:
+            raise ValueError("hold_s must be the largest per-camera hold")
+        return self
 
 
 class Summary(Strict):
@@ -142,7 +153,9 @@ class Summary(Strict):
     # Only "primary" runs may enter the primary metric (`require_primary`).
     variant: SummaryVariant = "primary"
     reset_override_s: float | None = Field(default=None, gt=0)
-    camera: CameraProvenance | None = None   # the twin plant always writes it (calibration draw per world)
+    # required (S3b fix2): a summary without the world's calibration draw and holds does not validate, so EVAL fails
+    # closed on a run whose camera is unrecorded
+    camera: CameraProvenance
 
     @model_validator(mode="after")
     def _counts(self):

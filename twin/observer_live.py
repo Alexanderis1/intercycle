@@ -204,7 +204,8 @@ class ObserverLive:
             if m["kind"] not in cfg.consts:
                 raise ValueError(f"machine {m['id']}: no learn_cycles constants for kind {m['kind']!r}")
             self.consts.append(LC.require_measured(cfg.consts[m["kind"]], sealed))
-        if sealed and str(cfg.motion_thr_source).upper().startswith(LC.PLACEHOLDER):
+        self._thr_placeholder = str(cfg.motion_thr_source).upper().startswith(LC.PLACEHOLDER)
+        if sealed and self._thr_placeholder:
             raise LC.PlaceholderConstantError(f"motion_thr {cfg.motion_thr} is a placeholder ({cfg.motion_thr_source})")
         self.margin: Margin = load_margin(cfg.margin_path)       # raises unless frozen and valid (fail closed)
         if not math.isclose(self.margin.cell_m, float(spec["env_res"]), rel_tol=0.0, abs_tol=1e-12):
@@ -238,8 +239,18 @@ class ObserverLive:
 
     # ---------------------------------------------------------------- ingest
     def motion(self, obs: M.Observation) -> np.ndarray:
-        """(M,) float: 1 motion, 0 no motion, NaN MISSING (never thresholded)."""
+        """(M,) float: 1 motion, 0 no motion, NaN MISSING (never thresholded). With the PLACEHOLDER threshold (sized for
+        0/1 moving-part counts) a non-integer zone_motion (a continuous energy, e.g. stat_v1's ROI energy ratio, idle
+        median 1.0) is refused (PlaceholderConstantError, fail closed, S3b fix2): such a stream needs its own threshold
+        (`config_for_stat_v1`), never 0.5."""
         zm = np.asarray(obs.zone_motion, float)
+        if self._thr_placeholder:
+            f = zm[np.isfinite(zm)]
+            if (f != np.round(f)).any():
+                raise LC.PlaceholderConstantError(
+                    f"zone_motion {f.tolist()} is a continuous energy but motion_thr {self.cfg.motion_thr} is a "
+                    f"placeholder ({self.cfg.motion_thr_source}): use the camera model's threshold "
+                    "(config_for_stat_v1 for stat_v1)")
         return np.where(np.isfinite(zm), (zm > self.cfg.motion_thr).astype(float), np.nan)
 
     def _cond(self, t: float, y: np.ndarray) -> M.Cond:

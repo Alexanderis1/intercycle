@@ -15,6 +15,7 @@ import pytest
 
 from intercycle.observer import mapping as OM
 from twin import camera as CAM
+from twin.cam_geom import PRESS_H_M
 from twin.camera_v0 import CameraV0
 from twin.schemas import load
 from twin.schemas.runs import RealisedTick
@@ -150,6 +151,154 @@ def test_projection_round_trip_and_one_draw_per_world():
         assert abs(cam.true[fid].height - want) < 1e-6 * want
         assert abs(cam.nominal[fid].height - 4.0) < 1e-6
     assert cam.cal_source == "cal_v1 draws"
+
+
+def _hits(b, roi, pad: float = 0.15) -> bool:
+    x0, y0, x1, y1 = b
+    r0, s0, r1, s1 = roi
+    pu, pv = pad * (x1 - x0), pad * (y1 - y0)
+    return x0 - pu <= r1 and x1 + pu >= r0 and y0 - pv <= s1 and y1 + pv >= s0
+
+
+def _overlap_depth(b, roi, pad: float = 0.15) -> float:
+    """How deep (px) the padded box overlaps the ROI (> 0: overlapping; the smallest of the four overlaps)."""
+    x0, y0, x1, y1 = b
+    r0, s0, r1, s1 = roi
+    pu, pv = pad * (x1 - x0), pad * (y1 - y0)
+    return min(x1 + pu - r0, r1 - (x0 - pu), y1 + pv - s0, s1 - (y0 - pv))
+
+
+def _at_roi_occluder(gn, roi, centre, cls: str = "person"):
+    """(prism, overlap depth px) of a standing mover in front of the press whose padded box (nominal camera)
+    overlaps the drawn ROI deepest: feet on a grid along the line camera nadir -> press centre (+-3 m sideways)."""
+    from twin.cam_geom import circle_prism, roi_box
+    ax = np.asarray(centre, float) - gn.nadir
+    perp = np.array([-ax[1], ax[0]]) / np.linalg.norm(ax)
+    best = None
+    for f in np.linspace(0.3, 0.98, 120):
+        for dl in np.linspace(-3.0, 3.0, 41):
+            q = gn.nadir + f * ax + dl * perp
+            prism = circle_prism(float(q[0]), float(q[1]), 0.3 if cls == "person" else 1.0, CAM.HEIGHT_M[cls])
+            b = roi_box(gn, prism)
+            if b is None:
+                continue
+            m = _overlap_depth(b, roi)
+            if best is None or m > best[1]:
+                best = (prism, m)
+    assert best is not None and best[1] > 0
+    return best
+
+
+def test_ram_roi_follows_the_press_through_every_cal_draw():
+    """Audit fix2 (major): the ram ROI is anchored on the press (`cam_geom.press_anchor`) and projected through the
+    world's TRUE camera, like the press prism and the movers. Through the nominal camera the anchor gives the drawn ROI
+    back; a fixed at-ROI occluder (a person in front of the press whose padded box overlaps the drawn ROI by >= 20 px
+    in the nominal image; a forklift for P14d, whose ROI is 2-3 m up) hits the anchored ROI in every one of the 200
+    CAL v1 joint draws, for every press. With the ROI left at its drawn
+    pixels (the fix1 camera), the same occluder misses P9a's ROI in many draws (the press moved, the ROI did not)."""
+    from twin.cam_geom import CamGeom, press_anchor, roi_box
+    hd = json.loads(CAM.HDRAWS_PATH.read_text(encoding="utf-8"))
+    fr = {f.id: f for f in SITE.framings}
+    fixed_hits = {}
+    for p in SITE.presses:
+        if not p.ram_roi.value:
+            continue
+        r = p.ram_roi.value[0]
+        fid, poly = r.framing, np.asarray(r.polygon_px, float)
+        K = np.asarray(fr[fid].K.value, float)
+        gn = CamGeom(fid, K, float(fr[fid].k1.value), np.asarray(fr[fid].H_img_to_floor.value, float))
+        centre = np.asarray(p.footprint.value, float).mean(0)
+        anc = press_anchor(gn, poly, p.footprint.value, PRESS_H_M)
+        # the anchor lies on the press's visible surface: inside the footprint's depth range, 0-3 m high
+        assert (anc[:, 2] > -1.0).all() and (anc[:, 2] < PRESS_H_M + 1.0).all(), (p.id, anc)
+        back, ok = gn.project(anc)
+        assert ok.all() and np.allclose(back, poly, atol=1e-6), p.id
+        drawn = roi_box(gn, anc)
+        prism, depth = _at_roi_occluder(gn, drawn, centre)
+        if depth < 20.0:                                   # P14d's ROI is 2-3 m up: only a taller mover covers it
+            prism, depth = _at_roi_occluder(gn, drawn, centre, cls="forklift")
+        assert depth >= 20.0, (p.id, depth)
+        n_anch, n_fixed = 0, 0
+        for rec in hd["framings"][fid]["draws"]:
+            gt = CamGeom.from_rec(fid, K, rec)
+            tb, pb = roi_box(gt, anc), roi_box(gt, prism)
+            assert pb is not None
+            n_anch += tb is not None and _hits(pb, tb)
+            n_fixed += _hits(pb, drawn)
+        assert n_anch == len(hd["framings"][fid]["draws"]), (p.id, depth, n_anch)
+        fixed_hits[p.id] = n_fixed
+    assert fixed_hits["P9a"] < 150, fixed_hits          # the fix1 camera's fixed ROI lost the press in many draws
+    assert fixed_hits["P9a"] < 150, fixed_hits          # the fix1 camera's fixed ROI lost the press in many draws
+
+
+def test_library_replay_roi_hits_stable_across_cal_draws():
+    """Audit fix2 (major): the DAYGEN v1 path library replayed through the camera geometry (scripts/
+    stat_v1_roi_occluders.py `twin_replay`, every 5th CAL v1 draw) hits the P9a and P14c ROIs in every draw, near the
+    nominal-camera share (P9a: within 10 %; P14c: the parallax of the near-camera floor, q5 >= half of it). On the fix1
+    camera (ROI fixed at its drawn pixels) P9a had 0 hits in 123 of the 200 draws."""
+    import importlib.util
+    from intercycle import esk
+    try:
+        lib = esk.data_root() / "dyn" / "path_library_v1.npz"
+    except Exception as e:                                   # no data root configured
+        pytest.skip(f"no data root: {e}")
+    if not lib.exists():
+        pytest.skip("DAYGEN v1 path library not present")
+    spec = importlib.util.spec_from_file_location("stat_v1_roi_occluders",
+                                                  CAM.REPO / "scripts" / "stat_v1_roi_occluders.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    rep = mod.twin_replay(SITE, presses=["P9a", "P14c"], draw_step=5)["presses"]
+    for pid, rel in (("P9a", 0.9), ("P14c", 0.5)):
+        r = rep[pid]
+        q5, q50, _q95 = r["twin_hit_share_unheld_draws_q5_50_95"]
+        nom = r["twin_hit_share_unheld_nominal"]
+        assert r["draws_with_zero_hits"] == 0, (pid, r)
+        assert nom > 0.1 and q5 >= rel * nom and abs(q50 - nom) <= 0.1 * nom + 0.02, (pid, r)
+    assert rep["P9a"]["fixed_roi_draws_with_zero_hits"] > 10           # the fix1 error, for contrast
+
+
+def test_camera_roi_is_the_anchored_roi_of_the_world_draw():
+    """CameraStatV1.roi = the anchored ROI through the world's true camera (one CAL draw per world), roi_nominal =
+    the drawn box; roi_vis is the true box's share inside the image; worlds with different draws move the ROI."""
+    from twin.cam_geom import box_share_in_image, press_anchor, roi_box
+    boxes = {}
+    for w in range(6):
+        cam = CAM.CameraStatV1(SITE, w, 1)
+        for pid, (fid, tb) in cam.roi.items():
+            p = cam.presses[pid]
+            poly = np.asarray(p.ram_roi.value[0].polygon_px, float)
+            want = roi_box(cam.true[fid], press_anchor(cam.nominal[fid], poly, p.footprint.value, PRESS_H_M))
+            assert want is not None and np.allclose(tb, want)
+            assert cam.roi_nominal[pid][1] == pytest.approx((poly[:, 0].min(), poly[:, 1].min(), poly[:, 0].max(),
+                                                             poly[:, 1].max()))
+            assert cam.roi_vis[pid] == {cam.cam_of_framing[fid]: box_share_in_image(tb)}
+            boxes.setdefault(pid, set()).add(tuple(round(v, 3) for v in tb))
+    assert len(boxes["P9a"]) > 1
+
+
+def test_at_roi_occluder_makes_p9a_missing_in_every_world():
+    """End to end through the camera: a person standing in front of P9a over its ROI (zone-9 floor, detected) makes
+    the ROI MISSING (held) on most ticks in every world, whatever its CAL draw."""
+    from twin.cam_geom import CamGeom
+    fr = {f.id: f for f in SITE.framings}
+    p = next(pp for pp in SITE.presses if pp.id == "P9a")
+    fid = p.ram_roi.value[0].framing
+    gn = CamGeom(fid, np.asarray(fr[fid].K.value, float), float(fr[fid].k1.value),
+                 np.asarray(fr[fid].H_img_to_floor.value, float))
+    poly = np.asarray(p.ram_roi.value[0].polygon_px, float)
+    roi = (poly[:, 0].min(), poly[:, 1].min(), poly[:, 0].max(), poly[:, 1].max())
+    prism, _ = _at_roi_occluder(gn, roi, np.asarray(p.footprint.value, float).mean(0))
+    x, z = prism[:8, 0].mean(), prism[:8, 1].mean()
+    pr = [dict(id=q.id, state="running", ram=0.5, stroke=False, freeze=False) for q in SITE.presses]
+    zone = next((zz.id for zz in SITE.zones if point_in_polygon(x, z, zz.floor_polygon.value)), None)
+    for w in range(8):
+        cam = CAM.CameraStatV1(SITE, w, 1)
+        vals = [cam.observe(tick(10.0 + k / 2.0, [dict(id="op", cls="person", zone=zone, x=float(x), z=float(z),
+                                                       heading=0.0, speed=0.0, r=0.3)], pr)).zone_motion["P9a"]
+                for k in range(200)]
+        assert float(np.isnan(vals).mean()) > 0.9, (w, cam.draw_index, float(np.isnan(vals).mean()))
 
 
 def test_stub_site_has_no_calibration_error_and_sealed_refuses_it(monkeypatch):
@@ -319,13 +468,24 @@ def test_image_space_hold_covers_occluder_outside_the_floor_zone():
     > 1.8 m (margin 1 m + pad 0.5 m + r 0.3 m) from the rect, so the observer's floor hold never arms. After the first
     tick the person is detected, the camera keeps the ROI MISSING for hold_s after every detection: no finite sample
     (no 'no motion' leak) until the person leaves. On bf91cdd's camera (and params) the same scene leaks 47-79 finite
-    samples in 1200 ticks after the first detection (worlds 3 / 7 / 17), 40-68 of them <= MOTION_THR."""
+    samples in 1200 ticks after the first detection (worlds 3 / 7 / 17), 40-68 of them <= MOTION_THR.
+    Since fix2 the ROI follows the press through the world's true camera, so such a far occluder exists only in some
+    worlds (world 7 has none for P14a): the test uses the first three worlds that have one."""
     from intercycle.observer.occlusion import occluded_zones
     from twin import plant
     pr = [dict(id=p.id, state="running", ram=0.0, stroke=False, freeze=False) for p in SITE.presses]
-    for world in (3, 7, 17):
+    found: list[tuple[CAM.CameraStatV1, float, float, float]] = []
+    for world in range(40):
         cam = CAM.CameraStatV1(SITE, world, 1)
-        x, z, gap = _roi_occluder_far_from_zone(cam, "P14a", 1.8 + 0.05)
+        try:
+            found.append((cam, *_roi_occluder_far_from_zone(cam, "P14a", 1.8 + 0.05)))
+        except AssertionError:
+            continue
+        if len(found) == 3:
+            break
+    assert len(found) == 3
+    for cam, x, z, gap in found:
+        world = cam.world_seed
         p = next(pp for pp in SITE.presses if pp.id == "P14a")
         rect = plant._bbox(p.danger_polygon.value, p.dilation_m.value)
         assert not occluded_zones(np.array([x]), np.array([z]), np.array([0.3]), [rect], margin=1.0, pad=0.5).any()
@@ -341,15 +501,17 @@ def test_image_space_hold_covers_occluder_outside_the_floor_zone():
         assert leaks == 0, (world, leaks, gap)
         assert cam.stats["roi_held"] > 0                     # missed ticks were bridged by the image-space hold
     # the hold ends: once the occluder leaves, the ROI reads energies again after hold_s
-    cam = CAM.CameraStatV1(SITE, 7, 1)
+    cam = CAM.CameraStatV1(SITE, found[0][0].world_seed, 1)
     x, z, _ = _roi_occluder_far_from_zone(cam, "P14a", 1.85)
     for k in range(20):
         cam.observe(tick(10.0 + k / 2.0, [person(0, x, z, "z14")], pr))
     last = max(k for k in [cam.roi_last_hit["P14a"]])
+    h14 = cam.hold_ticks_by_camera[14]                    # P14a is seen by camera 14: camera 14's own hold
+    assert h14 < cam.hold_ticks
     vals = [cam.observe(tick(20.0 + k / 2.0, [], pr)).zone_motion["P14a"] for k in range(cam.hold_ticks + 10)]
     k_free = 40 + np.arange(len(vals))
-    assert all(math.isnan(v) for v, kk in zip(vals, k_free) if kk - last <= cam.hold_ticks)
-    assert all(np.isfinite(v) for v, kk in zip(vals, k_free) if kk - last > cam.hold_ticks)
+    assert all(math.isnan(v) for v, kk in zip(vals, k_free) if kk - last <= h14)
+    assert all(np.isfinite(v) for v, kk in zip(vals, k_free) if kk - last > h14)
 
 
 def test_off_floor_person_at_the_press_occludes_the_zone9_roi():
@@ -426,14 +588,55 @@ def test_per_camera_rates_not_pooled():
     assert all(v["hold_s_at_lo95"] >= v["hold_s"] for v in cam.hold_detail.values())
 
 
+def test_hold_is_per_camera():
+    """Audit fix2 (minor): one hold per camera (max over that camera's classes), not camera 9's forklift-driver hold
+    everywhere: camera 14's presses are held for camera 14's own fitted bursts."""
+    cam = CAM.CameraStatV1(SITE, WORLD, 1)
+    for c in (9, 14):
+        want = max(v["hold_s"] for k, v in cam.hold_detail.items() if k.startswith(f"c{c}_"))
+        assert cam.hold_s_by_camera[c] == want
+    assert cam.hold_s_by_camera[14] < cam.hold_s_by_camera[9] == cam.hold_s
+    for p in SITE.presses:
+        assert cam.hold_s_by_press[p.id] == cam.hold_s_by_camera[cam.cam_of_zone[p.zone]]
+    assert cam.provenance()["hold_s_by_camera"] == {"9": cam.hold_s_by_camera[9], "14": cam.hold_s_by_camera[14]}
+
+
 def test_plant_uses_stat_v1_and_its_hold():
     from twin import plant
     cam = plant.make_camera(SITE, WORLD, 1)
     assert isinstance(cam, CAM.CameraStatV1)
-    ad = plant.ObsAdapter(SITE, hold_s=cam.hold_s)
-    assert ad.conv.hold_s == cam.hold_s
+    ad = plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press)
+    assert np.array_equal(ad.conv.hold_s, [cam.hold_s_by_press[p] for p in ad.press_ids])
+    assert plant.ObsAdapter(SITE, hold_s=cam.hold_s).conv.hold_s == cam.hold_s     # one hold for every press
     with pytest.raises(TypeError):
         plant.ObsAdapter(SITE)                         # type: ignore[call-arg]  # no default hold (fail closed)
+    with pytest.raises(ValueError, match="no hold for presses"):
+        plant.ObsAdapter(SITE, hold_s={"P9a": 1.0})
+
+
+def test_hold_gate_per_channel():
+    from intercycle.observer.occlusion import HoldGate
+    g = HoldGate(2, np.array([1.0, 3.0]))
+    g.step(0.0, [True, True])
+    miss, _ = g.step(2.0, [False, False])
+    assert miss.tolist() == [False, True]
+    with pytest.raises(ValueError):
+        HoldGate(2, np.array([1.0, 2.0, 3.0]))
+    with pytest.raises(ValueError):
+        HoldGate(2, np.array([1.0, -1.0]))
+
+
+def test_summary_without_camera_provenance_is_refused():
+    """Audit fix2 (minor): Summary.camera is required, so EVAL fails closed on a run whose calibration draw is
+    unrecorded."""
+    from pydantic import ValidationError
+    from twin.schemas.runs import Summary
+    s = json.loads((CAM.REPO / "tests" / "fixtures" / "twin_summary.json").read_text(encoding="utf-8"))
+    Summary.model_validate(s)
+    with pytest.raises(ValidationError):
+        Summary.model_validate({k: v for k, v in s.items() if k != "camera"})
+    with pytest.raises(ValidationError):
+        Summary.model_validate(dict(s, camera=dict(s["camera"], hold_s=1.0)))   # hold_s = the largest camera hold
 
 
 def test_observer_live_reads_the_stat_v1_motion_threshold(tmp_path):
@@ -506,15 +709,19 @@ def _site_v1_plant(tmp_path, world: int, seconds: float, intents=(), segments=()
 def test_site_v1_plant_empty_floor_running_presses_give_finite_zone_motion(tmp_path, monkeypatch, world):
     """End to end on the real site: camera stat_v1 + twin/site.yaml + ObsAdapter. With an empty floor and every press
     running, zone_motion is finite on most ticks for every press (the ROI's visibility, not the walkable-floor share
-    of rect + margin (0-0.40 here), sets zone_vis), and the timing signal reaches obs_v2.jsonl."""
+    of rect + margin (0-0.40 here), sets zone_vis), and the timing signal reaches obs_v2.jsonl. Since fix2 the ROI
+    follows the press through the world's true camera: a press whose ROI the world's camera puts partly outside the
+    image (world 3: P14d) is MISSING on every tick (zone_vis < 1, fail closed), never read as a value."""
     monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
     pl, obs = _site_v1_plant(tmp_path, world, 60.0)
     assert len(obs) >= 100
     zm = np.array([np.asarray(o.zone_motion, float) for o in obs])
     zv = np.array([np.asarray(o.zone_vis, float) for o in obs])
     fin = np.isfinite(zm).mean(0)
-    assert (fin > 0.9).all(), dict(zip(pl.adapter.press_ids, fin))
-    assert (zv == 1.0).all()
+    cut = np.array([min(pl.camera.roi_vis[p].values()) < 1.0 for p in pl.adapter.press_ids])
+    assert world != 3 or cut.tolist() == [p == "P14d" for p in pl.adapter.press_ids]
+    assert (fin[~cut] > 0.9).all() and (fin[cut] == 0).all(), dict(zip(pl.adapter.press_ids, fin))
+    assert (zv[:, ~cut] == 1.0).all() and (zv[:, cut] < 1.0).all()
     # the walkable-floor share alone would have forced NaN on every press (ZONE_VIS_MIN = 1)
     from twin import plant
     fl = plant.floor_share(pl.adapter.rects, [z.floor_polygon.value for z in SITE.zones])
@@ -522,6 +729,8 @@ def test_site_v1_plant_empty_floor_running_presses_give_finite_zone_motion(tmp_p
     # a running press reads above the fitted motion threshold far more often than an idle press does (fpr_idle 0.12)
     fpr = float(CAM._P["energy"]["motion_thr"]["fpr_idle"])
     for j, pid in enumerate(pl.adapter.press_ids):
+        if cut[j]:
+            continue
         v = zm[np.isfinite(zm[:, j]), j]
         assert float(np.mean(v > CAM.MOTION_THR)) > 2.5 * fpr, pid
     # the world's calibration draw is recorded in summary.json and plant_summary.json
@@ -529,6 +738,8 @@ def test_site_v1_plant_empty_floor_running_presses_give_finite_zone_motion(tmp_p
     summ = Summary.model_validate(json.loads((pl.run_dir / "summary.json").read_text(encoding="utf-8")))
     assert summ.camera is not None and summ.camera.cal_source == "cal_v1 draws"
     assert summ.camera.draw_index == {str(c): i for c, i in pl.camera.draw_index.items()}
-    assert summ.camera.hold_s == pl.camera.hold_s == pl.adapter.conv.hold_s
+    assert summ.camera.hold_s == pl.camera.hold_s
+    assert summ.camera.hold_s_by_camera == {str(c): h for c, h in pl.camera.hold_s_by_camera.items()}
+    assert np.array_equal(pl.adapter.conv.hold_s, [pl.camera.hold_s_by_press[p] for p in pl.adapter.press_ids])
     diag = json.loads((pl.run_dir / "plant_summary.json").read_text(encoding="utf-8"))
     assert diag["camera_provenance"] == summ.camera.model_dump(mode="json")

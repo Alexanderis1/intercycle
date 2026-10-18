@@ -151,6 +151,23 @@ def test_fast_layer_states_and_staleness(run):
     assert all(m.state == State.UNKNOWN and m.confidence == 0 for m in stale.machines)
 
 
+def test_placeholder_threshold_refuses_a_continuous_energy_stream(tmp_path):
+    """S3b fix2 (audit minor): with the PLACEHOLDER motion_thr (0.5, for 0/1 moving-part counts) a stream whose
+    zone_motion is a continuous energy (stat_v1: ROI energy / idle median, idle ~1.0) is refused (fail closed), not
+    read as motion on every idle press; the same stream with the stat_v1 threshold is ingested."""
+    obs = stream(minutes=0.2)
+    o = obs[0]
+    o.zone_motion = np.array([1.07, np.nan], np.float32)              # an idle press under stat_v1
+    ob = OL.ObserverLive(SPEC, OL.ObserverLiveConfig(margin_path=margin_file(tmp_path)))
+    with pytest.raises(LC.PlaceholderConstantError, match="continuous energy"):
+        ob.ingest(o)
+    ok = OL.ObserverLive(SPEC, OL.config_for_stat_v1(margin_file(tmp_path)))
+    ok.ingest(o)
+    assert ok.motion(o)[0] == 0.0 and np.isnan(ok.motion(o)[1])     # 1.07 < stat_v1's threshold: no motion
+    ob2 = OL.ObserverLive(SPEC, OL.ObserverLiveConfig(margin_path=margin_file(tmp_path)))
+    ob2.ingest(obs[1])                                                # 0/1 counts are fine with the placeholder
+
+
 def test_running_presses_are_never_read_stopped_through_nan_bursts(tmp_path):
     """Audit S6 #1 (probe on this stream, seed 1: P1 STOPPED with conf >= 4 on 23 ticks, 8 while the ram moved). Fast
     layer at every tick after the first model, 2 running presses, 10 % NaN bursts: no STOPPED with conf >= MIN_CONF,
