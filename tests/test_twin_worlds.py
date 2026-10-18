@@ -125,11 +125,16 @@ def _use_split_root(monkeypatch, root: Path) -> None:
     monkeypatch.setattr(P, "active_split_path", lambda repo=None: real(root))
 
 
-def test_cli_refuses_missing_inputs_and_stubs_without_the_flag(tmp_path):
-    assert not (TWIN / "site.yaml").exists() or not (TWIN / "tasks.yaml").exists() or \
-        not (TWIN / "dynamics.json").exists(), "contract files exist now: use a tmp twin dir"
+def test_cli_refuses_missing_inputs_and_stubs_without_the_flag(tmp_path, monkeypatch):
+    # The v1 contract files exist in twin/ now, so "missing inputs" is exercised on an empty tmp twin dir.
+    empty = tmp_path / "twin_empty"
+    empty.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.setattr(B, "default_inputs", lambda allow_stubs=False: C.default_inputs(empty, allow_stubs=allow_stubs))
     with pytest.raises(C.CompileError, match="stubs are not allowed"):
-        B.main(["--out", str(tmp_path)])
+        B.main(["--out", str(out)])
+    tmp_path = out
     with pytest.raises(C.CompileError, match="is the G0 v0 stub; pass --allow-stubs"):
         B.main(["--site", str(V0["site"]), "--dynamics", str(V0["dynamics"]), "--tasks", str(V0["tasks"]),
                 "--out", str(tmp_path)])
