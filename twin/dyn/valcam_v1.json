@@ -1,0 +1,44 @@
+{
+ "contract": "intercycle.dyn_valcam/1",
+ "framings": {
+  "c9_f1": {
+   "sigma_u_px": 0.415,
+   "sigma_v_px": 0.524,
+   "n_rows": 50565
+  },
+  "c9_f0": {
+   "sigma_u_px": 0.247,
+   "sigma_v_px": 0.327,
+   "n_rows": 71958
+  },
+  "c14_f0": {
+   "sigma_u_px": 0.363,
+   "sigma_v_px": 0.635,
+   "n_rows": 11020
+  }
+ },
+ "cameras": {
+  "9": {
+   "p_miss_start": 0.00865,
+   "p_miss_end": 0.42514,
+   "n_frames": 122737
+  },
+  "14": {
+   "p_miss_start": 0.00755,
+   "p_miss_end": 0.40964,
+   "n_frames": 9012
+  }
+ },
+ "presses": {
+  "P9a": {
+   "stroke_jitter_s": 0.02097,
+   "n": 386,
+   "frame_dt_s": 0.03989
+  },
+  "P9b": {
+   "stroke_jitter_s": 0.02111,
+   "n": 205,
+   "frame_dt_s": 0.04027
+  }
+ }
+}
