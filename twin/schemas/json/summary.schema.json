@@ -177,6 +177,29 @@
       ],
       "default": null,
       "title": "Wall S"
+    },
+    "variant": {
+      "default": "primary",
+      "enum": [
+        "primary",
+        "reset_sweep",
+        "short_dev"
+      ],
+      "title": "Variant",
+      "type": "string"
+    },
+    "reset_override_s": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reset Override S"
     }
   },
   "required": [
