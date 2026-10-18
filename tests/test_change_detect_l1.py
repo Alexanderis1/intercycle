@@ -255,7 +255,7 @@ def _simulate(changes, program_change: bool, with_inzone: bool, cfg: ChangeConfi
                     ix = np.clip(np.floor((occ[:, 0] - mp.l1_x0[i]) / res).astype(int), 0, pd.shape[0] - 1)
                     iz = np.clip(np.floor((occ[:, 1] - mp.l1_z0[i]) / res).astype(int), 0, pd.shape[1] - 1)
                     absorbed[name].append((obs.t_cap - T_CH, float((pd[ix, iz] >= det.cfg.p_min).mean())))
-    return dict(cover=cover, absorbed=absorbed, early=early, lifted=lifted, bad=bad)
+    return dict(cover=cover, absorbed=absorbed, early=early, lifted=lifted, bad=bad, det=det)
 
 
 WINDOWS = ((0, 60), (60, 180), (180, 300), (300, AFTER_S + 1))
@@ -495,3 +495,93 @@ def test_sync_keeps_other_owners_boxes_even_when_identical():
     det.sync()
     assert mp.unknown_rects.count(other) == 1, "another owner's identical box was removed"
     assert all(r in mp.unknown_rects for r in det._owned)
+
+
+# ---------------------------------------------------------------------------------------------- fail closed (lane S6)
+def _old_rects(det, max_boxes=12):
+    """unknown_rects() as it was before fail_closed_unlearned existed: the CUSUM UNKNOWN cells only."""
+    mp, res, out = det.map, det.map.spec["env_res"], []
+    for i, layer in enumerate(det.layers):
+        U = layer.unknown_mask()
+        if U.any():
+            for i0, j0, i1, j1 in M.safe_box_cover(U.reshape(layer.shape), max_boxes):
+                out.append((float(mp.l1_x0[i] + i0 * res), float(mp.l1_z0[i] + j0 * res),
+                            float(mp.l1_x0[i] + i1 * res), float(mp.l1_z0[i] + j1 * res)))
+    return out
+
+
+def _tick(mp, det, k, b):
+    obs = _part_obs(0.5 * k, [], HI, np.ones(len(SCN.cameras), bool))
+    mp.update(obs, 0.5 * k, _cond_bins(b))
+    det.step(obs, _cond_bins(b))
+
+
+def test_fail_closed_unlearned_is_unknown_until_every_bin_reaches_min_visits():
+    """Audit S6 #5 (LEAD DECISION, lane S6): with fail_closed_unlearned=True every cell of every machine grid is UNKNOWN
+    from construction on (also in map.unknown_rects), and a cell is lifted only once EVERY bin in `bins` has
+    min_visits observed ticks there: learning bin 0 alone lifts nothing."""
+    mp = M.LayeredMap(SCN)
+    det = L1ChangeDetector(mp, fail_closed_unlearned=True, bins=(0, M.STOP_BIN))
+    assert all(det.unknown_mask(m).all() for m in IDS)
+    assert mp.unknown_rects and set(det._owned) <= set(mp.unknown_rects)
+    a = det.availability_cost()
+    assert a["all"] == 1.0 and a["fail_closed"] is True and a["bins"] == [0, M.STOP_BIN]
+    L = det.layers[HI]
+    k = 0
+    for b in (0, M.STOP_BIN):
+        n_b = 0
+        while not L.trusted(b).all():
+            assert det.unknown_mask("HEM1").all(), f"lifted before bin {b} was learned ({n_b} ticks)"
+            _tick(mp, det, k, b)
+            k, n_b = k + 1, n_b + 1
+        assert n_b >= det.cfg.min_visits
+        if b == 0:
+            assert det.unknown_mask("HEM1").all(), "bin 0 learned alone must not lift (STOP_BIN not learned)"
+            assert det.availability_cost()["per_machine"]["HEM1"] == 1.0
+    assert not det.unknown_mask("HEM1").any() and not det.unknown_mask("SEAL1").any()
+    a = det.availability_cost()
+    assert a["per_machine"]["HEM1"] == 0.0 and a["per_machine"]["SEAL1"] == 0.0
+    others = [m for m in IDS if m not in ("HEM1", "SEAL1")]                  # never observed: still fail closed
+    assert all(det.unknown_mask(m).all() and a["per_machine"][m] == 1.0 for m in others)
+    assert set(mp.unknown_rects) == set(det.unknown_rects())                # the broadcast boxes follow the lift
+
+
+@pytest.mark.parametrize("bins", [(), (17,), (-1,), (0, 17)])
+def test_fail_closed_bins_must_be_valid(bins):
+    with pytest.raises(ValueError, match="bins"):
+        L1ChangeDetector(M.LayeredMap(SCN), fail_closed_unlearned=True, bins=bins)
+
+
+def test_availability_cost_counts_only_cells_held_by_the_unlearned_rule():
+    """Cells the CUSUM already holds UNKNOWN (dilated) are not charged to the fail-closed rule."""
+    mp = M.LayeredMap(SCN)
+    det = L1ChangeDetector(mp, fail_closed_unlearned=True, bins=(0,))
+    L = det.layers[HI]
+    L.unknown[:10] = True                                                  # a CUSUM alarm on HEM1
+    held = L.unknown_mask()
+    assert 10 <= held.sum() < L.n_cells
+    a = det.availability_cost()
+    assert a["per_machine"]["HEM1"] == pytest.approx(1.0 - held.mean())
+    assert a["per_machine"]["SEAL1"] == 1.0
+    n_all = sum(x.n_cells for x in det.layers)
+    assert a["all"] == pytest.approx((n_all - held.sum()) / n_all)
+    assert det.unknown_mask("HEM1").all()                                  # the union is still the whole grid
+    off = L1ChangeDetector(M.LayeredMap(SCN))
+    off.layers[HI].unknown[:10] = True
+    a0 = off.availability_cost()
+    assert a0["fail_closed"] is False and a0["all"] == 0.0 and set(a0["per_machine"].values()) == {0.0}
+
+
+def test_default_fail_closed_is_off_and_boxes_are_unchanged(runs):
+    """With the default (fail_closed_unlearned=False) nothing is UNKNOWN at construction and unknown_rects() /
+    unknown_mask() are exactly the pre-change output (CUSUM UNKNOWN cells only), here on the arms_in run whose detector
+    holds real alarms."""
+    mp = M.LayeredMap(SCN)
+    fresh = L1ChangeDetector(mp)
+    assert fresh.fail_closed is False and mp.unknown_rects == [] and not any(fresh.unknown_mask(m).any() for m in IDS)
+    det = runs[("arms_in", True)]["det"]
+    assert det is not None and det.fail_closed is False
+    assert any(layer.unknown_mask().any() for layer in det.layers), "fixture check: the run must hold UNKNOWN cells"
+    assert det.unknown_rects() == _old_rects(det)
+    for i, m in enumerate(IDS):
+        assert np.array_equal(det.unknown_mask(m), det.layers[i].unknown_mask().reshape(det.layers[i].shape))
