@@ -1,0 +1,273 @@
+{
+ "contract": "twin.labels/1",
+ "split": "dev",
+ "labeller_id": "dev-labeller-A",
+ "labeller_kind": "claude_agent",
+ "blind": true,
+ "proposals_shown": false,
+ "rules_sha256": "493457a5574e52fc4554c116f84ae0bcbb580a280a447e07f8a98b3abf820a20",
+ "sample_list_sha256": "f019af80844b28a903e9bcae8a8e936f5241383eebb7c49adb7637987a1b038e",
+ "frames": [
+  {
+   "sample_id": "dev-fs1-c9-01",
+   "clip_id": "0_te10",
+   "t_pts": 1.0480720766129032,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 0.0,
+     "y0": 700.0,
+     "x1": 105.0,
+     "y1": 862.0,
+     "foot_u": 88.0,
+     "foot_v": 856.0,
+     "truncated": true,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 343.0,
+     "y0": 418.0,
+     "x1": 384.0,
+     "y1": 470.0,
+     "foot_u": 363.0,
+     "foot_v": 470.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 432.0,
+     "y0": 465.0,
+     "x1": 490.0,
+     "y1": 535.0,
+     "foot_u": 461.0,
+     "foot_v": 535.0,
+     "truncated": false,
+     "occluded": true,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 1503.0,
+     "y0": 320.0,
+     "x1": 1543.0,
+     "y1": 452.0,
+     "foot_u": 1515.0,
+     "foot_v": 450.0,
+     "truncated": false,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 762.0,
+     "y0": 975.0,
+     "x1": 880.0,
+     "y1": 1080.0,
+     "foot_u": 821.0,
+     "foot_v": 1080.0,
+     "truncated": true,
+     "occluded": false,
+     "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 0.0,
+     "y0": 408.0,
+     "x1": 35.0,
+     "y1": 474.0,
+     "foot_u": 17.5,
+     "foot_v": 474.0,
+     "truncated": true,
+     "occluded": true,
+     "src": "labeller"
+    }
+   ],
+   "note": "seated operator at the left border behind a chair back (head, blue shirt, one shoe visible; cut by the left border); two operators behind the P9a crown (red shirt facing away, and one facing the camera), lower bodies hidden; a blurred dark shape right of them near (490, 480) may be a third person, not boxed (uncertain); walker at the end of the aisle in front of the forklift glare; person at the bottom border seen from above holding a phone (feet not visible); vehicle (forklift, headlight glare) in the aisle near (1450, 650) on camera 9: not boxed (no vehicle class on camera 9), no driver distinguishable; dark shapes by the right wall near (1760, 720) are bins/chairs, not boxed; fix r2 border check: operator crouching at the left border behind the yellow-green railing by the far-left press (dark workwear, head near (20, 425), white reflective cuff near (28, 451)), pose changes between neighbouring frames of the clip; boxed, cut by the left border, lower body behind the railing (feet not visible); its back merges with a static dark machine part at x 0-25, y 405-470, so the left and top box edges are uncertain by about 10 px; a pale shape at the left border near (5, 375) may be the head of a person standing mostly outside the frame, not boxed (uncertain)"
+  }
+ ],
+ "stroke_windows": [
+  {
+   "sample_id": "dev-sws1-P9a-01",
+   "clip_id": "2_tr109",
+   "press": "P9a",
+   "t0": 0.0,
+   "t1": 6.994404476418865,
+   "strokes": [
+    0.8393285371702638,
+    2.797761790567546,
+    4.7162270183852915,
+    6.5147881694644285
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566. strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9a-02",
+   "clip_id": "6_te12",
+   "press": "P9a",
+   "t0": 0.3568523790158601,
+   "t1": 10.35685237901586,
+   "strokes": [
+    1.7168056120374136,
+    3.5168259455063033,
+    5.35685237901586,
+    7.35685237901586,
+    9.35685237901586
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566. strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9a-03",
+   "clip_id": "1_tr51",
+   "press": "P9a",
+   "t0": 0.5693371289141927,
+   "t1": 10.532736884912566,
+   "strokes": [
+    1.260675071167141,
+    3.13135420902806,
+    5.08336722244815,
+    7.035380235868239,
+    9.068727124847499
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566. strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9a-04",
+   "clip_id": "1_tr65",
+   "press": "P9a",
+   "t0": 0.24400162667751119,
+   "t1": 10.213399755998374,
+   "strokes": [
+    1.4133794225294836,
+    3.3333672224481496,
+    5.293361122407482,
+    7.293361122407482,
+    9.213399755998374
+   ],
+   "note": "P9a c9_f0: the slide is not in view; BDC = lowest image position of the ram-coupled part at x 560-566. hidden 0.24-0.80 s (the ROI strip is washed out). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-01",
+   "clip_id": "0_tr97",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 7.974224728151429,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-02",
+   "clip_id": "4_tr17",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 8.981071284736206,
+   "strokes": [
+    0.4027386226339106,
+    2.094240837696335,
+    3.8662907772855415,
+    7.289569069673782
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 5.00-7.00 s (an operator's head in front of the slide). fix r2: possible BDC near 8.95 s at the window end, rise after it not seen: edge, not clicked; edge 8.15-8.99 s. strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-03",
+   "clip_id": "4_tr18",
+   "press": "P9b",
+   "t0": 0.4027386226339106,
+   "t1": 10.390656463954894,
+   "strokes": [],
+   "note": "NOT SCORABLE: operators' heads cover the P9b slide band over almost the whole window; no periodic band is seen, running not decidable."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-04",
+   "clip_id": "0_te13",
+   "press": "P9b",
+   "t0": 0.040022150624244864,
+   "t1": 7.973973016512284,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-05",
+   "clip_id": "0_tr93",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 7.974224728151429,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-r1",
+   "clip_id": "0_tr2",
+   "press": "P9b",
+   "t0": 1.4901329037454691,
+   "t1": 11.478050745066453,
+   "strokes": [
+    3.7454691904953683,
+    5.436971405557793,
+    7.209021345147,
+    8.900523560209423,
+    10.63229963753524
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 1.49-3.30 s (band not distinct, partly covered). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-r2",
+   "clip_id": "0_tr96",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 7.974224728151429,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-r3",
+   "clip_id": "4_tr19",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 7.974224728151429,
+   "strokes": [
+    0.7652033830044301
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 2.20-7.98 s (a person in front of the slide). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-r4",
+   "clip_id": "0_tr6",
+   "press": "P9b",
+   "t0": 0.16109544905356424,
+   "t1": 10.149013290374548,
+   "strokes": [
+    2.859444220700765,
+    6.1619009262988325,
+    7.8936770036246475,
+    9.665726943213855
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 0.16-1.30 s and hidden 4.45-5.60 s (covered; the BDC in each span is not seen with both its descent and rise). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-r5",
+   "clip_id": "0_tr103",
+   "press": "P9b",
+   "t0": 0.0,
+   "t1": 7.974224728151429,
+   "strokes": [],
+   "note": "press not running: the P9b slide band is static over the whole window."
+  },
+  {
+   "sample_id": "dev-sws1-P9b-r6",
+   "clip_id": "4_tr21",
+   "press": "P9b",
+   "t0": 0.040022150624244864,
+   "t1": 8.98081957309706,
+   "strokes": [
+    2.013441401530407,
+    3.7452174788562225
+   ],
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 0.04-0.90 s and hidden 3.95-5.60 s and hidden 6.80-8.99 s (covered by people / the band dims). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+  }
+ ]
+}
