@@ -21,7 +21,7 @@ SPLIT FREEZE (USER DECISION, Sun ~07:00 CEST). There are two freezes and each st
   The real-clip run (right after that freeze) is therefore made from a DETACHED WORKTREE at the commit that wrote prereg/FREEZE_REALCLIP
   (`git worktree add --detach <dir> <that commit>`, then `run --stages clips` from <dir>), never from main once the
   robot work has moved on (docs/probes/REALCLIP_RUN.md: the custodian commands).
-  `score` (same detached worktree, right after `run --stages clips`) re-checks C1-C4, takes the last `done` clips
+  `score` (same detached worktree, right after `run --stages clips`) re-checks C1-C4, takes the FIRST `done` clips
   attempt of RUNLOG (or --attempt N), re-hashes its PERC outputs against the RUNLOG's outputs_sha256, loads the
   LABELS-checked test labels (twin.dev_labels.load_scored_test: same status rules as dev) and runs the SAME scorer as
   the dev results (intercycle.eval.realclip.run, split "test", pixel adapter with the M-W10 watchdog on the decoded test
@@ -1054,7 +1054,7 @@ def dev_score(repo: Path, dev_root: Path, labels: Path, data_root: Path | None =
 
 
 def _clips_attempt(runlog: list[dict], attempt: int | None) -> tuple[int, str, dict]:
-    """(attempt, perc_dir, outputs_sha256) of a `done` clips attempt in RUNLOG: `attempt`, else the last one."""
+    """(attempt, perc_dir, outputs_sha256) of a `done` clips attempt in RUNLOG: `attempt`, else the FIRST one (PREREG_TWIN: the first clean attempt is scored)."""
     started = {r["attempt"]: r for r in runlog if r["status"] == "started"}
     done = [r for r in runlog if r["status"] == "done" and "clips" in (r.get("stages") or {})
             and started.get(r["attempt"], {}).get("perc_dir")]
@@ -1062,7 +1062,7 @@ def _clips_attempt(runlog: list[dict], attempt: int | None) -> tuple[int, str, d
         done = [r for r in done if r["attempt"] == attempt]
     if not done:
         raise Refusal(f"RUNLOG has no done clips attempt{'' if attempt is None else f' {attempt}'} to score")
-    r = done[-1]
+    r = done[0]
     return r["attempt"], started[r["attempt"]]["perc_dir"], r["stages"]["clips"]["outputs_sha256"]
 
 
@@ -1170,7 +1170,7 @@ def score(repo: Path, sealed_root: Path, attempt: int | None = None, data_root: 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="the sealed test run (PLAN_TWIN §5); custodian only")
     ap.add_argument("command", choices=("check", "derive", "run", "score", "dev-dry-run", "dev-score"))
-    ap.add_argument("--attempt", type=int, default=None, help="score: the clips attempt (default: the last done one)")
+    ap.add_argument("--attempt", type=int, default=None, help="score: the clips attempt (default: the first done one)")
     ap.add_argument("--sealed-root", type=Path, default=DEFAULT_SEALED_ROOT)
     ap.add_argument("--stages", default="clips")
     ap.add_argument("--fallback", action="store_true", help="derive: drand unreachable, R = secrets.token_hex(16)")

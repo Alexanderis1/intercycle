@@ -1038,6 +1038,17 @@ def test_score_runs_the_same_scorer_on_the_attempt_and_keeps_label_content_seale
         SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
 
 
+def test_score_default_is_the_first_done_clips_attempt(c, monkeypatch, tmp_path):
+    """PREREG_TWIN: the first clean attempt is scored; --attempt N still picks N."""
+    seen, scorer = _scored(monkeypatch)
+    _ran(c)
+    _ran(c)
+    assert [(r["attempt"], r["status"]) for r in _records(c)] == [(1, "started"), (1, "done"), (2, "started"), (2, "done")]
+    d = SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
+    assert d["attempt"] == 1 and seen["score"]["perc"] == c["root"] / "perc" / "attempt_001"
+    assert SR._clips_attempt(_records(c), None)[0] == 1 and SR._clips_attempt(_records(c), 2)[0] == 2
+
+
 def test_score_refuses_changed_perc_outputs(c, monkeypatch, tmp_path):
     seen, scorer = _scored(monkeypatch)
     _ran(c)
