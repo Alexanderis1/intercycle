@@ -66,6 +66,7 @@ python -m intercycle.eval.bodyshop --quick
 | Body shop, current harsher sim (noisy robot camera) | `python -m intercycle.eval.bodyshop --seeds 0-19 --hours 6` | `results/bodyshop/RESULTS.md`, `summary.json` |
 | Sealed real-clip test | already run once, by design; scores committed | `results/sealed/realclip_test_attempt_001.json`, `results/sealed/RUNLOG.json` |
 | Real-clip development set | committed scores | `results/dev/realclip_dev.json` |
+| Legged ANYmal-D on Nav2 in NVIDIA Isaac Sim (2 of 2 legs, 0 contacts, under 4.4 US cents of compute) | committed verdict (run on Modal GPU, `cloud/modal_isaac_robot.py`) | `docs/probes/S5a_isaac_smoke_verdict.json` |
 | Full test suite | `python -m pytest -q` | several minutes |
 
 On the current sim, where the robot's own camera can miss, misread or lag, InterCycle keeps 3.35 trips and
