@@ -467,7 +467,7 @@ def preflight(repo: Path, sealed_root: Path, fetch: Callable[[str], dict] = dran
     sha = read_freeze(repo)
     check_ancestor(repo, sha)
     changed = check_diff(repo, sha)
-    runlog = check_runlog(repo)
+    runlog = check_runlog(repo, sha)
     inputs = check_inputs(repo, sha)
     man = load_sealed(repo, "manifest", "MANIFEST")
     lab = load_sealed(repo, "labels", "LABELS")
@@ -511,17 +511,32 @@ def parse_runlog(text: str, where: str) -> list[dict]:
     return recs
 
 
-def check_runlog(repo: Path) -> list[dict]:
-    """The working RUNLOG parses, and its committed version (HEAD) is a prefix of it. Returns the working records."""
+def _runlog_at(repo: Path, rev: str) -> list[dict] | None:
+    """The RUNLOG records committed at `rev`, or None when that tree has no RUNLOG."""
+    blob = git(repo, "cat-file", "blob", f"{rev}:{RUNLOG}", ok_codes=(0, 128))
+    if blob.returncode != 0:
+        return None
+    return parse_runlog(blob.stdout.decode("utf-8"), f"{rev[:12]}:{RUNLOG}")
+
+
+def check_runlog(repo: Path, sha: str) -> list[dict]:
+    """RUNLOG is append-only across history, not only against the working file. The chain is: the FREEZE tree's RUNLOG
+    (absent counts as no records), then the RUNLOG of EVERY commit in FREEZE..HEAD in topological order (absent counts
+    as no records, so a deletion is a truncation), then the working file. Each version must parse and be a prefix of
+    the next, so no committed record is ever edited or dropped. Every commit is read (not only those `git log -- path`
+    lists), so path simplification over merges hides nothing; two branches that each appended different records
+    fail closed. Returns the working records."""
+    prev, where = _runlog_at(repo, sha) or [], f"the FREEZE tree {sha[:12]}"
+    revs = git(repo, "rev-list", "--reverse", "--topo-order", f"{sha}..HEAD").stdout.decode().split()
     p = repo / RUNLOG
-    cur = parse_runlog(p.read_bytes().decode("utf-8"), RUNLOG) if p.is_file() else []
-    committed = git(repo, "cat-file", "blob", f"HEAD:{RUNLOG}", ok_codes=(0, 128))
-    if committed.returncode == 0:
-        old = parse_runlog(committed.stdout.decode("utf-8"), f"HEAD:{RUNLOG}")
-        if cur[:len(old)] != old:
-            raise Refusal(f"{RUNLOG} is not an append-only extension of its committed version (HEAD has "
-                          f"{len(old)} records, the working file {len(cur)}, not as a prefix)")
-    return cur
+    work = parse_runlog(p.read_bytes().decode("utf-8"), RUNLOG) if p.is_file() else []
+    for rev, recs in [(r, _runlog_at(repo, r) or []) for r in revs] + [("working", work)]:
+        name = "the working file" if rev == "working" else f"commit {rev[:12]}"
+        if recs[:len(prev)] != prev:
+            raise Refusal(f"{RUNLOG} is not an append-only extension of its committed version ({where} has "
+                          f"{len(prev)} records, {name} {len(recs)}, not as a prefix)")
+        prev, where = recs, name
+    return work
 
 
 def append_runlog(repo: Path, known: list[dict], rec: dict) -> list[dict]:

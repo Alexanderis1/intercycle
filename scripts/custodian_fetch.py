@@ -3,7 +3,8 @@
     python scripts/custodian_fetch.py                       # download + verify + write the manifest
     python scripts/custodian_fetch.py --verify-only         # re-hash the local files against the split and manifest
 
-Python 3.10+ with pydantic (the repo's own contract parser, twin.schemas.prereg), no HF token. It reads the TEST rows
+Python 3.11+ (the repo's floor) with pydantic, which is required (the repo's own contract parser,
+twin.schemas.prereg), no HF token. It reads the TEST rows
 (clip_id, sha256) of the active split (prereg/ACTIVE_SPLIT, the one sealed_run.py checks against), downloads each clip from the pinned HF revision into C:\\intercycle_sealed\\clips\\<id>.mp4, checks
 its sha256, and refuses to finish if any file is missing, extra or wrong. It never decodes or opens a video.
 
@@ -110,7 +111,8 @@ def main() -> None:
     if bad or extra:
         sys.exit(f"FAILED: {len(bad)} missing/wrong files {bad[:10]}, {len(extra)} extra files {extra[:10]}")
     # hash of the split file with LF line endings, so a CRLF checkout (core.autocrlf) gives the same value
-    print(f"split {a.split.name} sha256 {hashlib.sha256(a.split.read_bytes().replace(b'\r\n', b'\n')).hexdigest()}")
+    split_sha = hashlib.sha256(a.split.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    print(f"split {a.split.name} sha256 {split_sha}")
     text = manifest_text(rows)
     if a.verify_only:
         if not a.manifest.exists() or a.manifest.read_bytes().replace(b"\r\n", b"\n").decode("utf-8") != text:

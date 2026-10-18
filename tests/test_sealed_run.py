@@ -535,6 +535,57 @@ def test_a_committed_rewrite_of_runlog_is_refused(s):
     refused(s, "opens out of order")
 
 
+def _commit_edited_runlog(s: dict, edit, msg: str) -> None:
+    p = s["repo"] / SR.RUNLOG
+    d = json.loads(p.read_text(encoding="utf-8"))
+    edit(d)
+    p.write_text(json.dumps(d), encoding="utf-8")
+    commit(s["repo"], msg, SR.RUNLOG)
+
+
+@pytest.mark.parametrize("edit", [
+    lambda d: d["records"][1].update(stages={"clips": "edited"}),      # a closed record's stages rewritten
+    lambda d: d["records"].__delitem__(slice(1, None)),                 # truncated to the opening record
+    lambda d: d.update(records=[]),                                     # emptied
+])
+def test_a_rewrite_committed_after_freeze_is_refused(s, edit):
+    _run(s)
+    commit(s["repo"], "RUNLOG attempt 1", SR.RUNLOG)
+    _commit_edited_runlog(s, edit, "RUNLOG history edited")
+    assert g(s["repo"], "status", "--porcelain", "--untracked-files=all") == ""   # working file == HEAD
+    with pytest.raises(SR.Refusal, match=r"not an append-only extension.*commit [0-9a-f]{12} has 2 records"):
+        SR.check_runlog(s["repo"], s["code"])
+    refused(s, "not an append-only extension")
+
+
+def test_a_committed_rewrite_stays_refused_after_a_later_restore(s):
+    _run(s)
+    commit(s["repo"], "RUNLOG attempt 1", SR.RUNLOG)
+    good = (s["repo"] / SR.RUNLOG).read_text(encoding="utf-8")
+    _commit_edited_runlog(s, lambda d: d["records"][0].update(timestamp="2000-01-01T00:00:00+00:00"), "rewrite")
+    (s["repo"] / SR.RUNLOG).write_text(good, encoding="utf-8")         # the HEAD version looks untouched again
+    commit(s["repo"], "restore", SR.RUNLOG)
+    refused(s, "not an append-only extension")
+
+
+def test_a_committed_deletion_of_runlog_is_refused(s):
+    _run(s)
+    commit(s["repo"], "RUNLOG attempt 1", SR.RUNLOG)
+    g(s["repo"], "rm", "-q", "--", SR.RUNLOG)
+    g(s["repo"], "commit", "-q", "-m", "drop RUNLOG")
+    refused(s, "not an append-only extension")
+
+
+def test_runlog_check_starts_from_the_freeze_tree(s):
+    _run(s)
+    commit(s["repo"], "RUNLOG attempt 1", SR.RUNLOG)
+    head = g(s["repo"], "rev-parse", "HEAD")
+    assert len(SR.check_runlog(s["repo"], head)) == 2                  # FREEZE tree holds the 2 records: a prefix
+    with pytest.raises(SR.Refusal, match="the FREEZE tree"):
+        _commit_edited_runlog(s, lambda d: d["records"].pop(), "truncate")
+        SR.check_runlog(s["repo"], head)
+
+
 def test_only_runlog_may_be_dirty(s):
     _run(s)
     write(s["repo"] / "results" / "sealed" / "other.json", "{}\n")

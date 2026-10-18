@@ -17,14 +17,15 @@ never views, decodes or describes a test clip; it only downloads, hashes and lat
 python scripts/custodian_fetch.py
 ```
 
-- Standard library only (Python 3.10+). It reads the 126 TEST rows of `prereg/split_a1.csv` and downloads each clip
+- Python 3.11+ with pydantic (required: the repo's contract parser `twin.schemas.prereg`). It reads the 126 TEST rows of `prereg/split_a1.csv` and downloads each clip
   from HF `Voxel51/Safe_and_Unsafe_Behaviours` at revision `7369ff1830b5f6c00f7d7383eeeaa90704bfc5b5`
   (`https://huggingface.co/datasets/Voxel51/Safe_and_Unsafe_Behaviours/resolve/<rev>/data/<clip_id>.mp4`) into
   `C:\intercycle_sealed\clips\<clip_id>.mp4`.
 - It checks each file's sha256 against the split, re-downloads a wrong file, and fails if any file is missing, wrong or
   extra in that folder. It is safe to re-run: files that already verify are kept.
-- On success it writes `sealed/MANIFEST.sha256` in the repo (PLAN §2 format): one `<sha256>  clips/<clip_id>.mp4` line per
-  test clip sorted by id, then `# ids`, `# camera`, `# class` and `# split_a1.csv sha256` lines.
+- On success it writes `sealed/MANIFEST.sha256` in the repo in the `twin.sealed/1` contract format (the one
+  `scripts/sealed_run.py` parses): one `<sha256>  clips/<clip_id>.mp4` line per test clip, then `#ids`, `#count` and
+  `#aggregate` lines. The split file's sha256 is printed, not written.
 - Check it: `python scripts/custodian_fetch.py --verify-only` must print `verified 126 files`.
 - Expected counts: camera 9: 114, camera 14: 12; classes 0: 51, 1: 58, 3: 9, 5: 4, 6: 1, 7: 3.
 - 13 pairs of test ids are byte-identical files (same sha256, sometimes different class labels); each id is still
