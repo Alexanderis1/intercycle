@@ -117,8 +117,8 @@ def learned_observer(spec: dict, margin_path: str, learn_path: Path,
 
 def snapshot_observer(world: Path, t0: float) -> tuple[OL.ObserverLive, float, int]:
     """The CPU-double batch's learned arm: the observer state pickled by the batch's observer phase
-    (scripts/run_double.py observer_phase: days 1-8 + the robot-free stream of the scored day up to the mission start,
-    all of it Observation v2 only), shipped as <world>/observer_snapshot.pkl. Fail closed: the file must hold an
+    (scripts/run_double.py learn20_phase, the default: the robot-free stream of the scored day over [t0 - 1200 s, t0);
+    the dev-only days18 mode: days 1-8 + the scored day up to t0; all of it Observation v2 only), shipped as <world>/observer_snapshot.pkl. Fail closed: the file must hold an
     ObserverLive whose newest ingested capture predates the mission start t0 (plant seconds). The pickle is our own
     observer-phase output (same image, same python), never a viewer- or network-supplied file.
     Returns (observer, its newest capture time, ticks ingested)."""
