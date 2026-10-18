@@ -338,3 +338,12 @@ The A5 table was computed from a working tree that did not match the merge commi
      camera 9 and 7.5 s on camera 14.
   2. Occluder input: in the twin, only movers the camera detects that tick occlude; on real clips every confirmed track
      box occludes, plus every person or forklift detection at conf >= occ_conf 0.4.
+
+## Amendment 7 (A7): real-clip score uses the FIRST done attempt (sealed_run.py blob)
+
+- **Recorded:** Sun 18 Oct 2026, ~09:55 CEST, lead, before FREEZE_REALCLIP. Lane rc-first (e050251, audit pass), merged
+  at 9f96abf.
+- **Change:** `scripts/sealed_run.py score` without `--attempt` now scores the FIRST clips attempt whose closing record
+  is `done` (it took the last one), matching PREREG "the first clean attempt is scored". `--attempt N` is unchanged.
+  The RC-final audit had flagged this as a minor issue. Runbook: one safe.directory line in docs/probes/REALCLIP_RUN.md.
+- **§1 blob, scripts/sealed_run.py:** 2bbcabf0a1c04139b63f0c5ec9ce7e5bda83492e (A5) -> **d95f72f050e3b7a74d77334410a49e01de2f6ce6** (binding, = `git rev-parse 9f96abf:scripts/sealed_run.py`).
