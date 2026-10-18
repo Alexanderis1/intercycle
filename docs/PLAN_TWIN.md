@@ -281,6 +281,15 @@ Real-clip test:
 - Test worlds 1-2, days 9 and 10, 1 slot per zone per day: 24 missions. Option B adds world 3, day 9, both zones (+6 missions = 30); unbalanced, descriptive only.
 - A mission is one round of the zone's checkpoints, capped at 720 s.
 
+**Observer on the twin: disclosed limits (pre-freeze, lanes observer-fix and observer-fix-fix1; pending lead decisions).**
+- STOP_BIN never opens on the twin: the learned stops_per_h is inflated by camera misses (20-170 / h against ~3-5 / h true), so the STOPPED TTL sits at the 2 s floor, below the robot's 8 s STOP_BIN lookup; even at the true rate 10 / stops_per_h < 8 s. The learned arm reads the union for a stopped press (user decision: it never enters a stopped press). About 10 % confident STOPPED on running presses remain. Pending lead decision: STOPPED TTL calibration and stop counting.
+- The TTL bounds stop starts, not stop ends: a restart inside the 6 s horizon is not guarded (pending: a stop-duration model). After a period gets longer, one confident STOPPED on a running press can still be sent before the press contradicts it.
+- IDLE precision on the twin probe: 0.77 (23 % of confident IDLE windows contained a stroke) before observer-fix-fix1. Fix1 holds a press UNKNOWN (every state, confidence 0) from its first observed contradiction (a rise earlier than the model's next start, a cycle shorter than period x (1 - cycle_tol_frac), or a quiet run past the stop threshold ending in motion) until a re-fit matches it; windows sent before that first contradiction can still contain a stroke start.
+- A confident model kept over mostly-MISSING re-fits lives at most keep_max_s = 1200 s (one learn window, a choice pending lead approval) after its last confident fit.
+- The map layer is packed once per mission: M-W4 alarms raised during a mission reach the robot only through the fast and slow layers.
+- M-W10: one camera's invalid floor view (cam_ok & cam_floor_ok) makes every zone MISSING (the spec has no camera-to-zone map). Fail closed; on real clips it can blank the whole observer.
+- The observer learns on the last 20 min of stream (learn_window_s = 1200), not on days 1-8: pending lead decision (runner, or PREREG amendment).
+
 ## 6. Compute, budget, cuts
 
 **Where things run.**
