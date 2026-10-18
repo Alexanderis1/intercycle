@@ -3,6 +3,10 @@ can never happen in the twin").
 
     python scripts/stat_v1_roi_occluders.py      # -> twin/stat_v1_roi_occluders.json (aggregates only, no image data)
     python scripts/stat_v1_roi_occluders.py --replay-only   # re-run the twin replays only, keep the TRAIN/DEV block
+    python -m twin.camera --replay-held      # then: the held replay of the stat_v1 camera itself (key HELD_KEY)
+
+This script imports no truth module (tests/test_truth_allowlist.py): the held replay runs the stat_v1 camera
+(twin/camera.py, a truth reader) and therefore lives there, as `replay_library_held`; it reads no truth either.
 
 TRAIN and DEV only (`esk.load("train")` / `esk.load("dev")`; no TEST clip is read). For every clip, every press ROI of
 the clip's framing (twin/site.yaml ram_roi) and every sampled frame of the PERC boxes table
@@ -41,7 +45,7 @@ from twin.schemas import load  # noqa: E402
 from twin.schemas.site import Site, point_in_polygon  # noqa: E402
 
 OUT = ROOT / "twin" / "stat_v1_roi_occluders.json"
-REPLAY_WORLDS = 40                         # worlds of the held camera replay (one CAL v1 draw per camera each)
+HELD_KEY = "twin_replay_held_stat_v1_camera"   # written by twin/camera.py --replay-held (the camera is truth-side)
 DISCLOSURE = (
     "fix2 attribution: the fix1 camera kept each ram ROI at its drawn pixels while the press prism and the movers "
     "were projected through the world's TRUE camera (one CAL v1 draw), so the ROI no longer sat on its press in a "
@@ -150,80 +154,6 @@ def twin_replay(site: Site, presses: list[str] | None = None, draw_step: int = 1
     return out
 
 
-def twin_replay_held(site: Site, n_worlds: int = REPLAY_WORLDS) -> dict:
-    """The stat_v1 CAMERA itself (twin/camera.py: miss chain, occlusion, image-space ROI rule, per-camera hold) on the
-    DAYGEN v1 path library, for worlds 0..n_worlds-1 (one CAL v1 draw per camera each): every library clip is
-    replayed on the 2 Hz grid (clips 1000 s apart, so tracks and holds restart), its people / forklifts placed where
-    their tracks say (class, zone, r 0.3 / 1.0 m, speed from the 0.5 s displacement), every press running. Per press:
-    the share of the ticks of its zone's clips at which stat_v1's zone_motion is MISSING (held, as the observer gets
-    it) and the share at which a detected occluder covers the ROI on that tick (`roi_missing`, unheld), quantiles over
-    the worlds whose ROI is fully inside the image; plus the worlds whose ROI is cut by the image border (MISSING on
-    every tick). Next to TRAIN's machines MISSING share (ingest hold 1.33 s) of the ROI's framing. The library clips are
-    short (median ~7 s, max ~15 s) against stat_v1's holds (camera 9 34 s, camera 14 7.5 s), so a clip whose ROI is hit
-    once stays MISSING to its end: the held share is bounded by the clip length, not by the hold."""
-    from twin import camera as CAM            # truth-free use: ticks are built here from the TRAIN path library
-    from twin.schemas.runs import RealisedTick
-    lib = np.load(esk.data_root() / "dyn" / "path_library_v1.npz")
-    hd = json.loads((ROOT / "twin" / "cal" / "h_draws_v1.json").read_text(encoding="utf-8"))
-    trace = json.loads((ROOT / "twin" / "cal" / "site_trace_v1.json").read_text(encoding="utf-8"))
-    t = np.round((lib["unit_t0"] + lib["seg_t_off"] + lib["dt"]) * 2.0) / 2.0
-    clips = sorted(set(lib["clip_id"].tolist()))
-    zone_of_clip = {c: str(z) for c, z in zip(lib["clip_id"], lib["zone"])}
-    by_clip: dict = defaultdict(lambda: defaultdict(dict))         # clip -> k -> unit -> (cls, x, z)
-    for i in range(len(t)):
-        by_clip[str(lib["clip_id"][i])][int(round(float(t[i]) * 2))][str(lib["unit_id"][i])] = (
-            str(lib["cls"][i]), float(lib["x"][i]), float(lib["z"][i]))
-    pressed = [p for p in site.presses if p.ram_roi.value]
-    pr = [dict(id=p.id, state="running", ram=0.5, stroke=False, freeze=False) for p in site.presses]
-    per: dict = {p.id: defaultdict(list) for p in pressed}
-    holds: dict = {}
-    for w in range(n_worlds):
-        cam = CAM.CameraStatV1(site, w, 1, hdraws=hd, trace=trace)
-        holds = {str(c): h for c, h in cam.hold_s_by_camera.items()}
-        nan = defaultdict(int)
-        hit = defaultdict(int)
-        ticks = defaultdict(int)
-        for ci, clip in enumerate(clips):
-            ks = by_clip[clip]
-            k0, k1 = min(ks), max(ks)
-            prev: dict = {}
-            for k in range(k0, k1 + 1):
-                cur = ks.get(k, {})
-                movers = []
-                for uid, (cls, x, z) in cur.items():
-                    sp = math.hypot(x - prev[uid][0], z - prev[uid][1]) * 2.0 if uid in prev else 0.0
-                    movers.append(dict(id=uid, cls=cls, zone=zone_of_clip[clip], x=x, z=z, heading=0.0, speed=sp,
-                                       r=0.3 if cls == "person" else 1.0))
-                prev = {uid: (x, z) for uid, (_c, x, z) in cur.items()}
-                rm_before = dict(cam.roi_last_hit)          # changes on a tick a detected occluder covers the ROI
-                d = cam.observe(RealisedTick.model_validate(dict(kind="tick", t=ci * 1000.0 + (k - k0) / 2.0,
-                                                                 presses=pr, movers=movers)))
-                for p in pressed:
-                    if p.zone != zone_of_clip[clip]:
-                        continue
-                    ticks[p.id] += 1
-                    nan[p.id] += math.isnan(d.zone_motion[p.id])
-                    hit[p.id] += cam.roi_last_hit.get(p.id) != rm_before.get(p.id)
-        for p in pressed:
-            cut = min(cam.roi_vis[p.id].values()) < 1.0
-            per[p.id]["cut"].append(bool(cut))
-            if not cut and ticks[p.id]:
-                per[p.id]["held"].append(nan[p.id] / ticks[p.id])
-                per[p.id]["unheld"].append(hit[p.id] / ticks[p.id])
-            per[p.id]["draw"].append(int(cam.draw_index[cam.cam_of_framing[p.ram_roi.value[0].framing]]))
-    out: dict = {"n_worlds": n_worlds, "hold_s_by_camera": holds, "clips": len(clips), "presses": {}}
-    for p in pressed:
-        a = per[p.id]
-        out["presses"][p.id] = {
-            "framing": p.ram_roi.value[0].framing,
-            "held_missing_share_worlds_q5_50_95": _q(a["held"], (5, 50, 95)),
-            "unheld_detected_hit_share_worlds_q5_50_95": _q(a["unheld"], (5, 50, 95)),
-            "worlds_with_zero_held_missing": int(sum(v == 0 for v in a["held"])),
-            "worlds_roi_cut_by_image_border": int(sum(a["cut"])),
-        }
-    return out
-
-
 def real_occluders(site: Site) -> dict:
     """The TRAIN / DEV block (module doc): where the real ROI occluders stand, per split x press x framing."""
     zones = {z.id: z for z in site.zones}
@@ -327,16 +257,14 @@ def main(argv: list[str] | None = None) -> int:
         out = real_occluders(site)
     out["twin_replay_daygen_v1_library"] = twin_replay(site)
     out["twin_replay_daygen_v1_library"]["disclosure"] = DISCLOSURE
-    held = twin_replay_held(site)
-    for pid, v in held["presses"].items():         # TRAIN's machines MISSING share of the ROI's framing, next to it
-        tr = out["by_split_press_framing"].get(f"train:{pid}:{v['framing']}", {})
-        v["train_machines_missing_share"] = tr.get("machines_missing_share")
-        v["train_hit_share_unheld"] = tr.get("hit_share_unheld")
-    out["twin_replay_held_stat_v1_camera"] = held
+    # the held replay runs the stat_v1 CAMERA itself, a truth module (twin/truth_guard.py): it lives in twin/camera.py
+    # (`python -m twin.camera --replay-held`, which writes HELD_KEY of this file) and is kept here as last written
+    if OUT.exists() and HELD_KEY in (prev := json.loads(OUT.read_text(encoding="utf-8"))):
+        out[HELD_KEY] = prev[HELD_KEY]
     OUT.write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps(out["by_split_press_framing"], indent=1))
     print(json.dumps(out["twin_replay_daygen_v1_library"], indent=1))
-    print(json.dumps(out["twin_replay_held_stat_v1_camera"], indent=1))
+    print(f"{HELD_KEY}: re-run with  python -m twin.camera --replay-held  (after this script)")
     return 0
 
 
