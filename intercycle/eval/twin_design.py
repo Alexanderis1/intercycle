@@ -12,7 +12,9 @@ directory name and classify_invalid's committed list.
     directory name (`listed`). A run is never in both.
 
   * Design: on the test split the design is explicit (the world list is required; days default to TEST_DAYS; the CPU
-    double has all CONDITIONS) and, for the CPU double, the sealed design K_TEST x TEST_DAYS x CONDITIONS is enforced
+    double has the cut design's SEALED_CONDITIONS = static, learned, reactive, USER DECISION Sun ~07:00: no oracle, no
+    no-map) and, for the CPU double, the sealed design K_TEST x TEST_DAYS x SEALED_CONDITIONS is enforced (any other
+    condition set, e.g. one with oracle or no_map, is refused, and a test run of such a condition is outside the design)
     unless allow_partial_design (an API argument for synthetic tests only; `Design.fixed` is then False). A test run
     outside the design is refused. On the dev split worlds and days default to the runs present.
   * Runs: every directory under the runs root holding a run file (RUN_MARKERS), with or without summary.json, plus a
@@ -44,6 +46,9 @@ from twin.schemas.runs import Summary
 
 CONDITIONS = ("no_map", "static", "learned", "reactive", "oracle")
 REQUIRED = ("static", "learned", "reactive")
+# USER DECISION (Sun ~07:00 CEST, split freeze, CUT design): the sealed CPU double runs exactly these 3 conditions
+# (no oracle, no no-map): 3 x K_TEST x TEST_DAYS x 2 zones = 192 missions. H1-H3 need learned, reactive and static.
+SEALED_CONDITIONS = REQUIRED
 K_TEST = 16                        # test worlds (PLAN_TWIN §5 Design)
 TEST_DAYS = (9, 10)                # scored days
 # files that mark a run directory (a crashed container may leave any of them, or nothing but its id in the invalid list)
@@ -244,15 +249,15 @@ def make_design(runs: Sequence[Run], invalid: Mapping[str, dict | None], *, spli
             raise EvalError(f"--worlds repeats a world: {wl}")
         ds = tuple(sorted(set(int(d) for d in days))) if days else TEST_DAYS
         cs = tuple(c for c in CONDITIONS if c in set(conditions)) if conditions else (
-            CONDITIONS if engine == "double" else REQUIRED)
+            SEALED_CONDITIONS if engine == "double" else REQUIRED)
         sealed = engine == "double"
         if sealed and not allow_partial_design:
             if len(ws) != K_TEST:
                 raise EvalError(f"the sealed design has K = {K_TEST} test worlds, got {len(ws)}: {list(ws)}")
             if ds != TEST_DAYS:
                 raise EvalError(f"the sealed design scores days {TEST_DAYS}, got {list(ds)}")
-            if cs != CONDITIONS:
-                raise EvalError(f"the sealed design has all conditions {CONDITIONS}, got {list(cs)}")
+            if cs != SEALED_CONDITIONS:
+                raise EvalError(f"the sealed (cut) design has exactly the conditions {SEALED_CONDITIONS}, got {list(cs)}")
         missing = [c for c in REQUIRED if c not in cs]
         if missing:
             raise EvalError(f"conditions {missing} are required (H1 / H2)")

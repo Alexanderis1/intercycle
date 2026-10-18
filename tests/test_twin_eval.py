@@ -418,8 +418,12 @@ def test_test_design_is_explicit_and_sealed(tmp_path):
         E.run_eval(root, tasks, worlds=range(6))
     with pytest.raises(E.EvalError, match="days"):
         E.run_eval(root, tasks, worlds=range(16), days=[9])
-    with pytest.raises(E.EvalError, match="all conditions"):
-        E.run_eval(root, tasks, worlds=range(16), conditions=("static", "learned", "reactive"))
+    for conds in (E.CONDITIONS, ("static", "learned", "reactive", "oracle"), ("no_map", "static", "learned",
+                                                                                  "reactive")):
+        with pytest.raises(E.EvalError, match="exactly the conditions"):          # the cut design: no oracle, no no-map
+            E.run_eval(root, tasks, worlds=range(16), conditions=conds)
+    with pytest.raises(E.EvalError, match="required"):
+        E.run_eval(root, tasks, worlds=range(16), conditions=("static", "learned"), allow_partial_design=True)
     write_run(root, 7, 9, "z9", "learned")                         # a test run outside the design: refused
     with pytest.raises(E.EvalError, match="outside the test design"):
         evaluate(root, tmp_path)
@@ -429,16 +433,23 @@ def test_test_design_is_explicit_and_sealed(tmp_path):
         evaluate(root, tmp_path)
 
 
-def test_sealed_design_scores_all_320_cells(tmp_path):
-    """The fixed sealed design: 16 worlds x 2 days x 2 zones x 5 conditions; absent conditions are missing failures."""
+def test_sealed_design_scores_all_192_cells(tmp_path):
+    """The fixed sealed (cut) design: 16 worlds x 2 days x 2 zones x 3 conditions (static, learned, reactive; USER
+    DECISION Sun ~07:00: no oracle, no no-map); an absent condition or an oracle / no-map run is refused."""
     root = tmp_path / "runs"
-    design(root, worlds=range(16), conds=E.CONDITIONS)
+    design(root, worlds=range(16), conds=E.SEALED_CONDITIONS)
     tasks = write_tasks(tmp_path / "tasks.json")
     rep = E.run_eval(root, tasks, worlds=range(16))
-    assert rep["design"]["fixed"] and rep["design"]["conditions"] == list(E.CONDITIONS)
-    assert len(rep["primary_metric"]["missions"]) == 320 and rep["errored_missions"] == []
+    assert rep["design"]["fixed"] and rep["design"]["conditions"] == ["static", "learned", "reactive"]
+    assert len(rep["primary_metric"]["missions"]) == 192 and rep["errored_missions"] == []
     assert rep["gatekeeping"][0]["p"] == pytest.approx(1 / 2 ** 16)
-    for d in sorted(root.glob("*_oracle")):                        # a whole condition never synced: refused
+    assert "oracle_share" not in rep["reported_outside_gate"]          # dropped cleanly with the oracle condition
+    for c in ("oracle", "no_map"):                                     # a run of a dropped condition: outside the design
+        write_run(root, 3, 9, "z9", c)
+        with pytest.raises(E.EvalError, match="outside the test design"):
+            E.run_eval(root, tasks, worlds=range(16))
+        shutil.rmtree(root / f"w3_d9_z9_{c}")
+    for d in sorted(root.glob("*_reactive")):                      # a whole condition never synced: refused
         shutil.rmtree(d)
     with pytest.raises(E.EvalError, match="design runs absent"):
         E.run_eval(root, tasks, worlds=range(16))
