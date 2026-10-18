@@ -12,15 +12,17 @@ root apart from the hash checks):
    which every attempt appends to and the custodian may commit);
 2. prereg/FREEZE holds a 40-hex commit sha, and that commit is an ancestor of HEAD;
 3. `git diff --name-only --no-renames <FREEZE> HEAD` lists nothing but prereg/FREEZE, prereg/TEST_SEED_COMMIT and
-   results/sealed/RUNLOG.json;
+   sealed_run's own outputs under results/sealed/ (LEAD DECISION, Sun ~06:35: sealed_run may be invoked more than once,
+   so a committed earlier attempt's results/sealed/** never blocks a re-run; every other path is refused);
 3b. RUNLOG is append-only: it parses as `twin.sealed_runlog/2` (a list of records, each with attempt, timestamp,
    HEAD, stages and status), and its committed version (HEAD) is a prefix of the working file; every append re-reads
    the file and refuses unless what is there is the prefix it extends;
 4. every input hash matches:
-   * MANIFEST (sealed/MANIFEST.sha256), LABELS (sealed/LABELS.sha256), the generator (twin/daygen.py) and the dynamics
-     (twin/dynamics.json) are tracked in the FREEZE tree and the working file hashes to the FREEZE blob (LF-normalised,
-     so a CRLF checkout gives the same value); the generator and dynamics hashes also equal the committed G2 record
-     (G2_HASHES_FILE; refused while no such file is named);
+   * MANIFEST (sealed/MANIFEST.sha256), LABELS (sealed/LABELS.sha256) and the G2 files (the generator twin/daygen.py,
+     the dynamics twin/dynamics.json, twin/engine.py, twin/camera.py, twin/site.yaml) are tracked in the FREEZE tree
+     and the working file hashes to the FREEZE blob (LF-normalised, so a CRLF checkout gives the same value); the G2
+     files' hashes also equal the committed G2 record prereg/G2_HASHES.json (LEAD DECISION: written at G2 by
+     scripts/write_g2_hashes.py, contract twin.g2_hashes/1, exactly those five paths);
    * MANIFEST and LABELS parse with the one contract parser (`twin.schemas.prereg.parse_sealed`); every clip file in
      <sealed-root>/clips hashes to its MANIFEST line, no clip is missing or extra, and every MANIFEST id is a `test`
      row of the active split with the same sha256; every LABELS file under <sealed-root> hashes to its line, and the
@@ -99,12 +101,16 @@ RUNLOG_CONTRACT = "twin.sealed_runlog/2"
 RUNLOG_STATUS = ("started", "done", "error")
 ALLOWED_DIRTY = (RUNLOG,)                  # the only path that may be dirty / untracked (each attempt appends to it)
 ALLOWED_AFTER_FREEZE = (FREEZE, SEED_COMMIT, RUNLOG)
+RESULTS_SEALED = "results/sealed/"         # sealed_run's own outputs: exempt from the FREEZE..HEAD diff rule (re-runs)
 INPUTS = {"manifest": "sealed/MANIFEST.sha256", "labels": "sealed/LABELS.sha256",
-          "generator": "twin/daygen.py", "dynamics": "twin/dynamics.json"}
-# The committed G2 record of the generator / dynamics hashes (JSON {"generator": sha256, "dynamics": sha256}, LF-
-# normalised file hashes). No such file exists before G2 and its name is the lead's call: while None, preflight refuses.
-G2_HASHES_FILE: str | None = None
-G2_KEYS = ("generator", "dynamics")
+          "generator": "twin/daygen.py", "dynamics": "twin/dynamics.json", "engine": "twin/engine.py",
+          "camera": "twin/camera.py", "site": "twin/site.yaml"}
+# The committed G2 record (LEAD DECISION, Sun ~06:35): prereg/G2_HASHES.json, written at G2 by
+# scripts/write_g2_hashes.py as {"contract": "twin.g2_hashes/1", "files": {<repo path>: <LF-normalised sha256>}} for
+# exactly the G2_KEYS inputs. Typed optional so a test can unset it (preflight then refuses).
+G2_HASHES_FILE: str | None = "prereg/G2_HASHES.json"
+G2_CONTRACT = "twin.g2_hashes/1"
+G2_KEYS = ("generator", "dynamics", "engine", "camera", "site")
 DATE_SKEW_S = 300                          # FREEZE commit: |committer date - author date| at most this
 MAX_DERIVE_LAG_S = 3600                    # derive (the reveal's own clock) at most this long after the FREEZE commit
 SEEDS_FILE = "seeds.json"                  # in the sealed root: the custodian's reveal (salt, R, round)
@@ -185,9 +191,9 @@ def check_ancestor(repo: Path, sha: str) -> None:
 def check_diff(repo: Path, sha: str) -> list[str]:
     names = [n for n in git(repo, "diff", "--name-only", "--no-renames", sha, "HEAD").stdout.decode("utf-8").splitlines()
              if n]
-    extra = sorted(set(names) - set(ALLOWED_AFTER_FREEZE))
+    extra = sorted(n for n in set(names) if n not in ALLOWED_AFTER_FREEZE and not n.startswith(RESULTS_SEALED))
     if extra:
-        raise Refusal(f"files changed since FREEZE besides {list(ALLOWED_AFTER_FREEZE)}: {extra}")
+        raise Refusal(f"files changed since FREEZE besides {[FREEZE, SEED_COMMIT]} and {RESULTS_SEALED}**: {extra}")
     return names
 
 
@@ -233,19 +239,35 @@ def check_inputs(repo: Path, sha: str) -> dict[str, dict]:
     return out
 
 
+def g2_record(repo: Path) -> dict:
+    """The G2 hash record of the working tree: {"contract", "files": {path: LF-normalised sha256}} for the G2_KEYS
+    inputs (scripts/write_g2_hashes.py writes it at G2). A missing file is refused."""
+    files = {}
+    for k in G2_KEYS:
+        p = repo / INPUTS[k]
+        if not p.is_file():
+            raise Refusal(f"G2 file {k} ({INPUTS[k]}) does not exist")
+        files[INPUTS[k]] = sha256(lf(p.read_bytes()))
+    return {"contract": G2_CONTRACT, "files": files}
+
+
 def check_g2_hashes(repo: Path, sha: str, inputs: dict[str, dict]) -> dict[str, str]:
-    """The generator and dynamics hashes equal the committed G2 record (G2_HASHES_FILE, tracked in the FREEZE tree)."""
+    """The G2 files' hashes equal the committed G2 record (G2_HASHES_FILE, tracked in the FREEZE tree): contract
+    twin.g2_hashes/1, exactly the G2_KEYS paths, each a sha256 hex."""
     if G2_HASHES_FILE is None:
         raise Refusal("no committed G2 generator / dynamics hash record is named (sealed_run.G2_HASHES_FILE): the "
                       "lead names the file; refusing until then")
     blob = git(repo, "cat-file", "blob", f"{sha}:{G2_HASHES_FILE}", ok_codes=(0, 128))
     if blob.returncode != 0:
         raise Refusal(f"the G2 hash record {G2_HASHES_FILE} is not in the FREEZE tree {sha[:12]}")
+    paths = sorted(INPUTS[k] for k in G2_KEYS)
     try:
         rec = json.loads(blob.stdout.decode("utf-8"))
-        want = {k: str(rec[k]).lower() for k in G2_KEYS}
+        if rec["contract"] != G2_CONTRACT or sorted(rec["files"]) != paths:
+            raise ValueError(f"contract {rec.get('contract')!r}, files {sorted(rec['files'])}")
+        want = {k: str(rec["files"][INPUTS[k]]).lower() for k in G2_KEYS}
     except (ValueError, KeyError, TypeError, AttributeError) as e:
-        raise Refusal(f"{G2_HASHES_FILE} is not a JSON object with {list(G2_KEYS)}: {e!r}") from None
+        raise Refusal(f"{G2_HASHES_FILE} is not a {G2_CONTRACT} record of exactly {paths}: {e!r}") from None
     for k in G2_KEYS:
         if not SHA64.match(want[k]):
             raise Refusal(f"{G2_HASHES_FILE}: {k} is not a sha256 hex")

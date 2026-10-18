@@ -30,6 +30,7 @@ FRAMING = {"0_te1": "c9_f1", "3_te2": "c14_f0"}
 DEV_CLIPS = {"4_dv1": b"dev clip four"}
 INFO = {"genesis_time": 1000, "period": 30, "hash": "testchain"}
 G2_FILE = "prereg/G2_HASHES.json"
+G2_OTHER = {"twin/engine.py": "ENG = 1\n", "twin/camera.py": "CAM = 1\n", "twin/site.yaml": "site: 1\n"}
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +94,8 @@ def build(tmp: Path, source: str = "fallback") -> dict:
     # repo inputs
     write(repo / "twin" / "daygen.py", "GEN = 1\n")
     write(repo / "twin" / "dynamics.json", "{}\n")
+    for rel, text in G2_OTHER.items():
+        write(repo / rel, text)
     rows = ["clip_id,group_id,split,sha256,framing_id"]
     rows += [f"{cid},g,test,{sha(d)},{FRAMING[cid]}" for cid, d in CLIPS.items()]
     rows.append(f"1_tr1,g,train,{'0' * 64},c9_f1")
@@ -103,7 +106,7 @@ def build(tmp: Path, source: str = "fallback") -> dict:
         "MANIFEST", [(sha(d), f"clips/{cid}.mp4") for cid, d in CLIPS.items()], list(CLIPS))))
     write(repo / "sealed" / "LABELS.sha256", render_sealed(make_sealed(
         "LABELS", lab_files, list(CLIPS), sample_list_sha256=samples["items_sha256"])))
-    write(repo / G2_FILE, json.dumps({"generator": sha(b"GEN = 1\n"), "dynamics": sha(b"{}\n")}) + "\n")
+    write(repo / G2_FILE, json.dumps(SR.g2_record(repo)) + "\n")
     code = commit(repo, "code", "twin", "prereg", "sealed")
     write(repo / "prereg" / "FREEZE", code + "\n")
     commit(repo, "FREEZE", "prereg/FREEZE")
@@ -133,7 +136,8 @@ def refused(s: dict, match: str, fetch=fake_fetch):
 def test_preflight_passes_and_records_the_inputs(s):
     rec = SR.preflight(s["repo"], s["root"], fake_fetch)
     assert rec["freeze_sha"] == s["code"] and rec["n_clips"] == 2
-    assert set(rec["inputs"]) == {"manifest", "labels", "generator", "dynamics", "test_seed_commit"}
+    assert set(rec["inputs"]) == {"manifest", "labels", "generator", "dynamics", "engine", "camera", "site",
+                                 "test_seed_commit"}
     assert rec["changed_since_freeze"] == sorted([SR.FREEZE, SR.SEED_COMMIT]) and rec["runlog"] == []
     sd = rec["seeds"]
     assert sd["source"] == "fallback" and len(sd["seeds"]) == 16 and all(v > 999 for v in sd["seed_ints"])
@@ -208,7 +212,7 @@ def test_refuses_a_rename_into_an_allowed_name(s):
 
 # ------------------------------------------------------------------------------------------------ input hashes
 
-@pytest.mark.parametrize("name", ["manifest", "labels", "generator", "dynamics"])
+@pytest.mark.parametrize("name", ["manifest", "labels", "generator", "dynamics", "engine", "camera", "site"])
 def test_input_hash_mismatch_is_refused(s, name):
     p = s["repo"] / SR.INPUTS[name]
     p.write_bytes(p.read_bytes() + b"# tampered\n")
@@ -569,13 +573,71 @@ def test_g2_record_must_be_named(s, monkeypatch):
 
 def test_g2_record_must_match_and_be_frozen(s, monkeypatch):
     rec = SR.check_inputs(s["repo"], s["code"])
-    assert SR.check_g2_hashes(s["repo"], s["code"], rec) == {"generator": sha(b"GEN = 1\n"), "dynamics": sha(b"{}\n")}
+    assert SR.G2_HASHES_FILE == G2_FILE                                  # the lead's file name is the default
+    assert SR.check_g2_hashes(s["repo"], s["code"], rec) == {
+        "generator": sha(b"GEN = 1\n"), "dynamics": sha(b"{}\n"), "engine": sha(b"ENG = 1\n"), "camera": sha(b"CAM = 1\n"),
+        "site": sha(b"site: 1\n")}
     bad = dict(rec, dynamics=dict(rec["dynamics"], sha256="1" * 64))
     with pytest.raises(SR.Refusal, match="dynamics .* != G2 record"):
         SR.check_g2_hashes(s["repo"], s["code"], bad)
     monkeypatch.setattr(SR, "G2_HASHES_FILE", "prereg/elsewhere.json")
     with pytest.raises(SR.Refusal, match="not in the FREEZE tree"):
         SR.check_g2_hashes(s["repo"], s["code"], rec)
+
+
+@pytest.mark.parametrize("edit", ["contract", "missing", "extra"])
+def test_g2_record_must_be_the_contract_with_exactly_the_g2_files(tmp_path, edit):
+    s = build(tmp_path)
+    repo = s["repo"]
+    rec = SR.g2_record(repo)
+    if edit == "contract":
+        rec["contract"] = "twin.g2_hashes/0"
+    elif edit == "missing":
+        rec["files"].pop("twin/camera.py")
+    else:
+        rec["files"]["twin/other.py"] = "0" * 64
+    write(repo / G2_FILE, json.dumps(rec) + "\n")
+    code = commit(repo, "bad G2", G2_FILE)
+    with pytest.raises(SR.Refusal, match="is not a twin.g2_hashes/1 record"):
+        SR.check_inputs(repo, code)
+
+
+def test_write_g2_hashes_writes_the_record_sealed_run_checks(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("write_g2_hashes", REPO / "scripts" / "write_g2_hashes.py")
+    assert spec and spec.loader
+    W = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(W)
+    s = build(tmp_path)
+    repo = s["repo"]
+    (repo / G2_FILE).unlink()
+    out = W.write(repo)
+    assert json.loads(out.read_text(encoding="utf-8")) == SR.g2_record(repo) and W.check(repo)["contract"] == SR.G2_CONTRACT
+    write(repo / "twin" / "engine.py", "ENG = 2\n")                      # an uncommitted G2 file: refused
+    with pytest.raises(Exception, match="not committed"):
+        W.write(repo)
+    with pytest.raises(Exception, match="differs from the working files"):
+        W.check(repo)
+    (repo / "twin" / "camera.py").unlink()
+    with pytest.raises(Exception, match="does not exist"):
+        W.write(repo)
+
+
+# ------------------------------------------------------------------------------------------------ re-runs
+
+def test_a_rerun_after_committed_results_sealed_outputs_is_allowed(s):
+    """LEAD DECISION: sealed_run's own outputs under results/sealed/** are exempt from the FREEZE..HEAD diff rule; each
+    invocation appends a new RUNLOG attempt and keeps the earlier records."""
+    _run(s)
+    write(s["repo"] / "results" / "sealed" / "attempt_001" / "summary.json", "{}\n")
+    commit(s["repo"], "sealed attempt 1 outputs", SR.RUNLOG, "results/sealed/attempt_001/summary.json")
+    assert SR.check_diff(s["repo"], s["code"]) == sorted([SR.FREEZE, SR.SEED_COMMIT, SR.RUNLOG,
+                                                         "results/sealed/attempt_001/summary.json"])
+    first = _records(s)
+    r2 = _run(s)
+    assert r2["attempt"] == 2 and _records(s)[:len(first)] == first and len(_records(s)) == len(first) + 2
+    write(s["repo"] / "results" / "other.json", "{}\n")                    # outside results/sealed/: still refused
+    commit(s["repo"], "other", "results/other.json")
+    refused(s, r"changed since FREEZE.*results/other.json")
 
 
 # ------------------------------------------------------------------------------------------------ container + dry run
