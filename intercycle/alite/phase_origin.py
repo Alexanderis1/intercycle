@@ -17,7 +17,7 @@ layer, own_phase adds lag / P):
    its fast layer at past issue times (samples up to each time only) and pairs the phase the robot would compute from
    it (`robot_phase`, the same formula as masks.own_phase) with the map's phase at that time (the tracker's phase from
    the skid index; ticks in STOP / unknown bins skipped). lag_i = the circular median of (map phase - robot phase)
-   x P over the pairs (>= MIN_PAIRS, else unknown). Learned from the observer's own data, for every machine (cells
+   x P over the pairs (>= MIN_PAIRS, and >= MIN_AGREE of them within the robot's 1-bin pad of it, else unknown). Learned from the observer's own data, for every machine (cells
    too: their map origin is their own tracker rise, which may sit differently from learn_cycles' edges).
 2. `PhaseOrigin` (slow layer): per machine index, the lag in seconds (NaN = unknown). It travels next to the slow
    layer's MachineModels (the body-shop codec's MachineModel has no lag field and the codec is not changed: A-lite
@@ -41,6 +41,15 @@ from intercycle.types import DAY0_UNIX, MachineModel, MachineNow, State
 
 MIN_PAIRS = 20
 ROBOT_MIN_CONF = 4                      # masks.own_phase ignores entries / models below this
+# A lag is trusted only when its own calibration pairs agree with it: at least MIN_AGREE of them within PAD_BINS of the
+# learned lag (PAD_BINS = the robot's +-1 bin pad, masks.py). A machine whose robot-side phase is not a consistent
+# estimate of the map's phase (S50 framing: dwell pauses read as idle, pairs spread over +-4 bins) has no single origin:
+# its circular median is not a systematic offset but a point between modes that moves with any change of the nowcast
+# (lane S8-alitefix: the T-W6 MISSING rules in learn_cycles moved it from -0.1 to -0.7 bin). Its lag is unknown (NaN)
+# and the robot uses the union of all bins there (fail closed). Development worlds 801 / 802: S50 30 % within 1 bin,
+# every other machine 82-100 %.
+MIN_AGREE = 0.5
+PAD_BINS = 1.0
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,7 @@ class PhaseOrigin:
     """Per machine (scenario order): lag of the robot's phase origin behind the map's, seconds (NaN = unknown)."""
     lag_s: tuple[float, ...]
     n: tuple[int, ...] = ()
+    agree: tuple[float, ...] = ()       # share of the calibration pairs within PAD_BINS of the lag (NaN: < MIN_PAIRS)
 
     def lag(self, i: int) -> float:
         return float(self.lag_s[i]) if 0 <= i < len(self.lag_s) else math.nan
@@ -102,12 +112,21 @@ class LagCalibrator:
             self.period[i] = float(period_s)
 
     def origin(self) -> PhaseOrigin:
-        lag, n = [], []
+        """Per machine: lag = circular median of its pairs x P; NaN (unknown) with fewer than MIN_PAIRS pairs or when
+        fewer than MIN_AGREE of them lie within PAD_BINS of that median (no single origin, see MIN_AGREE)."""
+        lag, n, agree = [], [], []
         for i in range(self.n_machines):
-            p = self.pairs[i]
+            p = np.array(self.pairs[i], float)
             n.append(len(p))
-            lag.append(circular_median(np.array(p)) * self.period[i] if len(p) >= MIN_PAIRS else math.nan)
-        return PhaseOrigin(tuple(lag), tuple(n))
+            if len(p) < MIN_PAIRS:
+                lag.append(math.nan)
+                agree.append(math.nan)
+                continue
+            c = circular_median(p)
+            a = float(np.mean(np.abs(_wrap(p - c)) * M.N_PHASE <= PAD_BINS))
+            agree.append(a)
+            lag.append(c * self.period[i] if a >= MIN_AGREE else math.nan)
+        return PhaseOrigin(tuple(lag), tuple(n), tuple(agree))
 
 
 def to_map_phase(own_phase: float | None, lag_s: float, period_s: float) -> float | None:

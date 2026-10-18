@@ -8,8 +8,10 @@ be <= 0.5 bin per machine after the correction, and is > 0.5 bin without it for 
 >= 3 s (T-W2: up to 2.8 bins on the body shop).
 
 Disclosed, not T-W2: the framing station S50 (long dwell pauses inside its active time) has a bimodal nowcast under the
-measured noise (mid-cycle pauses read as idle), so its per-sample error has large tails whatever the origin; only its
-systematic offset is pinned here.
+measured noise (mid-cycle pauses read as idle), so its per-sample error spreads over +-4 bins whatever the origin and
+it has no single origin: its circular median moved from -0.1 to -0.7 bin when learn_cycles got the T-W6 MISSING rules
+(lane S8-alitefix). The calibrator now leaves such a lag unknown (phase_origin.MIN_AGREE: < 50 % of the calibration
+pairs within the robot's 1-bin pad), so the robot fails closed there (union of all bins); this is pinned for S50.
 """
 import math
 import sys
@@ -81,10 +83,12 @@ def test_lags_are_learned_from_the_skid_index(run):
     lag = ob.origin.lag_s
     for i, m in enumerate(SCN.machines):
         if m.on_line and m.kind != "unload_lifter":
-            assert np.isfinite(lag[i]), m.id
-            print(f"{m.id}: learned lag {lag[i]:.2f} s, station stagger {m.offset_s} s")
-            if m.id == "S50":       # its robot-side phase is bimodal (module docstring): the lag absorbs that bias
+            print(f"{m.id}: learned lag {lag[i]:.2f} s, station stagger {m.offset_s} s, "
+                  f"agree {ob.origin.agree[i]:.2f} of {ob.origin.n[i]} pairs")
+            if m.id == "S50":       # no single origin (module docstring): lag unknown, the robot fails closed there
+                assert not np.isfinite(lag[i]) and ob.origin.agree[i] < PO.MIN_AGREE, (m.id, lag[i])
                 continue
+            assert np.isfinite(lag[i]), m.id
             assert abs(lag[i] - m.offset_s) < 1.0, (m.id, lag[i], m.offset_s)     # station stagger, observer-learned
 
 
@@ -108,6 +112,21 @@ def test_without_the_correction_late_stations_are_off_by_more_than_half_a_bin(ru
     for i, m in enumerate(SCN.machines):
         if m.on_line and m.offset_s >= 3.0 and m.kind != "unload_lifter":
             assert abs(_offset_bins(raw[i])) > 0.5, m.id
+
+
+def test_lag_without_agreement_is_unknown():
+    rng = np.random.default_rng(0)
+    cal = PO.LagCalibrator(3)
+    for _ in range(60):                                       # 0: tight around +2 s; 1: spread over +-4 bins; 2: too few
+        cal.add(0, 0.40, 0.40 - 2.0 / 60.0 + rng.normal(0, 0.003), 60.0)
+        cal.add(1, 0.40, 0.40 - rng.uniform(-4, 4) / M.N_PHASE, 60.0)
+    for _ in range(PO.MIN_PAIRS - 1):
+        cal.add(2, 0.40, 0.38, 60.0)
+    o = cal.origin()
+    assert o.lag(0) == pytest.approx(2.0, abs=0.1) and o.agree[0] >= 0.95
+    assert math.isnan(o.lag(1)) and o.agree[1] < PO.MIN_AGREE
+    assert math.isnan(o.lag(2)) and math.isnan(o.agree[2])
+    assert PO.to_map_phase(0.3, o.lag(1), 60.0) is None       # the robot then uses the union of all bins
 
 
 def test_unknown_lag_or_phase_fails_closed():
