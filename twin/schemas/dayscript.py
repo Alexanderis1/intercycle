@@ -15,6 +15,9 @@ from twin.schemas.common import Strict, unique
 
 MoverClass = Literal["person", "forklift"]
 RNG_SCHEME = "numpy SeedSequence([world_seed, day, blake2b64(entity), blake2b64(event)]) -> PCG64"
+# A day script file is named <stem> + FILE_SUFFIX (the token marks it as truth for twin/truth_guard.py); launchers
+# (scripts/slice.py, scripts/sealed_run.py) take the name from here and never spell the token themselves.
+FILE_SUFFIX = ".day_script.json"
 
 
 class PressEvent(Strict):

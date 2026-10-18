@@ -22,7 +22,9 @@ Everything. A generated body shop (the existing body-shop scenario, `scenario/`)
   learn_cycles), never `intercycle/sim/observer_learned.py`. Its imports never reach truth (test_alite_isolation.py).
 - **Phase origin (T-W2):** `intercycle/alite/phase_origin.py`. The robot's own_phase (masks.own_phase formula) is put
   into the map's bin origin by a learned lag per machine (map phase = own_phase + lag / P), calibrated on day 0 by
-  replaying the fast layer against the map phase. Test: within 0.5 bin (tests/test_alite_phase_origin.py).
+  replaying the fast layer against the map phase. A lag is kept only when at least half of its calibration pairs lie
+  within 1 bin (the robot's pad) of it; else it is unknown and the robot uses the union of all bins there (fail
+  closed). Test: within 0.5 bin (tests/test_alite_phase_origin.py).
 - **Robot:** the A-lite CPU double `intercycle/alite/episode.py` (numpy, event-sim style; not Nav2, not Isaac).
 
 ## 2. Run A: the CPU double (item 5)
@@ -99,7 +101,9 @@ injected new arms it marked the cells UNKNOWN after a median of Z min, with F fa
 - Budget: estimate ~$0.3 (Section 6); stop and report at $0.5.
 - Dry run (done before FREEZE, local CPU, worlds 801 and 802): `scripts/alite_run.py --dry-run` (30 min of learning,
   one 300 s mission on day 0) runs for all three conditions; the same dry run on Modal (`--dry-run --worlds 801,802`)
-  gave identical numbers (learned Y 8, reactive 7, static 2 over 2 missions; no trip, no hold).
+  gave identical numbers (learned Y 8, reactive 7, static 2 over 2 missions; no trip, no hold). Re-run locally on
+  main after the lane S8-alitefix phase-origin change (Sun ~07:00, 205 s wall on the shared laptop): the same numbers;
+  S50 and S80 have no lag on both worlds. The Modal dry run was not repeated after that change.
 
 ## 6. Cost and time
 
@@ -112,8 +116,11 @@ episodes + ~3 600 for M-W4, x ($0.0000131 / core-s + 2 x $0.00000222 / GiB-s, H1
 
 - Everything is simulated; the camera and the robot camera are truth-derived noise models, no occlusion by bodies
   or people in the observer camera, and the robot never appears in the observer camera (W-W10).
-- S50 (framing) has a bimodal nowcast from its dwell pauses: its learned lag is ~18 s off its offset and only 18 % of
-  its samples fall within 0.5 bin (other stations 88-98 %). It is in the runs, not excluded.
+- S50 (framing) has a bimodal nowcast from its dwell pauses: its robot-side phase pairs spread over +-4 bins (30 % of
+  its calibration pairs within 1 bin on world 801, other machines 82-100 %), so it has no single phase origin and its
+  lag is left unknown (lane S8-alitefix: with the T-W6 MISSING rules in learn_cycles its median offset had moved from
+  -0.1 to -0.7 bin). The learned robot then never trusts the map's parked check at S50 (fail closed) and uses its other
+  rules. It is in the runs, not excluded.
 - The CPU double is a numpy event sim, not Nav2 and not the Isaac double; the robot's motion is graph travel at fixed
   speed.
 - The learned envelopes are larger than the truth ones (camera pose noise): the IoU is expected well below the

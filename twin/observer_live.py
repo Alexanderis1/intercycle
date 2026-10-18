@@ -64,6 +64,7 @@ import json
 import math
 import os
 import zlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -104,6 +105,15 @@ M7_TAG = ("LEAD DECISION (audit S6 #3, option B): per-bin M-W7 inflation. Every 
           "a learned period, else the union. S7b's calibration pred = calibration_pred(slow, fast, map_held, t), the "
           "same lookup un-inflated, from the layers the robot holds at its lookup time t (quantised as decoded) and "
           "the map version it holds (HeldMap), never the observer's live map")
+STOP_ENTRY_TAG = ("LEAD DECISION (lane S5b-entry): a twin press's own confident STOPPED (fast and slow confidence >= 4, "
+                  "inside its TTL) is one idle window [issue, issue + ttl] for the robot, for off-line Site.own_stop "
+                  "presses only (predict.idle_windows stop_window; the body shop keeps None). The zone rect opens only "
+                  "while that window covers [t, t + H] (masks.idle_through) and the planner enters only while it still "
+                  "leaves need_s (timing.window_open); the reactive arm uses the same planner and zone rule on its own-"
+                  "camera window. A held press (robot inside / reaching into its zone) reads STOP_BIN in robot_bins and "
+                  "calibration_pred, as masks.machine_bins. DISCLOSED (pending lead decision): the learner caps a "
+                  "STOPPED TTL at min(ttl_s, 10 s), ttl_s <= 10 / stops_per_h, so with need_s 16.5 s the learned arm "
+                  "never enters a stopped press, while the reactive arm can")
 
 
 def twin_bin(b: int) -> int:
@@ -119,19 +129,23 @@ def twin_bin(b: int) -> int:
 
 def robot_bins(model: MachineModel | None, now: MachineNow | None, issue_t: float, t: float, map_period: float,
                horizon_s: float = ROBOT_HORIZON_S, step_s: float = ROBOT_STEP_S,
-               fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S) -> tuple[int, ...]:
+               fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S, held: bool = False) -> tuple[int, ...]:
     """The twin bins the robot looks up for one press (intercycle_nav.masks.machine_bins for an off-line press with
-    Site.own_stop, not held) at plant time t over its keep-out horizon [t, t + horizon_s], from the slow model and the
+    Site.own_stop) at plant time t over its keep-out horizon [t, t + horizon_s], from the slow model and the
     fast entry it holds, the fast layer issued at plant time issue_t, and the press's period in the map it holds
     (`map_period` = HeldMap.period[i], NaN when the map had none). model, now and issue_t are quantised as the wire
     does first (layout.quantize_model / quantize_now: the TTL in 2 s steps rounded down; the issue time to the ms), so
     an un-encoded entry gives the lookup the robot makes after decoding it (a 6.51 s TTL is 6 s on the robot):
+      * held (the robot is inside / reaching into the press zone, masks.MachineView.held: it holds the press) ->
+        (STOP_BIN,) whatever the layers say, as machine_bins (audit minor, lane S5b-entry);
       * missing, UNKNOWN, low confidence (fast or slow < MIN_CONF), a fast layer older than fast_max_age_s, an entry
         past its TTL at t -> TWIN_BINS, the union (fail closed);
       * a confident STOPPED -> (STOP_BIN,) only while the entry stays inside its TTL at every step of the horizon grid
         (np.arange(0, horizon_s, step_s), as machine_bins), else TWIN_BINS (the press may restart once it expires);
       * a confident ACTIVE / IDLE with a usable slow period (own_phase) AND a learned map period (predicted_bins
         cycling: every running phase bin reads bin 0) -> (0,); without a map period the robot reads the union."""
+    if held:
+        return (M.STOP_BIN,)
     if model is None or now is None:
         return TWIN_BINS
     model, now = quantize_model(model), quantize_now(now)
@@ -327,7 +341,7 @@ class ObserverLive:
         self.seq = 0
         self.events: list[dict] = []
         self.n_ticks = 0
-        self.tags = dict(time_of_day=TOD_TAG, m7_application=M7_TAG,
+        self.tags = dict(time_of_day=TOD_TAG, m7_application=M7_TAG, stop_entry=STOP_ENTRY_TAG,
                          cycle_consts={k: dict(placeholder=list(c.placeholder), source=c.source)
                                        for k, c in cfg.consts.items()},
                          motion_thr=dict(value=cfg.motion_thr, source=cfg.motion_thr_source),
@@ -443,21 +457,27 @@ class ObserverLive:
 
     def calibration_pred(self, slow: SlowLayer, fast: FastLayer, map_held: HeldMap, t: float,
                          horizon_s: float = ROBOT_HORIZON_S, step_s: float = ROBOT_STEP_S,
-                         fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S) -> list[np.ndarray]:
+                         fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S,
+                         held: Sequence[bool] | None = None) -> list[np.ndarray]:
         """S7b's dev recorder: per press, the un-inflated pred of the lookup the robot makes at plant time t over its
         keep-out horizon (`robot_bins`), computed ONLY from what the robot holds at t: the slow and fast layers last
         broadcast to it (quantised here as the robot decodes them) and the map version it completed (`map_held`, from
         sign_layers()["held"]["map"] / `hold`, whose (version, sha) is the robot's MapReceiver.manifest). Never this
         observer's current map, detector or models. inflate(pred) is then the held map's broadcast per-bin envelope
-        OR its broadcast UNKNOWN cells for that lookup, i.e. what the robot gets."""
+        OR its broadcast UNKNOWN cells for that lookup, i.e. what the robot gets. held: per press (zone order) whether
+        the robot holds it at t (inside / reaching into its zone, masks.MachineView.held) -> its STOP_BIN lookup; None =
+        the robot holds no press."""
         if tuple(map_held.ids) != tuple(self.ids):
             raise ValueError(f"held map presses {map_held.ids} != observer presses {self.ids}")
+        hold = [False] * self.M if held is None else [bool(h) for h in held]
+        if len(hold) != self.M:
+            raise ValueError(f"held flags {len(hold)} != presses {self.M}")
         slow, fast = quantize_slow(slow), quantize_fast(fast)
         models = {m.index: m for m in slow.machines}
         nows = {m.index: m for m in fast.machines}
         issue_t = float(fast.issue_time) - DAY0_UNIX
         return [map_held.pred(i, robot_bins(models.get(i), nows.get(i), issue_t, t, float(map_held.period[i]),
-                                            horizon_s, step_s, fast_max_age_s))
+                                            horizon_s, step_s, fast_max_age_s, held=hold[i]))
                 for i in range(self.M)]
 
     def hold(self, bundle: ML.MapBundle) -> HeldMap:
