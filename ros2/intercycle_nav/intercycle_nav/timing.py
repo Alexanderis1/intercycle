@@ -10,8 +10,10 @@ dynamics. SIPP is the standard method; nothing here is claimed as novel.
 Entry rule at a hazard boundary (DIRECTION 5.4, BRIEF): enter only if (a) a predicted idle window is open now with at
 least `need_s` left (inside travel + dwell + exit + margin) and (b) the robot's own camera confirms "no motion" for the
 target machine, `confirm_n` consecutive fresh observations spanning at least `local_check_latency_s`.
-Per condition:  learned / oracle -> (a) and (b);  none -> (b) only (reactive, no map);  static -> never enter, inspect
-from the wait pose at the boundary.
+Per condition:  learned / oracle -> (a) and (b);  none -> (b) only (no map);  static -> never enter, inspect
+from the wait pose at the boundary;  reactive (E-W4 baseline) -> (a) and (b) exactly as learned, with the windows from its
+own camera (`reactive.py`); a machine with no window now (unseen, stale, moving or too little history) is planned as
+reachable, so it goes to the boundary to wait and look (its windows never cover a future still run).
 """
 from __future__ import annotations
 
@@ -124,6 +126,12 @@ class TimingCore:
             if condition == "none":
                 return None
             w = windows.get(n[3:])
+            if condition == "reactive" and not w:
+                # reactive: its windows only ever cover the CURRENT still run, never a future one, so "no window now"
+                # (never seen, stale, moving, or too little history: None or []) is planned like an unseen machine:
+                # the inside node is reachable, the robot goes to the wait pose, and the open-window check (a) and the
+                # camera check (b) at the boundary (wait_for_entry) and the dwell cut decide whether it enters
+                return None
             # the robot crosses the boundary right after leaving the wait node, so the zone must already be idle at
             # departure: arrival inside is allowed from window start + entry time
             return [] if w is None else [(float(a) + self.enter_time(self._tg_of[n]), float(b)) for a, b in w]
@@ -147,6 +155,24 @@ class TimingCore:
             if tp is not None and (best is None or tp.t_goal < best.t_goal):
                 best = tp
         return best
+
+
+INIT_SPREAD_XY_M = 0.5                 # = intercycle_sim.loc_noise.START_DXY (R-W4 start-pose noise, uniform +-0.5 m)
+INIT_SPREAD_YAW_DEG = 10.0             # = loc_noise.START_DPSI (uniform +-10 deg)
+
+
+def initial_pose_covariance(spread_xy_m: float = INIT_SPREAD_XY_M,
+                            spread_yaw_deg: float = INIT_SPREAD_YAW_DEG) -> list[float]:
+    """Row-major 6x6 covariance (x, y, z, roll, pitch, yaw) for AMCL's /initialpose that matches the start-pose draw:
+    a uniform error on [-a, a] has variance a^2 / 3 -> var_xy = 0.5^2/3 = 0.0833 m^2, var_yaw = (10 deg)^2/3 = 0.0102
+    rad^2. nav2_simple_commander's setInitialPose sends a zero covariance, which lets AMCL start with every particle on
+    the believed pose (and random injection is off in nav2.yaml), so it may never cover the true start (audit fix 4)."""
+    if spread_xy_m < 0 or spread_yaw_deg < 0:
+        raise ValueError("initial pose spread must be >= 0")
+    c = [0.0] * 36
+    c[0] = c[7] = float(spread_xy_m) ** 2 / 3.0
+    c[35] = math.radians(float(spread_yaw_deg)) ** 2 / 3.0
+    return c
 
 
 def window_open(windows, t: float, need_s: float) -> tuple[float, float] | None:

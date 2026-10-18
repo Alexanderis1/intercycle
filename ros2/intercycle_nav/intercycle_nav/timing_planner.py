@@ -11,6 +11,11 @@ Outputs: Nav2 goals; /intercycle/inspection (String JSON: dwell_start / dwell_en
          intercycle_sim/send_goal.py: result, time_to_goal_s, ... plus "targets": per-target records).
 Per target: walk to the wait pose at the hazard boundary (facing the machine) -> wait for an open predicted idle window
 with need_s left AND the camera's no-motion confirmation -> enter -> dwell -> exit to the wait pose.
+Initial pose (R-W4 start-pose noise, audit fix 4): after Nav2 is active the planner publishes /initialpose itself as a
+PoseWithCovarianceStamped with the covariance of the start-pose draw (timing.initial_pose_covariance; parameters
+init_spread_xy_m 0.5, init_spread_yaw_deg 10), because setInitialPose sends a zero covariance. It republishes every 1 s
+until AMCL answers on amcl_pose with a non-zero covariance (max 30 s sim time); goal.json "initial_pose" records the
+covariance sent and whether AMCL acknowledged it.
 """
 from __future__ import annotations
 
@@ -21,17 +26,22 @@ import os
 import time
 
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from rclpy.parameter import Parameter
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
 from intercycle import scenario as S
 from intercycle_nav.masks import assert_no_truth
-from intercycle_nav.timing import CameraGate, TimingCore, camera_stub_used, interrupted_result, window_open
+from intercycle_nav.timing import (INIT_SPREAD_XY_M, INIT_SPREAD_YAW_DEG, CameraGate, TimingCore, camera_stub_used,
+                                   initial_pose_covariance, interrupted_result, window_open)
 
 RESULT = {TaskResult.SUCCEEDED: "SUCCEEDED", TaskResult.CANCELED: "CANCELED", TaskResult.FAILED: "FAILED"}
+# conditions whose entry rule needs an open idle window, (a) + (b); reactive (E-W4) gets its windows from its own camera
+# through observer_bridge, with the same planner and entry logic as learned
+WINDOW_CONDITIONS = ("learned", "oracle", "reactive")
 
 
 class Planner:
@@ -49,6 +59,8 @@ class Planner:
         self.out = str(dp("out", os.path.join(os.environ.get("IC_WORK", "/tmp"), "goal.json")).value)
         self.require_camera = bool(dp("require_camera", True).value)
         self.backup_speed = float(dp("backup_speed", 0.35).value)
+        self.init_cov = initial_pose_covariance(float(dp("init_spread_xy_m", INIT_SPREAD_XY_M).value),
+                                                float(dp("init_spread_yaw_deg", INIT_SPREAD_YAW_DEG).value))
         self.entry_slack = float(dp("entry_slack_s", 3.0).value)       # entry deadline = enter_s + slack        # exit speed (m/s); 0 = exit with a NavigateToPose goal
         sp = dp("scenario", "").value
         scn = S.load(sp) if sp else S.load()
@@ -72,6 +84,11 @@ class Planner:
         self.tfl = TransformListener(self.tf, nav)
         self.events: list[dict] = []
         self.camera_sources: Counter[str] = Counter()
+        self._init_pub_t: float | None = None
+        self._amcl_ack: list[float] | None = None
+        amcl_qos = QoSProfile(durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE,
+                              history=HistoryPolicy.KEEP_LAST, depth=1)        # = BasicNavigator's amcl_pose QoS
+        nav.create_subscription(PoseWithCovarianceStamped, "amcl_pose", self._on_amcl, amcl_qos)
 
     # ---------------------------------------------------------------- io
     def _on_state(self, m: String) -> None:
@@ -89,6 +106,46 @@ class Planner:
         self.camera_sources[str(d.get("source", "unlabelled"))] += 1
         for tg in d.get("targets", []):
             self.cam.observe(st, str(tg.get("id")), bool(tg.get("visible")), bool(tg.get("motion_seen")))
+
+    def _on_amcl(self, m) -> None:
+        """AMCL's answer to OUR /initialpose: received after it was sent, with a non-zero position covariance. The robot
+        stands still until then, so the filter BasicNavigator initialised with zero covariance still has every particle
+        on one pose (covariance 0); a scan update after our spread init may shrink the spread but not to 0."""
+        if self._init_pub_t is None or self._amcl_ack is not None:
+            return
+        cov = [float(v) for v in m.pose.covariance]
+        if self.ros_t() >= self._init_pub_t and cov[0] > 1e-6 and cov[7] > 1e-6:
+            self._amcl_ack = cov
+
+    def initial_pose_msg(self) -> PoseWithCovarianceStamped:
+        ps = self.pose(*self.init)
+        m = PoseWithCovarianceStamped()
+        m.header = ps.header
+        m.pose.pose = ps.pose
+        m.pose.covariance = [float(v) for v in self.init_cov]
+        return m
+
+    def spread_initial_pose(self, timeout_s: float = 30.0) -> dict:
+        """Publish the believed start pose with the start-noise covariance until AMCL acknowledges it (see module doc)."""
+        rec = {"pose": list(self.init), "covariance_sent": {"xx": self.init_cov[0], "yy": self.init_cov[7],
+                                                              "yawyaw": self.init_cov[35]}, "acknowledged": False}
+        if self.init_cov[0] <= 0.0 and self.init_cov[35] <= 0.0:
+            rec["note"] = "spread 0: zero covariance (setInitialPose only)"
+            return rec
+        t0, last = self.ros_t(), None
+        self._init_pub_t, self._amcl_ack = t0, None
+        while self._amcl_ack is None and self.ros_t() - t0 < timeout_s:
+            if last is None or self.ros_t() - last >= 1.0:
+                m = self.initial_pose_msg()
+                self.nav.initial_pose_pub.publish(m)
+                last = self.ros_t()
+            rclpy.spin_once(self.nav, timeout_sec=0.05)
+        ack = self._amcl_ack
+        rec["acknowledged"] = ack is not None
+        if ack is not None:
+            rec["amcl_covariance"] = {"xx": round(ack[0], 5), "yy": round(ack[7], 5), "yawyaw": round(ack[35], 5)}
+        rec["wait_s"] = round(self.ros_t() - t0, 2)
+        return rec
 
     def ros_t(self) -> float:
         return self.nav.get_clock().now().nanoseconds * 1e-9
@@ -161,13 +218,13 @@ class Planner:
         return r
 
     def dwell(self, tg, inside: bool) -> dict:
-        """Hold still for dwell_s; inside a hazard zone (learned / oracle) cut it short when the predicted window no
+        """Hold still for dwell_s; inside a hazard zone (learned / oracle / reactive) cut it short when the predicted window no
         longer leaves exit + margin."""
         t0 = self.ros_t()
         cut = False
         while self.ros_t() - t0 < self.core.dwell_s:
             rclpy.spin_once(self.nav, timeout_sec=0.05)
-            if inside and self.condition in ("learned", "oracle"):
+            if inside and self.condition in WINDOW_CONDITIONS:
                 if window_open(self.windows().get(tg.machine), self.plant_t(), self.core.exit_time(tg) + self.core.margin_s) is None:
                     cut = True
                     break
@@ -182,7 +239,7 @@ class Planner:
             rclpy.spin_once(self.nav, timeout_sec=0.05)
             t = self.plant_t()
             win = None
-            if self.condition in ("learned", "oracle"):
+            if self.condition in WINDOW_CONDITIONS:
                 win = window_open(self.windows().get(tg.machine), t, need)
                 if win is None:
                     continue
@@ -199,6 +256,7 @@ class Planner:
         w0 = time.time()
         nav.setInitialPose(self.pose(*self.init))
         nav.waitUntilNav2Active()
+        out["initial_pose"] = self.spread_initial_pose()       # audit fix 4: the start-noise covariance, not zero
         out["nav2_active_wall_s"] = round(time.time() - w0, 1)
         t_start = self.ros_t()
         out["t_goal_sent"] = t_start

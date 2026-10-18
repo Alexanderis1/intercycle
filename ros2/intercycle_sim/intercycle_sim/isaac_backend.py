@@ -136,7 +136,11 @@ class IsaacBackend:
                             "task": play, "observes_true_velocity": True, "tried": tried,
                             "env_origin": self.u.scene.env_origins[0].tolist(), "factory": bool(self.has_factory),
                             "n_mover_parts": len(parts), "dt": self.dt,
-                            "stand_mode": "P-hold on the true base pose under zero /cmd_vel" if self.stand_mode else None}
+                            "stand_mode": "P-hold on the robot's odometry estimate under zero /cmd_vel (R-W6)"
+                            if self.stand_mode else None}
+        from intercycle_sim.stand import StandHold
+
+        self._stand_hold = StandHold(self.dt)
         # place the robot exactly at the start pose (absolute world coordinates)
         root = self.robot.data.default_root_state.clone()
         root[0, 0:3] = torch.tensor((sx, sy, 0.6), device=device)
@@ -159,32 +163,17 @@ class IsaacBackend:
                              device=self.device, dtype=th.float32)
             self.u.scene[nm].write_root_pose_to_sim(pose)
 
+    def set_estimate(self, x: float, y: float, psi: float) -> None:
+        """The robot's own pose estimate (odometry, from the runner's sensor suite) for stand mode (R-W6)."""
+        self._est = (float(x), float(y), float(psi))
+
     def _stand(self, vx: float, vy: float, wz: float) -> tuple[float, float, float]:
-        """STAND MODE of the locomotion layer. Under a zero /cmd_vel the pretrained velocity policy creeps (about
-        5 cm/s and 1.5 rad/min in the dev runs), which a real legged robot's stand state does not do. After 0.2 s of zero
-        command the controller holds the stance pose with a P-loop on the base pose (true base pose: the same
-        estimator stand-in as the policy's velocity input; Nav2 never sees it). Any non-zero command releases it."""
-        if max(abs(vx), abs(vy), abs(wz)) > 0.01:
-            self._zero_n, self._hold = 0, None
-            return vx, vy, wz
-        self._zero_n = getattr(self, "_zero_n", 0) + 1
-        if self._zero_n * self.dt < 0.2:
-            return vx, vy, wz
-        st = self.state()
-        x, y = st["pos_w"][0], st["pos_w"][1]
-        w, qx, qy, qz = st["quat_wxyz"]
-        psi = math.atan2(2 * (w * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
-        if getattr(self, "_hold", None) is None:
-            self._hold = (x, y, psi)
-            self.stand_holds = getattr(self, "stand_holds", 0) + 1
-        hx, hy, hpsi = self._hold
-        c, s_ = math.cos(psi), math.sin(psi)
-        ex, ey = c * (hx - x) + s_ * (hy - y), -s_ * (hx - x) + c * (hy - y)
-        epsi = math.atan2(math.sin(hpsi - psi), math.cos(hpsi - psi))
-        if math.hypot(ex, ey) < 0.02 and abs(epsi) < 0.02:
-            return 0.0, 0.0, 0.0
-        cl = lambda v, m: max(-m, min(m, v))  # noqa: E731
-        return cl(1.0 * ex, 0.15), cl(1.0 * ey, 0.15), cl(1.0 * epsi, 0.2)
+        """STAND MODE of the locomotion layer (stand.py): under a zero /cmd_vel hold the stance with a P-loop on the
+        robot's OWN pose estimate (odometry, set by the runner each step), never on the true base pose (R-W6), so
+        odometry drift shows up as station-keeping drift. Any non-zero command releases it."""
+        out = self._stand_hold.step((vx, vy, wz), getattr(self, "_est", None))
+        self.stand_holds = self._stand_hold.n_holds
+        return out
 
     def step(self, cmd: tuple[float, float, float]) -> dict:
         vx, vy, wz = (max(-1.0, min(1.0, float(v))) for v in cmd)
