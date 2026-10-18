@@ -10,11 +10,14 @@ Rule (PREREG; it cannot be amended): an episode is INFRASTRUCTURE-INVALID when
 2. Modal or RunPod returned an error code: the record is the client's error stub (`error` without `phases`, written
    by intercycle_eval/batch.py when the remote call raised), or a provider status FAILED / CANCELLED / TIMED_OUT;
 3. the container failed, was pre-empted or ran out of memory before the robot's first command: no first command in
-   the logs (no `t_goal_sent` in the goal record, no `LEG ` line in goal.log) and either the episode returned an
-   error or a log shows a kill / OOM / pre-emption signature.
+   the logs (no `t_goal_sent` in the goal record, no `LEG ` line in goal.log) AND an infrastructure sign: a kill /
+   OOM / pre-emption signature (INFRA_SIG) in the record's error, its log tail or a log, or a Modal provider
+   exception type (MODAL_INFRA_EXC) in the record's error. An error before the first command WITHOUT such a sign
+   (e.g. run_episode's "sim or bridge exited during boot" from a bug in our plant, runner or cfg) is NOT invalid:
+   PLAN_TWIN §5 "Every other error is a failure: Y = 0".
 
-Every other episode is VALID, including one that errored after the robot's first command: EVAL scores it as a
-failure (Y = 0 with full T), never drops it. The tags come from `<batch>/batch.json` (cfgs) so an episode with no
+Every other episode is VALID, including one that errored before or after the robot's first command without an
+infrastructure sign: EVAL scores it as a failure (Y = 0 with full T), never drops it. The tags come from `<batch>/batch.json` (cfgs) so an episode with no
 record at all is still listed. The list is written to `<batch>/invalid.json` once, before any metric: the script
 refuses when a metric file already sits in the batch directory or the list exists; `--commit` commits only that file.
 Nothing here opens truth; it reads episode records and logs only.
@@ -40,6 +43,11 @@ INFRA_SIG = re.compile(r"out of memory|OOMKill|Killed process|exit(?:ed)? (?:wit
                        r"pre-?empt|InputCancellation|ContainerTerminated|worker (?:was )?(?:lost|terminated)",
                        re.IGNORECASE)
 LOGS_SCANNED = ("sim.log", "goal.log", "nav2.log", "bridge.log")
+# Modal exception types that mean the PROVIDER failed (modal.exception, modal 1.6.2), not our code. RemoteError,
+# ExecutionError and UserCodeException wrap errors raised by our own code and are deliberately not listed.
+MODAL_INFRA_EXC = re.compile(r"\b(?:FunctionTimeoutError|InputCancellation|InternalFailure|InternalError|"
+                             r"ResourceExhaustedError|ServiceError|ClientClosed|ImageBuildError|MountUploadTimeoutError|"
+                             r"VolumeUploadTimeoutError|SandboxTerminatedError)\b")
 
 
 class ClassifyError(RuntimeError):
@@ -80,7 +88,13 @@ def first_command(rec: dict, ep_dir: Path) -> bool:
 
 
 def infra_signature(rec: dict, ep_dir: Path) -> str | None:
-    texts = [str(rec.get("error") or ""), str(rec.get("log_tail") or "")]
+    """The first infrastructure sign: a Modal provider exception type in the record's error, or a kill / OOM /
+    pre-emption signature in the error, its log tail or a scanned log. None = no infrastructure sign."""
+    err = str(rec.get("error") or "")
+    m = MODAL_INFRA_EXC.search(err)
+    if m:
+        return m.group(0)
+    texts = [err, str(rec.get("log_tail") or "")]
     texts += [(ep_dir / n).read_text(encoding="utf-8", errors="replace") for n in LOGS_SCANNED if (ep_dir / n).is_file()]
     for t in texts:
         m = INFRA_SIG.search(t)
@@ -111,10 +125,13 @@ def classify_one(batch: Path, tag: str) -> dict:
         return {"invalid": True, "reason": f"logs missing: {missing}", "commanded": cmd}
     if not cmd:
         sig = infra_signature(rec, ep)
-        if rec.get("error") or sig:
-            why = f"error {str(rec.get('error'))[:200]}" if rec.get("error") else f"log signature {sig!r}"
-            return {"invalid": True, "reason": f"container failed before the robot's first command ({why})",
-                    "commanded": False}
+        if sig:
+            return {"invalid": True, "commanded": False,
+                    "reason": f"container failed before the robot's first command (infrastructure sign {sig!r})"}
+        if rec.get("error"):
+            return {"invalid": False, "commanded": False,
+                    "reason": "error before first command, scored as failure (no infrastructure sign: "
+                              f"{str(rec['error'])[:200]})"}
     out = {"invalid": False, "reason": "valid", "commanded": cmd}
     if rec.get("error"):
         out["reason"] = "valid: errored after the first command, scored as a failure (Y = 0, full T)"

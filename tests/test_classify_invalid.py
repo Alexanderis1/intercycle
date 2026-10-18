@@ -95,12 +95,37 @@ def test_runpod_failed_status_is_invalid(tmp_path):
     assert CI.classify(b)["episodes"]["a"]["invalid"]
 
 
-def test_error_before_first_command_is_invalid(tmp_path):
+@pytest.mark.parametrize("err", ["RuntimeError('sim or bridge exited during boot')",
+                                 "RuntimeError('timeout waiting for the first bridge frame')",
+                                 "KeyError('press.P14a.p_running')", "RemoteError('ValueError in plant')"])
+def test_error_before_first_command_without_infra_sign_is_a_failure(tmp_path, err):
+    """PLAN §5: our own crash before the first goal (plant / runner / cfg bug) is a failure (Y = 0), not invalid."""
     b = make_batch(tmp_path, ["a"])
-    edit(b, "a", error="RuntimeError('sim died')", goal=None)
+    edit(b, "a", error=err, goal=None, log_tail="Traceback (most recent call last):\n  ValueError: bad cfg\n")
+    (b / "a" / "goal.log").write_text("waiting for nav2\n", encoding="utf-8")
+    e = CI.classify(b)["episodes"]["a"]
+    assert not e["invalid"] and not e["commanded"]
+    assert e["reason"].startswith("error before first command, scored as failure")
+
+
+@pytest.mark.parametrize("err, sig", [("FunctionTimeoutError('Function timed out')", "FunctionTimeoutError"),
+                                      ("RuntimeError('container pre-empted by the provider')", "pre-empt"),
+                                      ("RuntimeError('sim exited with code 137')", "exited with code 137")])
+def test_error_before_first_command_with_infra_sign_is_invalid(tmp_path, err, sig):
+    b = make_batch(tmp_path, ["a"])
+    edit(b, "a", error=err, goal=None)
     (b / "a" / "goal.log").write_text("waiting for nav2\n", encoding="utf-8")
     e = CI.classify(b)["episodes"]["a"]
     assert e["invalid"] and not e["commanded"] and "before the robot's first command" in e["reason"]
+    assert sig in e["reason"]
+
+
+def test_infra_sign_in_the_log_tail_before_first_command_is_invalid(tmp_path):
+    b = make_batch(tmp_path, ["a"])
+    edit(b, "a", error="RuntimeError('sim or bridge exited during boot')", goal=None,
+         log_tail="== sim ==\nKilled process 41 (python) total-vm: out of memory\n")
+    (b / "a" / "goal.log").write_text("waiting for nav2\n", encoding="utf-8")
+    assert CI.classify(b)["episodes"]["a"]["invalid"]
 
 
 def test_oom_signature_before_first_command_is_invalid(tmp_path):
@@ -109,7 +134,7 @@ def test_oom_signature_before_first_command_is_invalid(tmp_path):
     (b / "a" / "goal.log").write_text("starting\n", encoding="utf-8")
     (b / "a" / "sim.log").write_text("worker: Killed process 77 (python3) out of memory\n", encoding="utf-8")
     e = CI.classify(b)["episodes"]["a"]
-    assert e["invalid"] and "signature" in e["reason"]
+    assert e["invalid"] and "infrastructure sign" in e["reason"]
 
 
 def test_error_after_first_command_is_a_failure_not_invalid(tmp_path):
