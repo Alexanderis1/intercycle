@@ -404,6 +404,23 @@ def test_double_stage_runs_after_the_refusals_with_the_test_seeds(s):
         SR.run_double_stage(s["repo"], 9, [1000] * 16, fake_double)   # never outside an attempt
 
 
+def test_double_stage_refuses_before_any_runlog_record_while_the_backend_is_not_wired(s):
+    """No fake runner: run_double.SEALED_BACKEND_READY is False in this build, so sealed_run refuses before the drand
+    fetch and before the RUNLOG `started` record (no attempt number used up)."""
+    called = []
+
+    def fetch(url):
+        called.append(url)
+        return fake_fetch(url)
+
+    log = s["repo"] / SR.RUNLOG
+    before = log.read_bytes() if log.exists() else None
+    with pytest.raises(SR.Refusal, match="not wired"):
+        SR.run(s["repo"], s["root"], ["double"], fetch, fake_runner)
+    assert called == [] and (log.read_bytes() if log.exists() else None) == before
+    assert SR.SEALED_ENV not in os.environ
+
+
 def test_upload_check_rejects_changed_bytes():
     with pytest.raises(PermissionError, match="MANIFEST"):
         SR.verify_clip_bytes("0_te1", b"changed", sha(b"clip zero"))

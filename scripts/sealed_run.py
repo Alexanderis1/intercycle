@@ -655,6 +655,24 @@ def _now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
+def _run_double_module():
+    scripts = str(REPO / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import run_double  # scripts/run_double.py (an orchestrator)
+
+    return run_double
+
+
+def double_ready() -> None:
+    """Refused (BEFORE preflight, the drand fetch and the RUNLOG `started` record, so no attempt number is used up)
+    unless run_double's sealed backend is wired (run_double.SEALED_BACKEND_READY)."""
+    rd = _run_double_module()
+    if not getattr(rd, "SEALED_BACKEND_READY", False):
+        raise Refusal(f"the double stage's sealed backend ({getattr(rd, 'SEALED_BACKEND', '?')}) is not wired in "
+                      "scripts/run_double.py: refusing before any RUNLOG record (no attempt used)")
+
+
 def run_double_stage(repo: Path, attempt: int, seed_ints: list[int],
                      double_runner: Callable[[Path, list[int]], dict] | None = None) -> dict:
     """The sealed CPU-double stage: a fresh runs root per attempt, then run_double.run_sealed (16 test seeds)."""
@@ -664,12 +682,7 @@ def run_double_stage(repo: Path, attempt: int, seed_ints: list[int],
     if os.environ.get(SEALED_ENV) != "1":
         raise Refusal("the double stage runs only after every refusal passed (sealed flag not set)")
     if double_runner is None:
-        scripts = str(REPO / "scripts")
-        if scripts not in sys.path:
-            sys.path.insert(0, scripts)
-        import run_double  # scripts/run_double.py (an orchestrator)
-
-        double_runner = run_double.run_sealed
+        double_runner = _run_double_module().run_sealed
     rec = double_runner(out, list(seed_ints))
     return {"out": str(out), "runs_root": rec.get("runs_root"), "invalid": rec.get("invalid"),
             "n_missions": rec.get("n_missions"), "usd": rec.get("usd"), "wall_s": rec.get("wall_s")}
@@ -682,6 +695,8 @@ def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str],
     bad = sorted(set(stages) - set(STAGES))
     if bad or not stages:
         raise Refusal(f"stages {bad or stages} are not wired in sealed_run.py (known: {list(STAGES)})")
+    if "double" in stages and double_runner is None:
+        double_ready()
     rec = preflight(repo, sealed_root, fetch)
     known = rec.pop("runlog")
     jobs = rec.pop("jobs")

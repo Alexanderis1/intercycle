@@ -81,6 +81,10 @@ def test_sealed_batch_and_cli_refuse_without_the_sealed_flag(monkeypatch, tmp_pa
         RD.dev_worlds([4])
     with pytest.raises(RD.DoubleError, match="not wired"):
         RD.run_batch(tmp_path, RD.dev_worlds([0]), backend="modal")
+    monkeypatch.setenv("INTERCYCLE_SEALED_RUN", "1")
+    for be in ("local", "modal"):                                       # never the wiring double; modal not ready
+        with pytest.raises(RD.DoubleError, match="sealed batch runs only"):
+            RD.run_sealed(tmp_path, [1000 + i for i in range(16)], backend=be)
 
 
 def test_local_batch_end_to_end_into_twin_eval(tmp_path, monkeypatch):
