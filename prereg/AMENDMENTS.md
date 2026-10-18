@@ -129,3 +129,36 @@ record and is never edited.
   therefore procedural on one machine (agent separation, `C:\intercycle_sealed\access.log`, committed hashes), not a
   machine boundary as PLAN §4/§6 planned. The test labels are made by two fresh labeller agents (person frames;
   stroke windows) instead of one, to fit before FREEZE; both read only `labels/TEST_RULES.md` and the test images.
+
+## Amendment 2: the twin's Observation uses the real clips' ram-ROI occlusion rule (T-W6)
+
+- **Decided:** Sun 18 Oct 2026, ~08:25 CEST, by the user. **Implemented:** lane twin-roi (branch lane/twin-roi).
+- **User decision, verbatim:** "Same ROI rule in twin": the twin's observations use the SAME image-space ram-ROI
+  occlusion rule as the real clips (a person's image box covering the press's ram ROI makes that press's zone_motion
+  MISSING, with the same hold), not the floor rule.
+- **Reason (evidence):** on the v1 artifacts the floor rule (a person / vehicle detection within r + 0.5 m of the
+  press's danger rect + 1 m) marked zone_motion MISSING on most learning ticks, because operators stand at the
+  presses, so the learned observer learned nothing (period 0 on P9a / P9b, confidence 0 on every press).
+- **Rule change:** `intercycle/observer/occlusion.RoiOcclusion` (`box_hits_roi`, box padded ROI_PAD_FRAC = 0.15, plus
+  the track hold) is the streaming form of `roi_missing_series`, the real-clip ingest's rule (one implementation;
+  tests/test_occlusion_missing.py checks equal output). twin/camera.py stat_v1 applies it per press with
+  `hold_s_by_press` (camera 9: 34 s, camera 14: 7.5 s, unchanged). The plant's ObsAdapter takes an explicit rule:
+  `occlusion="roi"` for stat_v1 turns the floor rule off on every press (`ObsV2Converter(floor_rule=...)`) and keeps
+  the camera's MISSING; a press without an ROI is MISSING on every tick (fail closed). `"floor"` stays only for the
+  G0 stand-in camera_v0 (stub site) and the body-shop shim. cam_floor_ok and the M-W10 watchdog are unchanged.
+- **Measured** (v1 slice, world 0, day 9, the 20 min learning period, 2,400 ticks; `scripts/slice.py --world 0
+  --day 9 --zone z14`; "before" = the same code with the ObsAdapter on the floor rule):
+
+  | press | zone_motion MISSING, floor rule (before) | ROI rule (after) | learned period after (s) | dynamics.json period (s) | confidence after |
+  |---|---|---|---|---|---|
+  | P9a | 100.0 % | 80.0 % | 1.60 | 1.94 (observed) | 0 |
+  | P9b | 99.9 % | 0.0 % | 1.54 | 1.69 (observed) | 0 |
+  | P14a | 80.1 % | 66.8 % | 4.95 | 4.0 (assumed prior) | 0 |
+  | P14b | 78.2 % | 51.1 % | 53.86 | 4.0 (assumed prior) | 0 |
+  | P14c | 79.9 % | 43.0 % | 9.87 | 4.0 (assumed prior) | 0 |
+  | P14d | 73.7 % | 34.6 % | 26.62 | 4.0 (assumed prior) | 0 |
+
+- **Still open (not tuned here):** every press stays at confidence 0 and the slice's stop-in-Observation assertion is
+  still red (the zone-14 trip probe waits 240 s at P14d and sees no stroke). The remaining MISSING is the camera's own
+  image-space ROI rule with its hold; on zone 14 only 8-16 % of the finite samples exceed the motion threshold, about
+  the idle false-positive rate (0.12), so those presses look idle in this window.

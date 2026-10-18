@@ -592,10 +592,11 @@ def test_v1_truth_never_opened_by_the_slice(report_v1):
 
 @pytest.mark.xfail(strict=True, reason=(
     "v1 artifacts, world 0 day 9, first 30 min: no robot-caused stop is visible as 'no motion' in the Observation. "
-    "Zone 14 (the slice zone): the trip probe sees no stroking press in 240 s (zone_motion MISSING on 74-80 % of the "
-    "learning ticks) and enters an idle press (no trip). Zone 9: the probe trips P9a, but P9a / P9b zone_motion is "
-    "MISSING on 100 % / 99.9 % of the ticks (stat_v1's camera-9 ROI hold 34 s under DAYGEN v1's mover density), so "
-    "the stop shows as MISSING, never as no motion. Owners: S3a (DAYGEN density) / S3b (stat_v1 hold); not tuned "
-    "here (lead decision: no tuning)."))
+    "Since lane twin-roi the twin uses the real clips' image-space ROI rule, not the floor rule (user decision Sun "
+    "~08:25; prereg/AMENDMENTS.md Amendment 2): learning-tick MISSING fell from P9a 100 / P9b 99.9 / P14a-d 74-80 % "
+    "to P9a 80 / P9b 0 / P14a-d 35-67 %, but every press still has confidence 0. Zone 14 (the slice zone): the trip "
+    "probe waits 240 s at P14d, sees no stroke (zone-14 samples exceed the motion threshold on 8-16 % of finite ticks, "
+    "about the idle rate) and enters an idle press (no trip), so the mission has no robot-caused stop to check. Not "
+    "tuned here (lead decision: no tuning)."))
 def test_v1_stop_in_observation(report_v1):
     assert report_v1[0]["assertions"]["stop_in_observation"]["ok"]
