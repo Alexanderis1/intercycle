@@ -1,4 +1,5 @@
 {
+ "_status": "INVALID and SUPERSEDED by scale_v1.json (lane S2 CAL v1, Sun 18 Oct): fitted before amendment A1+, some source clips are now dev or test (prereg/AMENDMENTS.md, lead notes). Kept for the record only; do not use.",
  "_doc": "Probe P6 scale cross-check, expressed as camera height h above the floor (the ground-plane scale is proportional to h; scale factor = h / 4.0 m prior). Zero-roll pinhole after CAL v0 k1; tilt fitted from person boxes. people = RF-DETR-M person boxes (conf >= 0.5, upright, unoccluded, not at the border) on the t=0.5 s frame of TRAIN clips, walker height 1.72 m, robust LS; stripes = painted floor lines assumed 10 cm wide, both edges traced on the TRAIN median background. Fallback rule (PLAN_TWIN §3 P6): estimates disagree by more than 20 % -> publish a scale interval and run the robot at both ends. Details: docs/probes/S3a-P6.md.",
  "prior_h_m": 4.0,
  "c9_f0": {

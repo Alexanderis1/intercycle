@@ -1,4 +1,5 @@
 {
+ "_status": "INVALID and SUPERSEDED by k1_v1.json (lane S2 CAL v1, Sun 18 Oct): fitted before amendment A1+, some source clips are now dev or test (prereg/AMENDMENTS.md, lead notes). Kept for the record only; do not use.",
  "_doc": "CAL v0 lens distortion, one division-model k1 per framing (probe P6, PLAN_TWIN \u00a73). x_u = c + (x_d - c) / (1 + k1 r_d^2), r_d in px of the 1920x1080 frame, c = image centre; k1_norm = k1 * 1330^2. opencv: K and the rational dist vector for cv2.undistortPoints(P=K). Sources are TRAIN clip ids only.",
  "center": [
   959.5,
