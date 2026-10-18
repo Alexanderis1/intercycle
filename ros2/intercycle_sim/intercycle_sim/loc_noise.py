@@ -12,9 +12,23 @@
 Sizes and heights are ASSUMED (no clutter was measured); every item is taller than the 2D lidar plane (about 0.8 m):
 low clutter a 2D scanner cannot see (bare pallets, forks) is excluded and disclosed (3D lidar is cut).
 Simulator-side only (world truth); nothing here reaches ROS except through the sensors.
+
+Wiring and keys (fix round 2): `episode.run_episode` calls `apply_loc_noise(cfg, world_files)`. The draws are keyed by
+`start_seed(world_seed, day, slot)` and `clutter_seed(world_seed, day)`, derived like twin.rng.keyed_rng (SeedSequence
+of world seed, day, blake2b64(entity), blake2b64(event)), so they are pure functions of (world, day, slot) and never of
+the condition: every condition of a (world, day, slot) gets the same start error and the same clutter (common random
+numbers for the paired primary). cfg contract:
+  start        [x, y, psi] nominal dock pose = the robot's belief (planner init, AMCL initial pose)
+  start_noise  {"world_seed": int >= 0, "day": int >= 0, "slot": int | str}; no other key is accepted (a condition, or
+               anything run-specific, cannot enter the key)
+  clutter      {"n": int >= 1, "keep_clear": [[x, y], ...], "avoid_rects": [[x0, y0, x1, y1], ...]}; needs
+               start_noise (its world_seed and day key the placement); the dock (start) is always kept clear
+The simulator gets the TRUE pose as cfg "start"; the world files get the clutter (map files unchanged); the record
+(`loc_noise` in the episode result) holds the key, the seeds, the start error and the clutter items.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import math
@@ -30,6 +44,34 @@ FOOT_CLEAR_M = 0.05               # ASSUMED clearance between the start footprin
 CLEAR_R = 1.5                     # no clutter within this distance of a keep-clear point
 # ASSUMED catalogue: (cls, length, width, height), all above the lidar plane
 CATALOGUE = (("clutter_pallet_loaded", 1.2, 0.8, 1.2), ("clutter_cart", 1.0, 0.6, 1.0), ("clutter_bin", 0.6, 0.4, 0.9))
+START_ENTITY, CLUTTER_ENTITY = "robot_start_pose", "unmapped_clutter"
+START_NOISE_KEYS = ("world_seed", "day", "slot")
+CLUTTER_KEYS = ("n", "keep_clear", "avoid_rects")
+
+
+# ------------------------------------------------------------------------------------------------ keyed seeds
+def key64(s: str) -> int:
+    """= twin.rng.key64 (stable 64-bit blake2b key of a string; asserted equal in tests/test_loc_noise.py)."""
+    return int.from_bytes(hashlib.blake2b(s.encode("utf-8"), digest_size=8).digest(), "little")
+
+
+def _keyed_seed(world_seed: int, day: int, entity: str, event: str) -> int:
+    if isinstance(world_seed, bool) or isinstance(day, bool) or int(world_seed) != world_seed or int(day) != day:
+        raise ValueError("world_seed and day must be integers")
+    if int(world_seed) < 0 or int(day) < 0:
+        raise ValueError("world_seed and day must be non-negative")
+    ss = np.random.SeedSequence([int(world_seed), int(day), key64(entity), key64(event)])
+    return int(ss.generate_state(1, np.uint64)[0] >> np.uint64(1))       # 63-bit int for np.random.default_rng
+
+
+def start_seed(world_seed: int, day: int, slot) -> int:
+    """Seed of the start-pose draw: a pure function of (world, day, slot)."""
+    return _keyed_seed(world_seed, day, START_ENTITY, f"slot:{slot}")
+
+
+def clutter_seed(world_seed: int, day: int) -> int:
+    """Seed of the clutter placement: a pure function of (world, day)."""
+    return _keyed_seed(world_seed, day, CLUTTER_ENTITY, "place")
 
 
 def _box_gap(x: float, y: float, boxes: list[dict]) -> float:
@@ -116,38 +158,77 @@ def _disc(res: float) -> np.ndarray:
     return (xx * xx + yy * yy) <= k * k
 
 
+# numpy only (fix round 2): this now runs inside the episode container, whose Isaac python 3.11 has no scipy
+# (intercycle_eval/social.py). tests/test_loc_noise.py checks both against scipy.ndimage on random grids.
+def _dilate(mask: np.ndarray, structure: np.ndarray) -> np.ndarray:
+    """= scipy.ndimage.binary_dilation(mask, structure) for a symmetric structure (border 0)."""
+    k0, k1 = structure.shape[0] // 2, structure.shape[1] // 2
+    nx, ny = mask.shape
+    pad = np.zeros((nx + 2 * k0, ny + 2 * k1), bool)
+    pad[k0:k0 + nx, k1:k1 + ny] = mask
+    out = np.zeros_like(mask)
+    for di, dj in np.argwhere(structure):
+        out |= pad[di:di + nx, dj:dj + ny]
+    return out
+
+
 def _blocked(occ: np.ndarray, res: float) -> np.ndarray:
     """Cells a robot disc of ROBOT_R cannot be centred on."""
-    from scipy import ndimage
-
-    return ndimage.binary_dilation(occ, structure=_disc(res))
+    return _dilate(occ, _disc(res))
 
 
 def _block_cells(blocked: np.ndarray, ii: np.ndarray, jj: np.ndarray, res: float) -> np.ndarray:
     """blocked plus the robot-disc dilation of the cells (ii, jj), computed in a local window."""
-    from scipy import ndimage
-
     k = int(math.ceil(ROBOT_R / res))
     i0, i1 = max(0, int(ii.min()) - k), min(blocked.shape[0], int(ii.max()) + k + 1)
     j0, j1 = max(0, int(jj.min()) - k), min(blocked.shape[1], int(jj.max()) + k + 1)
     loc = np.zeros((i1 - i0, j1 - j0), bool)
     loc[ii - i0, jj - j0] = True
     out = blocked.copy()
-    out[i0:i1, j0:j1] |= ndimage.binary_dilation(loc, structure=_disc(res))
+    out[i0:i1, j0:j1] |= _dilate(loc, _disc(res))
     return out
 
 
-def _connected_blocked(blocked: np.ndarray, res: float, x0: float, y0: float, pts: list[tuple[float, float]]) -> bool:
-    from scipy import ndimage
+def _spread_rows(free: np.ndarray, reach: np.ndarray) -> np.ndarray:
+    """Every run of free cells along axis 1 that holds a reached cell becomes reached (runs never cross rows)."""
+    nx, ny = free.shape
+    f = np.zeros((nx, ny + 1), bool)
+    f[:, :ny] = free
+    r = np.zeros((nx, ny + 1), bool)
+    r[:, :ny] = reach & free
+    f, r = f.ravel(), r.ravel()
+    start = f & ~np.concatenate(([False], f[:-1]))
+    ids = np.cumsum(start) * f
+    hit = np.zeros(int(ids.max()) + 1, bool)
+    hit[ids[r]] = True
+    hit[0] = False
+    return hit[ids].reshape(nx, ny + 1)[:, :ny]
 
-    lab = np.asarray(ndimage.label(~blocked)[0])  # type: ignore[index]
-    ids = set()
+
+def _reachable(free: np.ndarray, seed: tuple[int, int]) -> np.ndarray:
+    """4-connected component of free that holds seed (= the scipy.ndimage.label component), by alternating row and
+    column run sweeps until nothing changes."""
+    reach = np.zeros_like(free)
+    if not free[seed]:
+        return reach
+    reach[seed] = True
+    while True:
+        new = _spread_rows(free, reach)
+        new = _spread_rows(free.T, new.T).T
+        if (new == reach).all():
+            return reach
+        reach = new
+
+
+def _connected_blocked(blocked: np.ndarray, res: float, x0: float, y0: float, pts: list[tuple[float, float]]) -> bool:
+    cells = []
     for x, y in pts:
         i, j = int((x - x0) / res), int((y - y0) / res)
-        if not (0 <= i < blocked.shape[0] and 0 <= j < blocked.shape[1]) or lab[i, j] == 0:
+        if not (0 <= i < blocked.shape[0] and 0 <= j < blocked.shape[1]) or blocked[i, j]:
             return False
-        ids.add(int(lab[i, j]))
-    return len(ids) == 1
+        cells.append((i, j))
+    reach = _reachable(~blocked, cells[0])
+    return all(bool(reach[c]) for c in cells)
 
 
 def _connected(occ: np.ndarray, res: float, x0: float, y0: float, pts: list[tuple[float, float]]) -> bool:
@@ -212,3 +293,58 @@ def add_unmapped_clutter(files: dict[str, bytes], seed: int, n: int, keep_clear:
     meta["n_boxes"], meta["n_tris"] = len(allb), int(len(F))
     out["world.json"] = json.dumps(meta).encode()
     return out, placed
+
+
+# ------------------------------------------------------------------------------------------------ episode wiring
+def _check_keys(block: dict, allowed: tuple[str, ...], required: tuple[str, ...], what: str) -> None:
+    if not isinstance(block, dict):
+        raise ValueError(f"cfg {what} must be a dict")
+    extra = set(block) - set(allowed)
+    if extra:
+        raise ValueError(f"cfg {what} has keys {sorted(extra)}; only {list(allowed)} are allowed (the draw is keyed by "
+                         "(world, day, slot) alone, never by the condition)")
+    missing = [k for k in required if k not in block]
+    if missing:
+        raise ValueError(f"cfg {what} lacks {missing}")
+
+
+def apply_loc_noise(cfg: dict, world: dict[str, bytes]) -> tuple[dict[str, bytes], dict]:
+    """(world files for the simulator, record). record: applied flags, the key, the seeds, "true" (the simulator's
+    start), "belief" (= cfg start, the planner's init), the start error, the clutter items, and the AMCL spread the
+    planner must use ("spread": START_DXY / 10 deg if start noise was applied, else 0). Raises on a malformed cfg (fail
+    closed). With neither start_noise nor clutter in cfg: the files unchanged, true = belief = cfg start, spread 0."""
+    nominal = [float(v) for v in cfg.get("start", [4.0, 32.0, 0.0])]
+    if len(nominal) != 3:
+        raise ValueError("cfg start must be [x, y, psi]")
+    rec: dict = {"start_applied": False, "clutter_applied": False, "belief": nominal, "true": list(nominal),
+                 "spread": {"xy_m": 0.0, "yaw_deg": 0.0}}
+    sn, cl = cfg.get("start_noise"), cfg.get("clutter")
+    if sn is None and cl is None:
+        return world, rec
+    if sn is None:
+        raise ValueError("cfg clutter needs cfg start_noise (its world_seed and day key the placement)")
+    _check_keys(sn, START_NOISE_KEYS, START_NOISE_KEYS, "start_noise")
+    key = {"world_seed": int(sn["world_seed"]), "day": int(sn["day"]), "slot": sn["slot"]}
+    rec["key"] = key
+    out = world
+    if cl is not None:
+        _check_keys(cl, CLUTTER_KEYS, ("n", "keep_clear"), "clutter")
+        n = cl["n"]
+        if isinstance(n, bool) or int(n) != n or int(n) < 1:
+            raise ValueError("cfg clutter n must be an integer >= 1")
+        keep = [(float(p[0]), float(p[1])) for p in cl["keep_clear"]]
+        keep = [(nominal[0], nominal[1])] + [p for p in keep if p != (nominal[0], nominal[1])]
+        avoid = [tuple(float(v) for v in r) for r in (cl.get("avoid_rects") or [])]
+        if any(len(r) != 4 for r in avoid):
+            raise ValueError("cfg clutter avoid_rects must be [x0, y0, x1, y1] rectangles")
+        cs = clutter_seed(key["world_seed"], key["day"])
+        out, items = add_unmapped_clutter(world, cs, int(n), keep, avoid)      # type: ignore[arg-type]
+        rec["clutter_applied"] = True
+        rec["clutter"] = {"seed": cs, "n": len(items), "items": items, "in_map": False,
+                          "inputs": {"keep_clear": [list(p) for p in keep], "avoid_rects": [list(r) for r in avoid]}}
+    boxes = json.loads(out["boxes.json"].decode()) if "boxes.json" in out else []
+    ss = start_seed(key["world_seed"], key["day"], key["slot"])
+    st = perturb_start((nominal[0], nominal[1], nominal[2]), ss, boxes)
+    rec.update(start_applied=True, true=st["true"], belief=st["belief"], start=st,
+               spread={"xy_m": START_DXY, "yaw_deg": math.degrees(START_DPSI)})
+    return out, rec
