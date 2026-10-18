@@ -290,6 +290,7 @@
    "A_yellow_floor_line": -0.1154,
    "C_white_column_left_edge_top": 0.4
   },
+  "weak_fit_note": "only 2 lines (no leave-one-out): the CAL v1 bootstrap draws this framing's k1 uniformly between this fit and the c9_f0 fit (same lens model); the shift it causes is in twin/cal/cal_v1.json c14_f0_k1_alt_check",
   "opencv": {
    "K": [
     [

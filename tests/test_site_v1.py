@@ -62,3 +62,42 @@ def test_k1_v1_sources_are_train_and_per_framing():
     for f in ("c9_f0", "c9_f1", "c14_f0"):
         assert k1[f]["k1"] < 0
         assert PV.assert_train_only({f: k1[f]["source_clip_ids"]}, rows) > 0
+
+
+def test_scale_is_joint_with_tilt_and_covers_the_estimates():
+    sc = json.loads((CAL / "scale_v1.json").read_text(encoding="utf-8"))
+    for cam in ("camera_9", "camera_14"):
+        r = sc[cam]
+        lo, hi = r["h_interval_m"]
+        assert lo <= r["prior_h_m"] <= hi
+        for p5, _, p95 in r["joint_people_h_p5_p50_p95_m"].values():
+            assert lo <= p5 and p95 <= hi
+        assert lo <= r["joint_stripes_h_p5_p50_p95_m"][0] and r["joint_stripes_h_p5_p50_p95_m"][2] <= hi
+    # the flagged line-B c9_f0 stripe (green walkway edge) is reported but not in the median
+    assert "c9_f0/B_green_walkway_left_yellow_line" in sc["camera_9"]["stripes_flagged_out"]
+    assert sc["camera_9"]["nominal_stripes_median_h_m"] < sc["camera_9"]["nominal_stripes_median_incl_flagged_h_m"]
+
+
+def test_site_scale_spans_both_cameras(site):
+    sc = json.loads((CAL / "scale_v1.json").read_text(encoding="utf-8"))
+    s = site.scale.value
+    assert s.lo == min(sc[c]["factor"][0] for c in ("camera_9", "camera_14"))
+    assert s.hi == max(sc[c]["factor"][1] for c in ("camera_9", "camera_14"))
+
+
+def test_provenance_names_click_sheet_and_p4_clips(site):
+    pts = json.loads((CAL / "cal_points_v1.json").read_text(encoding="utf-8"))
+    trace = json.loads((CAL / "site_trace_v1.json").read_text(encoding="utf-8"))
+    assert set(pts["_click_sheet_clips"].values()) <= set(site.cal_sources)
+    for p in site.presses:
+        assert p.ram_roi.clips == sorted(trace["p4_clips"][p.id]), p.id
+        note = p.dilation_m.note or ""
+        assert "CONSUMER NOTE" in note and "dilation_fixed_scale_p95_m" in note
+
+
+def test_c14_k1_shift_is_stated_and_p9b_dilation_uses_its_placement_framing(site):
+    c = json.loads((CAL / "cal_v1.json").read_text(encoding="utf-8"))
+    f14 = next(f for f in site.framings if f.id == "c14_f0")
+    assert "k1 is weak" in (f14.H_img_to_floor.note or "")
+    assert set(c["c14_f0_k1_alt_check"]["press_centroid_shift_m"]) == {"P14a", "P14b", "P14c", "P14d"}
+    assert "c9_f0" in c["presses"]["P9b"]["framings"] and c["presses"]["P9b"]["centre_sigma_px"] > 0

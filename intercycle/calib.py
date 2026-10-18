@@ -248,33 +248,30 @@ def person_height_h(foot_uv: np.ndarray, head_uv: np.ndarray, theta: float, phi:
                     person_h: float = WALKER_H_M) -> np.ndarray:
     """Camera height (m) implied by each upright person (undistorted foot and head-top pixels), orientation fixed.
 
-    The foot ray meets the floor at h * g1 (g1 = floor point at h = 1); the head is person_h above it. The head's image
-    row is monotonic in person_h / h, so h is solved per box by bisection on that row. NaN where unsolvable.
+    The foot ray meets the floor at h * g1 (g1 = floor point at h = 1); the head is person_h above it, i.e. at
+    h * (g1x, g1y, s - 1) from the camera with s = person_h / h. In camera coordinates that is h * (a + s b) with
+    a = M^T (g1x, g1y, -1) and b = M^T (0, 0, 1), so the head row v gives s in closed form:
+    (v - cy) / f = (a_y + s b_y) / (a_z + s b_z). Vectorised (the bootstrap re-solves every box per draw). NaN where
+    the foot is above the horizon, the head point is behind the camera, or h falls outside [0.5, 30] m.
     """
     foot = np.asarray(foot_uv, float).reshape(-1, 2)
     head = np.asarray(head_uv, float).reshape(-1, 2)
-    g1 = apply_h(h_cam(theta, phi, 1.0, f), foot)
     out = np.full(len(foot), np.nan)
-    for i in range(len(foot)):
-        if not np.isfinite(g1[i]).all():
-            continue
-
-        def row(h: float) -> float:
-            P = np.array([[g1[i, 0] * h, g1[i, 1] * h, person_h]])
-            return float(project_world(P, theta, phi, h, f)[0, 1])
-
-        lo, hi = 0.5, 30.0
-        flo, fhi = row(lo) - head[i, 1], row(hi) - head[i, 1]
-        if not (np.isfinite(flo) and np.isfinite(fhi)) or flo * fhi > 0:
-            continue
-        for _ in range(60):
-            mid = 0.5 * (lo + hi)
-            fm = row(mid) - head[i, 1]
-            if fm * flo > 0:
-                lo, flo = mid, fm
-            else:
-                hi = mid
-        out[i] = 0.5 * (lo + hi)
+    if not len(foot):
+        return out
+    M = rotation(theta, phi)
+    g1 = apply_h(h_cam(theta, phi, 1.0, f), foot)
+    ok = np.isfinite(g1).all(1) & ground_ok(theta, phi, foot, f)
+    a = np.column_stack([g1, -np.ones(len(g1))]) @ M          # rows: M^T (g1x, g1y, -1)
+    b = M.T @ np.array([0.0, 0.0, 1.0])
+    t = (head[:, 1] - CENTER[1]) / f
+    den = b[1] - t * b[2]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s = (t * a[:, 2] - a[:, 1]) / den
+        hh = person_h / s
+    cz = a[:, 2] + s * b[2]
+    ok &= np.isfinite(hh) & (np.abs(den) > 1e-12) & (s > 0) & (cz > 1e-9) & (hh >= 0.5) & (hh <= 30.0)
+    out[ok] = hh[ok]
     return out
 
 
@@ -309,41 +306,84 @@ class FramingCal:
     flip_x: bool = False
     f: float = F_PRIOR
     extra: dict = field(default_factory=dict)
+    lines_raw: dict[str, np.ndarray] | None = None   # raw (distorted) chains of lines_undist, to redraw k1
+    k1_alt: float | None = None                       # if set, draws take k1 ~ U(k1, k1_alt) (a weak lens fit)
 
     def build(self, pts_raw: dict[str, np.ndarray] | None = None, lines: dict[str, np.ndarray] | None = None,
-              h: float = fr.MOUNT_H_PRIOR_M) -> dict:
+              h: float = fr.MOUNT_H_PRIOR_M, k1: float | None = None, orientation: dict | None = None) -> dict:
+        """H at camera height ``h``; the orientation is refitted unless given (``k1`` defaults to ``self.k1``)."""
+        k = self.k1 if k1 is None else float(k1)
         pr = self.points_raw if pts_raw is None else pts_raw
         ln = self.lines_undist if lines is None else lines
         ids = list(pr)
-        und = dict(zip(ids, undistort_cv2(np.array([pr[i] for i in ids]), self.k1, self.f)))
+        und = dict(zip(ids, undistort_cv2(np.array([pr[i] for i in ids]), k, self.f)))
         segs = {n: Segment(n, np.array([und[a], und[b]])) for n, (a, b) in self.segments.items()}
         segs.update({n: Segment(n, c) for n, c in ln.items()})
-        used = {r.a for r in self.relations} | {r.b for r in self.relations if r.b}
-        ori = fit_orientation({k: v for k, v in segs.items() if k in used}, self.relations, self.f)
+        if orientation is None:
+            used = {r.a for r in self.relations} | {r.b for r in self.relations if r.b}
+            orientation = fit_orientation({k_: v for k_, v in segs.items() if k_ in used}, self.relations, self.f)
+        ori = orientation
         th, ph = math.radians(ori["theta_deg"]), math.radians(ori["phi_deg"])
         Hc = h_cam(th, ph, h, self.f)
         T = zone_transform(Hc, und[self.origin], segs[self.axis], self.offset_xz, self.flip_x)
         H = T @ Hc
         # camera-aligned floor (0, 0) is the camera nadir
-        return {"H": H / H[2, 2], "orientation": ori, "undist": und, "nadir_xz": (T @ [0.0, 0.0, 1.0])[:2]}
+        return {"H": H / H[2, 2], "orientation": ori, "undist": und, "nadir_xz": (T @ [0.0, 0.0, 1.0])[:2],
+                "k1": k, "h": float(h)}
 
 
-def bootstrap(cal: FramingCal, h_lo: float, h_hi: float, n: int = 200, seed: int = 20261018) -> list[dict]:
-    """``n`` draws of H: placed points jittered by N(0, sigma) each, traced lines resampled (with replacement),
-    camera height drawn uniformly over [h_lo, h_hi] (the published scale interval)."""
+def draw_orientations(cal: FramingCal, n: int = 200, seed: int = 20261018) -> list[dict]:
+    """``n`` bootstrap draws of the lens and the orientation, built at the 4 m prior (``at_height`` rescales them).
+
+    Per draw: every placed point jittered by N(0, sigma) (its stated 1-sigma), every traced line resampled with
+    replacement, k1 ~ U(k1, k1_alt) when ``cal.k1_alt`` is set (lines then re-undistorted from ``cal.lines_raw``), and
+    tilt / roll refitted. Each draw keeps its inputs so the same draw can be rebuilt at any camera height.
+    """
+    if cal.k1_alt is not None:
+        missing = sorted(set(cal.lines_undist) - set(cal.lines_raw or {}))
+        if missing:
+            raise ValueError(f"{cal.framing}: k1 is drawn but raw chains are missing for {missing}")
     rng = np.random.default_rng(seed)
     out = []
     for _ in range(n):
+        k1 = cal.k1 if cal.k1_alt is None else float(rng.uniform(min(cal.k1, cal.k1_alt), max(cal.k1, cal.k1_alt)))
         pts = {k: v + rng.normal(0.0, cal.sigma_px[k], 2) for k, v in cal.points_raw.items()}
         lines = {}
         for k, c in cal.lines_undist.items():
             idx = np.sort(rng.integers(0, len(c), len(c)))
-            lines[k] = c[idx]
-        h = float(rng.uniform(h_lo, h_hi))
-        b = cal.build(pts, lines, h)
-        b["h"] = h
+            lines[k] = c[idx] if cal.k1_alt is None else fr.undistort(np.asarray(cal.lines_raw[k])[idx], k1)  # type: ignore[index]
+        b = cal.build(pts, lines, fr.MOUNT_H_PRIOR_M, k1=k1)
+        b["pts_raw"], b["lines"] = pts, lines
         out.append(b)
     return out
+
+
+def at_height(cal: FramingCal, draw: dict, h: float) -> dict:
+    """The same bootstrap draw (points, lines, k1, orientation kept) rebuilt at camera height ``h``."""
+    b = cal.build(draw["pts_raw"], draw["lines"], h, k1=draw["k1"], orientation=draw["orientation"])
+    b["pts_raw"], b["lines"] = draw["pts_raw"], draw["lines"]
+    return b
+
+
+def bootstrap(cal: FramingCal, h_lo: float, h_hi: float, n: int = 200, seed: int = 20261018) -> list[dict]:
+    """``draw_orientations`` with h drawn uniformly over [h_lo, h_hi], INDEPENDENTLY of the draw's tilt.
+
+    Only for a known, tilt-independent height range (synthetic tests). CAL v1 draws h jointly with each draw's tilt
+    (scripts/cal_v1.py ``joint_bootstrap``).
+    """
+    rng = np.random.default_rng(seed + 1)
+    return [at_height(cal, d, float(rng.uniform(h_lo, h_hi))) for d in draw_orientations(cal, n, seed)]
+
+
+def floor_of_raw(draw: dict, raw_px: np.ndarray) -> np.ndarray:
+    """Zone-frame floor points (m) of RAW (distorted) pixels under one draw (its own k1 and H)."""
+    return apply_h(draw["H"], undistort_cv2(np.asarray(raw_px, float).reshape(-1, 2), draw["k1"]))
+
+
+def displacement_raw_m(nominal: dict, draws: Sequence[dict], raw_px: np.ndarray) -> np.ndarray:
+    """(n_draws, n_pts) floor displacement (m) of RAW pixels between the nominal build and every draw (k1 per draw)."""
+    x0 = floor_of_raw(nominal, raw_px)
+    return np.array([np.linalg.norm(floor_of_raw(d, raw_px) - x0, axis=1) for d in draws])
 
 
 def displacement_m(H0: np.ndarray, Hs: Sequence[np.ndarray], uv_undist: np.ndarray) -> np.ndarray:

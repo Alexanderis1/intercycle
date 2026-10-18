@@ -130,3 +130,55 @@ def test_bootstrap_noise_widens():
     draws = C.bootstrap(cal, 4.0, 4.0, n=30)
     d = C.displacement_m(b0["H"], [x["H"] for x in draws], np.array([b0["undist"]["q3"]]))
     assert np.percentile(d, 95) > 1e-3
+
+
+def test_person_height_closed_form_rejects_bad_boxes():
+    foot_w = np.array([[0.5, 7.0, 0.0]])
+    foot = C.project_world(foot_w, TH, PH, H)
+    head = C.project_world(foot_w + np.array([0.0, 0.0, C.WALKER_H_M]), TH, PH, H)
+    above = np.array([[960.0, -400.0]])                    # above the horizon (row -167 at tilt 28 deg, f 1330)
+    hs = C.person_height_h(np.vstack([foot, above]), np.vstack([head, above - [0.0, 50.0]]), TH, PH)
+    assert hs[0] == pytest.approx(H, abs=1e-6) and np.isnan(hs[1])
+    # the head drawn BELOW the foot is no upright person
+    assert np.isnan(C.person_height_h(foot, foot + [0.0, 40.0], TH, PH)).all()
+
+
+def test_at_height_rescales_one_draw_about_the_origin():
+    cal, *_ = _cal(sigma=2.0)
+    d = C.draw_orientations(cal, n=3, seed=1)
+    for x in d:
+        assert x["h"] == 4.0
+        a = C.floor_of_raw(x, cal.points_raw["q3"])
+        b = C.floor_of_raw(C.at_height(cal, x, 5.0), cal.points_raw["q3"])
+        assert np.allclose(b, a * 5.0 / 4.0, atol=1e-9)       # origin at a placed point, no offset: pure scaling
+        assert C.at_height(cal, x, 5.0)["orientation"] is x["orientation"]
+
+
+def test_k1_is_drawn_between_fit_and_alternative():
+    cal, *_ = _cal(sigma=0.0)
+    cal.lines_raw = {k: fr.distort(v, cal.k1) for k, v in cal.lines_undist.items()}
+    cal.k1_alt = 2.0 * cal.k1
+    d = C.draw_orientations(cal, n=20, seed=2)
+    k = np.array([x["k1"] for x in d])
+    assert (k <= cal.k1 + 1e-18).all() and (k >= cal.k1_alt - 1e-18).all() and k.std() > 0
+    # a wrong k1 bends the lines: the refitted orientation moves, the zero-noise nominal does not
+    b0 = cal.build()
+    disp = C.displacement_raw_m(b0, d, np.array([cal.points_raw["q4"]]))
+    assert disp.max() > 1e-3
+    cal.lines_raw = None
+    with pytest.raises(ValueError):
+        C.draw_orientations(cal, n=1)
+
+
+def test_person_height_solves_every_visible_upright_person():
+    # regression: the old per-box bisection bracketed h in [0.5, 30] m; at 0.5 m the 1.72 m head is above the camera
+    # and the projected row wraps, so the bracket had no sign change and ~38 % of c9_f0's boxes were silently dropped
+    th, ph = math.radians(32.7), math.radians(2.4)
+    xs, ys = np.meshgrid(np.linspace(-6, 6, 9), np.linspace(3, 20, 9))
+    foot_w = np.column_stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)])
+    foot = C.project_world(foot_w, th, ph, H)
+    head = C.project_world(foot_w + np.array([0.0, 0.0, C.WALKER_H_M]), th, ph, H)
+    vis = (foot[:, 0] > 0) & (foot[:, 0] < fr.W) & (foot[:, 1] < fr.H_IMG) & (head[:, 1] > 0)
+    assert vis.sum() > 20
+    hs = C.person_height_h(foot[vis], head[vis], th, ph)
+    assert np.allclose(hs, H, atol=1e-6)
