@@ -29,6 +29,8 @@ documented PLACEHOLDER and `require_measured(consts, sealed=True)` refuses them 
 """
 from __future__ import annotations
 
+import math
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field, fields, replace
 
 import numpy as np
@@ -340,19 +342,28 @@ def _chain(ia: np.ndarray, ib: np.ndarray, dur: np.ndarray, act: float, p0: floa
            lo: int, hi: int) -> list[int]:
     """Best pulse chain among pulses lo..hi-1. The next fall is expected `act` after the previous rise
     (survives a stop) or `p0` after the previous fall (survives a rise bent by an occlusion burst), each
-    within +-w; the longest pulse in either window wins (dropouts are short). -1 marks a missed cycle."""
-    ss = lambda x, side="left": int(np.searchsorted(ia, x, side))
+    within +-w; the longest pulse in either window wins (dropouts are short). -1 marks a missed cycle.
+
+    Speed (lane obs-speed, no behaviour change): plain-Python lists + bisect instead of per-step numpy scalar calls.
+    ia is sorted (idle starts in time order), so bisect_left / bisect_right == np.searchsorted left / right; the
+    candidates are the sorted union of the two windows' index ranges (== np.union1d) and the first longest pulse in
+    that order wins (== np.argmax); float64 values and arithmetic are the same IEEE doubles."""
+    ial, ibl, durl = ia.tolist(), ib.tolist(), dur.tolist()
     best: list[int] = []
     for s in range(lo, hi):
         seq, cur, miss = [s], s, 0
-        e1, e2 = ib[s] + act, ia[s] + p0
-        while np.isfinite(ib[cur]) and e1 - w <= t1:
-            a = np.union1d(np.arange(max(ss(e1 - w), cur + 1), min(ss(e1 + w, "right"), hi)),
-                           np.arange(max(ss(e2 - w), cur + 1), min(ss(e2 + w, "right"), hi))).astype(int)
-            if len(a):
-                cur, miss = int(a[np.argmax(dur[a])]), 0
+        e1, e2 = ibl[s] + act, ial[s] + p0
+        while math.isfinite(ibl[cur]) and e1 - w <= t1:
+            a = sorted(set(range(max(bisect_left(ial, e1 - w), cur + 1), min(bisect_right(ial, e1 + w), hi)))
+                       | set(range(max(bisect_left(ial, e2 - w), cur + 1), min(bisect_right(ial, e2 + w), hi))))
+            if a:
+                k = a[0]
+                for j in a[1:]:
+                    if durl[j] > durl[k]:
+                        k = j
+                cur, miss = k, 0
                 seq.append(cur)
-                e1, e2 = ib[cur] + act, ia[cur] + p0
+                e1, e2 = ibl[cur] + act, ial[cur] + p0
             else:
                 miss += 1
                 if miss > 2:
