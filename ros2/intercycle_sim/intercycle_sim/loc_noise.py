@@ -25,6 +25,8 @@ import numpy as np
 START_DXY = 0.5
 START_DPSI = math.radians(10.0)
 ROBOT_R = 0.55                    # body half-length 0.5 m + margin: the disc that must still pass between clutter
+FOOT_HALF = (0.50, 0.32)          # robot footprint half-length / half-width (nav2.yaml), checked at the start heading
+FOOT_CLEAR_M = 0.05               # ASSUMED clearance between the start footprint and any static box
 CLEAR_R = 1.5                     # no clutter within this distance of a keep-clear point
 # ASSUMED catalogue: (cls, length, width, height), all above the lidar plane
 CATALOGUE = (("clutter_pallet_loaded", 1.2, 0.8, 1.2), ("clutter_cart", 1.0, 0.6, 1.0), ("clutter_bin", 0.6, 0.4, 0.9))
@@ -41,21 +43,38 @@ def _box_gap(x: float, y: float, boxes: list[dict]) -> float:
     return float(np.hypot(np.maximum(lx - b[:, 2], 0), np.maximum(ly - b[:, 3], 0)).min())
 
 
+def footprint_hits(x: float, y: float, psi: float, boxes: list[dict], clear_m: float = FOOT_CLEAR_M,
+                   half: tuple[float, float] = FOOT_HALF) -> bool:
+    """True if the robot's ORIENTED footprint (half-length x half-width at heading psi), grown by clear_m on every side,
+    overlaps any static box footprint (exact separating-axis test; the corner radius hypot(0.50, 0.32) = 0.594 m is
+    what a centre-distance check misses)."""
+    if not boxes:
+        return False
+    from intercycle_sim.safety_scanner import _boxes_overlap, _rect_corners
+
+    b = np.array([(q["cx"], q["cy"], q["w"] / 2, q["d"] / 2, q["yaw"]) for q in boxes], float)
+    fa = _rect_corners(x, y, half[0] + clear_m, half[1] + clear_m, psi)
+    fb = _rect_corners(b[:, 0], b[:, 1], b[:, 2], b[:, 3], b[:, 4])
+    return bool(_boxes_overlap(fa, fb).any())
+
+
 def perturb_start(nominal: tuple[float, float, float], seed: int, boxes: list[dict] | None = None,
-                  dxy: float = START_DXY, dpsi: float = START_DPSI, clear_m: float = ROBOT_R,
+                  dxy: float = START_DXY, dpsi: float = START_DPSI, clear_m: float = FOOT_CLEAR_M,
                   max_tries: int = 200) -> dict:
     """{"true": [x, y, psi] (simulator start), "belief": nominal (the robot's initial pose), "error": [dx, dy, dpsi]}.
-    Deterministic in seed. Raises if no collision-free pose is found (fail closed: never silently the exact pose)."""
+    The drawn pose is accepted only if the oriented footprint at the DRAWN heading, grown by clear_m, touches no static
+    box (footprint_hits). Deterministic in seed. Raises if no collision-free pose is found (fail closed: never silently
+    the exact pose)."""
     rng = np.random.default_rng(int(seed))
     x0, y0, p0 = (float(v) for v in nominal)
     for _ in range(max_tries):
         ex, ey = rng.uniform(-dxy, dxy, 2)
         ep = rng.uniform(-dpsi, dpsi)
         x, y = x0 + float(ex), y0 + float(ey)
-        if _box_gap(x, y, boxes or []) > clear_m:
-            psi = math.atan2(math.sin(p0 + ep), math.cos(p0 + ep))
+        psi = math.atan2(math.sin(p0 + ep), math.cos(p0 + ep))
+        if not footprint_hits(x, y, psi, boxes or [], clear_m):
             return {"true": [x, y, psi], "belief": [x0, y0, p0], "error": [float(ex), float(ey), float(ep)],
-                    "seed": int(seed), "range": {"dxy_m": dxy, "dpsi_rad": dpsi}}
+                    "seed": int(seed), "range": {"dxy_m": dxy, "dpsi_rad": dpsi}, "clear_m": clear_m}
     raise RuntimeError(f"perturb_start: no collision-free start within +-{dxy} m of {nominal}")
 
 

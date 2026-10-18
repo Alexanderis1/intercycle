@@ -50,7 +50,10 @@ def test_perturb_start_is_seeded_bounded_and_collision_free():
     assert (np.abs(errs[:, :2]) <= 0.5).all() and (np.abs(errs[:, 2]) <= math.radians(10.0) + 1e-12).all()
     assert np.abs(errs[:, :2]).max() > 0.4 and np.abs(errs[:, 2]).max() > math.radians(8.0)    # the full range is used
     near_wall = L.perturb_start((0.7, 5.0, 0.0), 3, boxes)
-    assert L._box_gap(near_wall["true"][0], near_wall["true"][1], boxes) > L.ROBOT_R
+    assert L._box_gap(near_wall["true"][0], near_wall["true"][1], boxes) > L.FOOT_HALF[1]
+    for s in range(100):                                         # every accepted start: footprint clear at its heading
+        st = L.perturb_start((0.75, 5.0, math.pi / 4), s, boxes)
+        assert not L.footprint_hits(*st["true"], boxes, clear_m=L.FOOT_CLEAR_M - 1e-9)
     with pytest.raises(RuntimeError):
         L.perturb_start((10.0, 2.0, 0.0), 1, boxes)            # inside the wall: no valid pose, fail closed
 
@@ -104,3 +107,16 @@ def test_lidar_sees_the_clutter_the_map_does_not_have():
     r0 = lid0.true_ranges(ox, oy, 0.6, psi, None)[180]
     r1 = lid1.true_ranges(ox, oy, 0.6, psi, None)[180]
     assert r1 < math.hypot(it["cx"] - ox, it["cy"] - oy) + 1e-6 and r1 < r0     # a return where the map is free
+
+
+def test_oriented_footprint_catches_the_corner_a_centre_check_misses():
+    """Audit fix 8: corner radius hypot(0.50, 0.32) = 0.594 m > the old centre clearance 0.55 m."""
+    wall = [{"id": "w", "cls": "wall", "cx": -0.05, "cy": 0.0, "w": 0.1, "d": 10.0, "yaw": 0.0, "h": 4.0}]   # face x = 0
+    corner = math.atan2(0.32, 0.50)
+    x = 0.57                                                    # centre 0.57 m from the face: passed the old check
+    assert L._box_gap(x, 0.0, wall) > 0.55
+    assert L.footprint_hits(x, 0.0, math.pi + corner, wall, clear_m=0.0)   # a corner points at the wall: overlap
+    assert not L.footprint_hits(x, 0.0, math.pi / 2, wall, clear_m=0.0)    # side-on: 0.32 m half-width, clear
+    assert L.footprint_hits(0.53, 0.0, 0.0, wall, clear_m=0.05)            # 0.03 m gap < the 0.05 m clearance
+    assert not L.footprint_hits(0.56, 0.0, 0.0, wall, clear_m=0.05)
+
