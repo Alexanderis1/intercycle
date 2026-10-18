@@ -356,7 +356,10 @@ def remote_observer_phase(job: dict, plant_dir: Path, vol_root: Path) -> dict:
     site, dyn = load(Site, REPO / job["site"]), load(Dynamics, REPO / job["dynamics"])
     margin = Path("/tmp") / f"{job['tag']}_m7_margin.json"
     margin.write_bytes(job["margin"])
-    ctx = {"spec": job["spec"], "margin": margin, "site": site, "dyn": dyn, "stub": bool(job["stub"])}
+    # _camera picks the camera from the site FILE name (StubCameraV0 on the G0 stub site, else stat_v1), so the remote
+    # ctx carries the shipped site / dynamics paths as setup() does locally (without it: KeyError 'paths' on Modal)
+    ctx = {"spec": job["spec"], "margin": margin, "site": site, "dyn": dyn, "stub": bool(job["stub"]),
+           "paths": {"site": REPO / job["site"], "dynamics": REPO / job["dynamics"]}}
     scripts = {int(d): load_day_script(plant_dir / name) for d, name in job["days"].items()}
     world = TB.World(**job["world"])
     mode = str(job.get("observer_mode", DEFAULT_OBSERVER_MODE))
