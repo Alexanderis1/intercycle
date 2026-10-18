@@ -14,8 +14,16 @@ Real-clip PERC output -> Observation v2, one framing (= one camera polygon) at a
            not used for this: it is the traced visible FLOOR, which leaves out the press bodies and the floor they hide,
            so it covers only 2-40 % of each machine zone and made every tick MISSING (S4-pixel audit).
   frames   the clip decoded at 2 Hz -> the M-W10 image watchdog (reference = `reference_from_frames` on the framing's
-           TRAIN keyframes) -> floor_ok, ANDed into cam_floor_ok by `mapping.ObsV2Converter` (which also applies the
-           T-W6 occlusion hold on the person / vehicle detections).
+           TRAIN keyframes) -> floor_ok, ANDed into cam_floor_ok by `mapping.mask_cameras`.
+
+Occlusion = MISSING on REAL clips is the IMAGE-SPACE ram-ROI rule (USER DECISION Sun ~07:00), not the twin's floor
+rule: a press's zone_motion is MISSING exactly where PERC's machines `missing` flag says so, and PERC computes that flag
+with `intercycle.observer.occlusion.roi_missing_series` (an occluder box overlapping the press's ram ROI in the image,
+`box_hits_roi` with ROI_PAD_FRAC, held occ_hold_s; esk_ingest step 7), plus frame 0 and every sample without a flow
+value. The adapter therefore applies no floor-space occlusion of its own (`mapping.ObsV2Converter` / `_occlude`, the
+person-near-the-zone rule, is the TWIN's rule and stays unchanged there): on real framings the floor polygon around a
+press is mostly hidden by the press body, so the floor rule fired on any worker near a press and made ~97 % of the
+dev window ticks MISSING even with the ram ROI in clear view (results/dev/realclip_dev.json before this change).
 
 "Spatial only": positions, machine-zone membership, visibility and MISSING. No phase or map learning from real clips
 (PLAN_TWIN §6 cut). Detection radius and heading are not measured from pixels: r is a per-class constant, heading NaN,
@@ -159,17 +167,16 @@ class PixelAdapter:
             raise ValueError(f"framing {geom.framing} has no fitted H: no Observation (PLAN §5)")
         self.geom = geom
         self.wd = WD.CameraWatchdog(params, ref)
-        self.conv = OM.ObsV2Converter(geom.share, geom.rects)
         self.last_health: WD.CamHealth | None = None
 
     def reset(self) -> None:
         self.wd.reset()
-        self.conv.reset()
 
     def step(self, t: float, dets: pd.DataFrame, frame: np.ndarray | None,
              motion: Mapping[str, float]) -> OM.Observation:
         """dets: rows with class, u, v (foot point, full-res px) at this tick; frame: the decoded image (None = none);
-        motion: {press id: ROI energy, NaN = MISSING}."""
+        motion: {press id: ROI energy, NaN = MISSING}: PERC's image-space ram-ROI occlusion flag is already in it
+        (`motion_at`), and it is the only occlusion rule applied here (no floor rule on real clips)."""
         g = self.geom
         cls = [str(c) for c in dets["class"]] if len(dets) else []
         keep = [c in CLASS_CODE for c in cls]
@@ -192,7 +199,7 @@ class PixelAdapter:
                              moving=np.zeros(n, bool), machine=machine_of(xz, g.rects), cam_ok=cam_ok,
                              zone_motion=zm.astype(np.float32), zone_vis=vis.astype(np.float32),
                              cam_floor_ok=cam_ok.copy())
-        return self.conv(obs, floor_ok=np.array([h.ok], bool))
+        return OM.mask_cameras(obs, np.array([h.ok], bool), g.share)
 
 
 def _nearest_rows(df: pd.DataFrame, t: float, tol: float) -> pd.DataFrame:
