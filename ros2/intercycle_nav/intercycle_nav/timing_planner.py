@@ -11,11 +11,14 @@ Outputs: Nav2 goals; /intercycle/inspection (String JSON: dwell_start / dwell_en
          intercycle_sim/send_goal.py: result, time_to_goal_s, ... plus "targets": per-target records).
 Per target: walk to the wait pose at the hazard boundary (facing the machine) -> wait for an open predicted idle window
 with need_s left AND the camera's no-motion confirmation -> enter -> dwell -> exit to the wait pose.
-Initial pose (R-W4 start-pose noise, audit fix 4): after Nav2 is active the planner publishes /initialpose itself as a
-PoseWithCovarianceStamped with the covariance of the start-pose draw (timing.initial_pose_covariance; parameters
-init_spread_xy_m 0.5, init_spread_yaw_deg 10), because setInitialPose sends a zero covariance. It republishes every 1 s
-until AMCL answers on amcl_pose with a non-zero covariance (max 30 s sim time); goal.json "initial_pose" records the
-covariance sent and whether AMCL acknowledged it.
+Initial pose (R-W4 start-pose noise, audit fix 4; fix round 2): when the episode applied start noise, after Nav2 is
+active the planner publishes /initialpose itself as a PoseWithCovarianceStamped with the covariance of the start-pose
+draw (timing.initial_pose_covariance; parameters init_spread_xy_m, init_spread_yaw_deg), because setInitialPose sends a
+zero covariance. The spread defaults to 0 (exact start: body-shop R3 runs keep AMCL on the exact pose as before); the
+default is taken from $IC_INIT_SPREAD_XY_M / $IC_INIT_SPREAD_YAW_DEG, which episode.py exports (the start-noise range
+when it applied start noise, 0 otherwise), and an explicit -p overrides it. It republishes every 1 s until AMCL answers
+on amcl_pose with every component that was sent non-zero also non-zero (initial_pose.ack_ok; max 30 s sim time);
+goal.json "initial_pose" records the covariance sent and whether AMCL acknowledged it.
 """
 from __future__ import annotations
 
@@ -34,9 +37,10 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
 from intercycle import scenario as S
+from intercycle_nav.initial_pose import ack_ok, spread_components
 from intercycle_nav.masks import assert_no_truth
-from intercycle_nav.timing import (INIT_SPREAD_XY_M, INIT_SPREAD_YAW_DEG, CameraGate, TimingCore, camera_stub_used,
-                                   initial_pose_covariance, interrupted_result, window_open)
+from intercycle_nav.timing import (CameraGate, TimingCore, camera_stub_used, initial_pose_covariance, interrupted_result,
+                                   window_open)
 
 RESULT = {TaskResult.SUCCEEDED: "SUCCEEDED", TaskResult.CANCELED: "CANCELED", TaskResult.FAILED: "FAILED"}
 # conditions whose entry rule needs an open idle window, (a) + (b); reactive (E-W4) gets its windows from its own camera
@@ -59,8 +63,10 @@ class Planner:
         self.out = str(dp("out", os.path.join(os.environ.get("IC_WORK", "/tmp"), "goal.json")).value)
         self.require_camera = bool(dp("require_camera", True).value)
         self.backup_speed = float(dp("backup_speed", 0.35).value)
-        self.init_cov = initial_pose_covariance(float(dp("init_spread_xy_m", INIT_SPREAD_XY_M).value),
-                                                float(dp("init_spread_yaw_deg", INIT_SPREAD_YAW_DEG).value))
+        # spread 0 unless the episode applied start noise (it exports the range; fix round 2)
+        self.init_cov = initial_pose_covariance(
+            float(dp("init_spread_xy_m", float(os.environ.get("IC_INIT_SPREAD_XY_M", "0") or 0.0)).value),
+            float(dp("init_spread_yaw_deg", float(os.environ.get("IC_INIT_SPREAD_YAW_DEG", "0") or 0.0)).value))
         self.entry_slack = float(dp("entry_slack_s", 3.0).value)       # entry deadline = enter_s + slack        # exit speed (m/s); 0 = exit with a NavigateToPose goal
         sp = dp("scenario", "").value
         scn = S.load(sp) if sp else S.load()
@@ -114,7 +120,7 @@ class Planner:
         if self._init_pub_t is None or self._amcl_ack is not None:
             return
         cov = [float(v) for v in m.pose.covariance]
-        if self.ros_t() >= self._init_pub_t and cov[0] > 1e-6 and cov[7] > 1e-6:
+        if self.ros_t() >= self._init_pub_t and ack_ok(self.init_cov, cov):
             self._amcl_ack = cov
 
     def initial_pose_msg(self) -> PoseWithCovarianceStamped:
@@ -129,7 +135,7 @@ class Planner:
         """Publish the believed start pose with the start-noise covariance until AMCL acknowledges it (see module doc)."""
         rec = {"pose": list(self.init), "covariance_sent": {"xx": self.init_cov[0], "yy": self.init_cov[7],
                                                               "yawyaw": self.init_cov[35]}, "acknowledged": False}
-        if self.init_cov[0] <= 0.0 and self.init_cov[35] <= 0.0:
+        if not spread_components(self.init_cov):
             rec["note"] = "spread 0: zero covariance (setInitialPose only)"
             return rec
         t0, last = self.ros_t(), None
