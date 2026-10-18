@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -14,10 +15,16 @@ from intercycle.codec.trust import TrustError, TrustStore, issue_cert
 from intercycle.margin_inflate import SCHEMA, Margin, inflation_spec
 from intercycle.observer import learn_cycles as LC
 from intercycle.observer import mapping as M
-from intercycle.types import DAY0_UNIX, State
+from intercycle.codec.layout import encode_fast, encode_slow
+from intercycle.codec.sign import sign
+from intercycle.codec.trust import key_id_of
+from intercycle.types import DAY0_UNIX, FastLayer, MachineNow, SlowLayer, State
 from twin import observer_live as OL
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "ros2" / "intercycle_nav"))
+from intercycle_nav import feed as F  # noqa: E402  # pyright: ignore[reportMissingImports]  (ros2 package dir, added above)
+from intercycle_nav import masks as K  # noqa: E402  # pyright: ignore[reportMissingImports]
 PRESSES = [dict(id="P1", kind="press", rect=(2.0, 2.0, 4.0, 4.0)), dict(id="P2", kind="press", rect=(12.0, 2.0, 14.0, 4.0))]
 PERIODS = (1.6, 2.5)
 SPEC = OL.twin_spec(PRESSES, (0.0, 0.0, 20.0, 8.0), [(4.0, 4.0), (14.0, 4.0)], site_id=7, key_id=1)
@@ -32,10 +39,12 @@ def margin_file(tmp_path: Path, margin_m: float = 0.5, cell_m: float = 0.25, fro
     return str(p)
 
 
-def stream(minutes: float = 20.0, nan_share: float = 0.10, seed: int = 0, stop=None):
+def stream(minutes: float = 20.0, nan_share: float = 0.10, seed: int = 0, stop=None, part_dx: float = 0.0,
+           still_part: bool = True):
     """Synthetic 2 Hz Observation v2 ticks: two presses stroking every PERIODS s (1 % jitter, ram moving 40 % of the
     cycle), a PART detection on each ram (moving while it strokes), one walker, MISSING bursts on zone_motion.
-    `stop` = (press index, t0, t1): that press does not stroke inside [t0, t1)."""
+    `stop` = (press index, t0, t1): that press does not stroke inside [t0, t1). part_dx shifts the ram detections along
+    x; still_part=False emits a ram's PART detection only while it moves (a still ram is not a moving part)."""
     rng = np.random.default_rng(seed)
     n = int(minutes * 60 * 2)
     t = T0 + 0.5 * np.arange(n) + 0.13
@@ -56,12 +65,14 @@ def stream(minutes: float = 20.0, nan_share: float = 0.10, seed: int = 0, stop=N
         zm = np.where(miss[j], np.nan, act[j].astype(float)).astype(np.float32)
         zv = np.where(miss[j], 0.5, 1.0).astype(np.float32)
         wx = 8.0 + 3.0 * np.sin(j / 50.0)
+        keep = np.array([still_part or act[j, 0], still_part or act[j, 1], True])
         cls = np.array([M.PART, M.PART, M.PERSON], np.int8)
         out.append(M.Observation(
-            t=float(t[j] + 0.2), t_cap=float(t[j]), cls=cls,
-            x=np.array([3.0, 13.0, wx]), z=np.array([3.0, 3.0, 6.5]), r=np.array([0.4, 0.4, 0.3]),
-            heading=np.array([np.nan, np.nan, 0.0]), moving=np.array([act[j, 0], act[j, 1], True]),
-            machine=np.array([0, 1, -1], np.int16), cam_ok=np.ones(2, bool), zone_motion=zm, zone_vis=zv,
+            t=float(t[j] + 0.2), t_cap=float(t[j]), cls=cls[keep],
+            x=np.array([3.0 + part_dx, 13.0 + part_dx, wx])[keep], z=np.array([3.0, 3.0, 6.5])[keep],
+            r=np.array([0.4, 0.4, 0.3])[keep], heading=np.array([np.nan, np.nan, 0.0])[keep],
+            moving=np.array([act[j, 0], act[j, 1], True])[keep],
+            machine=np.array([0, 1, -1], np.int16)[keep], cam_ok=np.ones(2, bool), zone_motion=zm, zone_vis=zv,
             cam_floor_ok=np.ones(2, bool)))
     return out
 
@@ -248,18 +259,53 @@ def test_margin_is_read_from_the_frozen_json_and_applied(run, tmp_path):
         OL.ObserverLive(SPEC, OL.ObserverLiveConfig(margin_path=str(tmp_path / "missing.json")))
 
 
-def test_inflated_cells_are_broadcast_unknown(run):
+def _centres(ob, i: int, mask: np.ndarray):
+    res = SPEC["env_res"]
+    ix, iz = np.nonzero(mask)
+    return zip(ob.map.l1_x0[i] + (ix + 0.5) * res, ob.map.l1_z0[i] + (iz + 0.5) * res)
+
+
+def _covered(boxes, x: float, z: float) -> bool:
+    return any(r[0] <= x <= r[2] and r[1] <= z <= r[3] for r in np.asarray(boxes, float).reshape(-1, 4))
+
+
+def test_only_detector_unknown_cells_are_broadcast_unknown(run):
+    """Option B: unknown_rects = the live map's own + the detector's UNKNOWN cells (CUSUM, fail-closed unlearned),
+    inflated by the margin. The learned running envelope of P1 is NOT broadcast as UNKNOWN."""
     ob, _, _ = run
     m = ob.map_snapshot()
-    res = SPEC["env_res"]
-    i = 0
-    q = ob.inflated_l1(i)
-    ix, iz = np.nonzero(q)
-    cx = ob.map.l1_x0[i] + (ix + 0.5) * res
-    cz = ob.map.l1_z0[i] + (iz + 0.5) * res
-    for x, z in zip(cx, cz):
-        assert any(r[0] <= x <= r[2] and r[1] <= z <= r[3] for r in m.unknown_rects)
-    assert ob.map.unknown_rects is not m.unknown_rects     # the live map is not modified
+    assert isinstance(m, OL.TwinMapSnapshot)
+    for i in range(ob.M):
+        U = ob.unknown_l1(i)
+        assert (U | ~ob.det.unknown_mask(ob.ids[i])).all()          # inflation only grows the detector's set
+        for x, z in _centres(ob, i, U):
+            assert _covered(m.unknown_rects, x, z)
+    assert ob.map.unknown_rects is not m.unknown_rects             # the live map is not modified
+    env0 = np.asarray(ob.map.envelope("P1", 0, ob.det.cfg.p_min), bool) & ~ob.unknown_l1(0)
+    assert env0.any()
+    assert not all(_covered(m.unknown_rects, x, z) for x, z in _centres(ob, 0, env0))
+
+
+def test_every_running_bin_is_broadcast_as_the_inflated_bin0_envelope(run):
+    ob, _, _ = run
+    m = ob.map_snapshot()
+    for i, pid in enumerate(ob.ids):
+        b0 = m.box_cover(pid, 0)
+        for b in range(M.N_PHASE):
+            assert np.array_equal(m.envelope(pid, b), m.envelope(pid, 0))
+            assert np.array_equal(m.box_cover(pid, b), b0)
+        for x, z in _centres(ob, i, inflate_env(ob, pid, 0)):
+            assert _covered(b0, x, z)
+        for x, z in _centres(ob, i, inflate_env(ob, pid, M.STOP_BIN)):
+            assert _covered(m.box_cover(pid, M.STOP_BIN), x, z)
+    with pytest.raises(ValueError):
+        OL.twin_bin(17)
+    assert ob.map._cover_cache is not m._cover_cache               # the live map's covers stay un-inflated
+
+
+def inflate_env(ob, pid: str, b: int) -> np.ndarray:
+    from intercycle.margin_inflate import inflate
+    return inflate(np.asarray(ob.map.envelope(pid, b, ob.det.cfg.p_min), bool), ob.margin, cell_m=SPEC["env_res"])
 
 
 # ---------------------------------------------------------------- placeholders in a sealed run
@@ -289,20 +335,132 @@ def test_time_of_day_structure_is_tagged_assumed(run):
     assert run[0].diagnostics()["tags"]["time_of_day"].startswith("ASSUMED")
 
 
-def test_m7_application_is_disclosed_and_covers_the_running_envelope(run):
-    """Audit S6 #3 (lead decision pending): the inflated bin-0 / STOP_BIN union is broadcast as UNKNOWN boxes valid in
-    every bin, so every cell of a press's learned running envelope is UNKNOWN to the robot. Disclosed in the run tags;
-    this test fails if the behaviour changes without the tag being revisited."""
+def test_m7_application_tag_states_option_b(run):
     ob, _, _ = run
-    assert ob.diagnostics()["tags"]["m7_application"].startswith("DISCLOSED")
-    m = ob.map_snapshot()
-    res = SPEC["env_res"]
-    for i, pid in enumerate(ob.ids):
-        env = np.asarray(ob.map.envelope(pid, 0, ob.det.cfg.p_min), bool)
-        assert env.any()
-        ix, iz = np.nonzero(env)
-        for x, z in zip(ob.map.l1_x0[i] + (ix + 0.5) * res, ob.map.l1_z0[i] + (iz + 0.5) * res):
-            assert any(r[0] <= x <= r[2] and r[1] <= z <= r[3] for r in m.unknown_rects)
+    tag = ob.diagnostics()["tags"]["m7_application"]
+    assert tag.startswith("LEAD DECISION") and "option B" in tag and "calibration_pred" in tag
+    a = ob.availability()
+    assert set(a["closed_share"]) == {"running", "stopped", "union"}
+    assert a["closed_share"]["union"] >= max(a["closed_share"]["running"], a["closed_share"]["stopped"])
+
+
+# ---------------------------------------------------------------- option B on the robot side (end to end)
+@pytest.fixture(scope="module")
+def still_run(tmp_path_factory):
+    """P1's ram sits at the edge of its zone rect (part_dx 0.9: its envelope reaches outside the rect) and is a PART
+    only while it moves; P1 stops for 60 s (STOP_BIN learned, empty envelope); P2 never stops (fail closed)."""
+    d = tmp_path_factory.mktemp("still")
+    obs = stream(stop=(0, T0 + 600.0, T0 + 660.0), part_dx=0.9, still_part=False)
+    p = d / "obs_v2.jsonl"
+    write_jsonl(p, obs)
+    ob = OL.ObserverLive(SPEC, OL.ObserverLiveConfig(margin_path=margin_file(d)), obs_path=p)
+    ob.advance(obs[-1].t)
+    return ob, obs
+
+
+def _robot(ob, t: float, nows: list[tuple[State, int]]):
+    """The robot's verified view after one signed broadcast of ob's slow + map and a crafted fast layer."""
+    now_u = DAY0_UNIX + t
+    root, key = SigningKey.generate(), SigningKey.generate()
+    ring = _store(key, root, now_u).keyring_at(now_u)
+    kid = key_id_of(key.verify_key)
+    site = K.Site([d["id"] for d in PRESSES], {d["id"]: tuple(map(float, d["rect"])) for d in PRESSES}, [],
+                  SPEC["site_id"], kid, (0.0, 0.0, 20.0, 8.0), on_line={d["id"]: False for d in PRESSES},
+                  own_stop={d["id"]: True for d in PRESSES})
+    st = K.ObserverState(site, dict(ring))
+    out = ob.sign_layers(key, t, ring)
+    for k, fr in enumerate(out["map"].carousel()):
+        st.ingest(t + k * 1e-4, F.FRAME + fr)
+    s = ob.slow(t)
+    st.ingest(t, F.BLOB + sign(encode_slow(SlowLayer(s.site_id, kid, s.issue_time, [], s.machines)), key))
+    fast = [MachineNow(i, sv, 0.3 if sv == State.ACTIVE else 0.0, 0.5, 10.0, c, 1) for i, (sv, c) in enumerate(nows)]
+    st.ingest(t, F.BLOB + sign(encode_fast(FastLayer(s.site_id, kid, DAY0_UNIX + t, 1, fast)), key))
+    view = st.map_view(t + 0.5)
+    assert view is not None, st.all_stats()
+    snap = st.snapshot(t + 0.5)
+    return site, view, snap
+
+
+GRID = K.Grid(0.0, 0.0, 0.25, 80, 32)
+
+
+def _outside_cells(ob, site) -> np.ndarray:
+    """Keep-out grid cells of P1's inflated bin-0 envelope that lie outside its zone rect grown by the mask's
+    inflate_m (the rect itself is the light-curtain rule's, closed while no idle window covers the horizon)."""
+    p = K.MaskParams()
+    x0, z0, x1, z1 = site.rects["P1"]
+    g = p.inflate_m + GRID.res
+    sel = np.zeros((GRID.nx, GRID.ny), bool)
+    for x, z in _centres(ob, 0, inflate_env(ob, "P1", 0)):
+        if not (x0 - g <= x <= x1 + g and z0 - g <= z <= z1 + g):
+            sel[int(x / GRID.res), int(z / GRID.res)] = True
+    return sel
+
+
+def test_confident_stop_opens_the_danger_cells_running_keeps_them_closed(still_run):
+    ob, obs = still_run
+    t = obs[-1].t_cap
+    assert ob.availability()["unlearned"]["per_machine"]["P1"] == 0.0
+    assert not np.asarray(ob.map.envelope("P1", M.STOP_BIN, ob.det.cfg.p_min), bool).any()   # still ram: no part
+    site, view, snap = _robot(ob, t, [(State.STOPPED, 8), (State.ACTIVE, 8)])
+    assert snap.prod == M.RUNNING
+    p = K.MaskParams()
+    sel = _outside_cells(ob, site)
+    assert sel.any()
+    g_stop, info = K.keepout_mask(GRID, "learned", site, snap, view, p)
+    assert info["bins"]["P1"]["bins"] == 1                                   # (STOP_BIN,)
+    assert (g_stop[sel] == K.FREE).all()
+    site, view, snap = _robot(ob, t, [(State.ACTIVE, 8), (State.ACTIVE, 8)])
+    g_run, info = K.keepout_mask(GRID, "learned", site, snap, view, p)
+    assert info["bins"]["P1"]["bins"] != "all"                               # cycling: running bins, bin-0 envelope
+    assert (g_run[sel] == K.KEEP_OUT).all()
+
+
+@pytest.mark.parametrize("now", [(State.UNKNOWN, 0), (State.STOPPED, 3), (State.IDLE, 2), None])
+def test_unknown_missing_or_low_confidence_keeps_the_danger_cells_closed(still_run, now):
+    ob, obs = still_run
+    t = obs[-1].t_cap
+    nows = [(State.UNKNOWN, 0) if now is None else now, (State.ACTIVE, 8)]
+    site, view, snap = _robot(ob, t, nows)
+    if now is None:                                                          # no fast entry for P1 at all
+        snap.machines[0] = K.MachineView("P1", 0, "UNKNOWN", None, None)
+    g, info = K.keepout_mask(GRID, "learned", site, snap, view, K.MaskParams())
+    assert info["bins"]["P1"]["bins"] == "all"
+    assert (g[_outside_cells(ob, site)] == K.KEEP_OUT).all()
+
+
+def test_fail_closed_press_stays_closed_even_when_stopped(still_run):
+    """P2 never stopped: its STOP_BIN is unlearned, so its whole grid is broadcast UNKNOWN (M-W4 lead decision) and a
+    confident STOPPED opens nothing."""
+    ob, obs = still_run
+    t = obs[-1].t_cap
+    site, view, snap = _robot(ob, t, [(State.ACTIVE, 8), (State.STOPPED, 8)])
+    g, info = K.keepout_mask(GRID, "learned", site, snap, view, K.MaskParams())
+    assert info["bins"]["P2"]["bins"] == 1
+    for x, z in _centres(ob, 1, np.ones((ob.map.l1_nx[1], ob.map.l1_nz[1]), bool)):
+        if 0 <= x < 20.0 and 0 <= z < 8.0:
+            assert g[int(x / GRID.res), int(z / GRID.res)] == K.KEEP_OUT, (x, z)
+
+
+def test_calibration_pred_is_the_robot_lookup_uninflated(still_run):
+    """S7b alignment: inflate(calibration_pred) == what the robot gets for its lookup, per press, for every fast state."""
+    ob, obs = still_run
+    t = obs[-1].t_cap
+    s = ob.slow(t)
+    for sv, c, want in ((State.STOPPED, 8, (M.STOP_BIN,)), (State.ACTIVE, 8, (0,)), (State.IDLE, 8, (0,)),
+                        (State.UNKNOWN, 0, OL.TWIN_BINS), (State.STOPPED, 3, OL.TWIN_BINS)):
+        fast = FastLayer(s.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, sv, 0.0, 0.5, 10.0, c, 1) for i in range(ob.M)])
+        assert OL.robot_bins(s.machines[0], fast.machines[0]) == want
+        preds = ob.calibration_pred(fast)
+        m = ob.map_snapshot()
+        for i, pid in enumerate(ob.ids):
+            assert np.array_equal(preds[i], ob.pred_l1(i, want))
+            got = np.zeros_like(preds[i])
+            for b in want:
+                got |= m.envelope(pid, b, ob.det.cfg.p_min)
+            got |= ob.unknown_l1(i)
+            assert np.array_equal(OL.inflate(preds[i], ob.margin, cell_m=SPEC["env_res"]), got)
+    assert OL.robot_bins(None, None) == OL.TWIN_BINS
 
 
 # ---------------------------------------------------------------- C-W5 signing, explicit keyring, fail closed

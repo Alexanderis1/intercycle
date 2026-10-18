@@ -1093,7 +1093,7 @@ class MapView:
         return out
 
     def predicted_bins(self, i: int, ph, prod_state: int, dt: float = 0.0, k_sigma: float = 2.0, prod_until_s: float = math.inf,
-                       andon_valid_s: float = 3.0) -> tuple:
+                       andon_valid_s: float = 3.0, on_line: bool = True) -> tuple:
         """Phase bins machine i may be in `dt` seconds after a fast-layer phase `ph` (fraction of its cycle; None / < 0 /
         overdue = stopped or unknown).
 
@@ -1102,10 +1102,13 @@ class MapView:
         starts), so its phase is advanced and widened by k_sigma * sqrt(base^2 + jitter^2 * cycles). Only a machine
         that is stopped / overdue gets its STOP bin, and only while the production state says the plant is stopped
         (break / shift change until prod_until_s, andon for andon_valid_s: it may restart any moment); otherwise, and
-        whenever the phase or period is unknown, the union of all bins."""
+        whenever the phase or period is unknown, the union of all bins. on_line=False (an off-line machine, e.g. every
+        twin press): a line stop never implies its stop, so a stopped / unknown phase always gives the union of all bins."""
         P = float(self.period[i]) if np.isfinite(self.period[i]) else math.nan
         cycling = ph is not None and np.isfinite(ph) and ph >= 0 and np.isfinite(P) and ph <= 1.0 + max(0.06, 3.0 / P)
         if not cycling:
+            if not on_line:                     # an off-line machine runs through line andons / breaks: a line stop never implies its stop
+                return ALL_BINS
             stopped = prod_state in (BREAK, SHIFT_CHANGE) and dt < prod_until_s or prod_state == ANDON and dt < andon_valid_s
             return (STOP_BIN,) if stopped else ALL_BINS
         cyc = dt / P

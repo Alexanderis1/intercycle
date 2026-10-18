@@ -27,18 +27,19 @@ bins carry no information: the twin uses bins (0, STOP_BIN) only. The M-W4 chang
 `change_detect_l1.L1ChangeDetector` (ChangeLayer per press grid; observed = floor_ok_of(obs) and zone_vis >= vis_min)
 with the LEAD DECISION: fail closed, i.e. every cell of a press grid not learned yet in bin 0 or STOP_BIN is UNKNOWN
 (`availability()` reports the cost). The M-W7 margin is read ONLY from the frozen JSON through
-`intercycle.margin_inflate.load_margin` and applied with `margin_inflate.inflate`: per press grid, pred = the envelope
-union of the twin bins OR the detector's UNKNOWN cells, inflated by the margin; the inflated set is broadcast as
-UNKNOWN boxes (`map_snapshot`). The margin's cell_m must equal the L1 grid cell (env_res) and margin_m must fit in the
-grid's margin around the zone, else ValueError (fail closed: re-calibrate on this grid).
-DISCLOSED, LEAD DECISION PENDING (audit S6 #3): unknown_rects apply to every bin and slice, so the inflated union of the
-bin-0 and STOP_BIN envelopes makes the running envelope of every press UNKNOWN to the robot at all times; neither the
-fast layer (idle windows, phase) nor a learned STOP_BIN envelope can open any of those cells. Conservative, but in the
-press grids the "learned" condition then behaves like a static keep-out, which limits what the learned-vs-reactive
-comparison can show there. The alternative (inflate each bin's envelope separately and send it through the L1 per-bin
-boxes, keeping only the detector's UNKNOWN / fail-closed cells in unknown_rects) needs the robot-side fix of audit S6 #4
-first (masks.py ANDON vote, mapping.predicted_bins for off-line machines) and S7b's dev recorder to score pred = the
-per-bin envelope the robot looks up. `tags["m7_application"]` carries this into every run's diagnostics.
+`intercycle.margin_inflate.load_margin` and applied with `margin_inflate.inflate`, PER BIN (LEAD DECISION, audit S6
+#3, option B): the broadcast copy of the map (`map_snapshot`, a `TwinMapSnapshot`) overrides `envelope()` so that
+`pack_map` sends, for every running phase bin 0..N_PHASE-1, the M-W7-inflated envelope of bin 0 (the twin learns only
+bin 0 and STOP_BIN, `twin_bin`; the robot never meets an unlearned bin and never falls back to the union rule), and for
+STOP_BIN the inflated STOP_BIN envelope. unknown_rects carry only the live map's own UNKNOWN rects plus the detector's
+UNKNOWN cells (CUSUM alarms and the fail-closed unlearned cells), inflated by the same margin (the frozen rule inflates
+"occupied OR UNKNOWN"). The robot (intercycle_nav.masks, Site.own_stop) looks up STOP_BIN for a press whose own fast
+entry is a confident STOPPED (confidence >= 4, inside its TTL), bin 0 while it cycles, and the union of all bins for
+anything else (UNKNOWN, missing, low confidence: fail closed). `robot_bins` / `calibration_pred` give S7b's dev
+recorder exactly that lookup, un-inflated, so the certified margin applies to what the robot gets
+(inflate(calibration_pred) == the broadcast per-bin envelope OR the broadcast UNKNOWN cells). The margin's cell_m must
+equal the L1 grid cell (env_res) and margin_m must fit in the grid's margin around the zone, else ValueError (fail
+closed: re-calibrate on this grid). `tags["m7_application"]` carries this into every run's diagnostics.
 
 Time of day (P2: the real clips carry no timing information): any time-of-day / shift structure the map's L2/L3
 slices learn comes from the generated days, i.e. from the generator's ASSUMED structure. `tags` says so and is part of
@@ -50,7 +51,6 @@ when that key is not in the keyring valid now (the robot would reject it: never 
 """
 from __future__ import annotations
 
-import copy
 import json
 import math
 import os
@@ -76,9 +76,64 @@ TWIN_BINS = (0, M.STOP_BIN)
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 TOD_TAG = ("ASSUMED: no hour-of-day structure is observed in the real clips (probe P2: no timing information); "
            "any time-of-day or shift structure in the map's slices comes from the generated days")
-M7_TAG = ("DISCLOSED (lead decision pending, audit S6 #3): the M-W7-inflated union of the bin-0 and STOP_BIN envelopes "
-          "is broadcast as UNKNOWN boxes valid in every bin and slice, so each press's running envelope is always "
-          "UNKNOWN to the robot; the fast layer cannot open it (press grids behave like a static keep-out)")
+M7_TAG = ("LEAD DECISION (audit S6 #3, option B): per-bin M-W7 inflation. Every running phase bin is broadcast as the "
+          "inflated bin-0 envelope and STOP_BIN as the inflated STOP_BIN envelope; only the change detector's UNKNOWN "
+          "and fail-closed unlearned cells (inflated) are broadcast as UNKNOWN boxes. The robot opens a press's STOP_BIN "
+          "envelope only on its own confident STOPPED (confidence >= 4, inside its TTL); UNKNOWN, missing or low "
+          "confidence reads the union of both bins (fail closed). S7b's calibration pred = calibration_pred(), the "
+          "same lookup un-inflated")
+
+
+def twin_bin(b: int) -> int:
+    """The twin bin whose envelope serves map phase bin b: STOP_BIN for STOP_BIN, 0 for every running bin 0..N_PHASE-1
+    (a 1.2-3 s press period is 2.4-6 ticks at 2 Hz, so the twin learns bins (0, STOP_BIN) only). Anything else raises."""
+    b = int(b)
+    if b == M.STOP_BIN:
+        return M.STOP_BIN
+    if 0 <= b < M.N_PHASE:
+        return 0
+    raise ValueError(f"phase bin {b} outside 0..{M.STOP_BIN}")
+
+
+def robot_bins(model: MachineModel | None, now: MachineNow | None) -> tuple[int, ...]:
+    """The twin bins the robot looks up for one press from one fast entry, at its issue time (intercycle_nav.masks:
+    an off-line press with Site.own_stop, not held): a confident STOPPED (fast and slow confidence >= MIN_CONF) ->
+    (STOP_BIN,); a confident ACTIVE / IDLE with a usable period (own_phase cycling; every running phase bin reads bin 0)
+    -> (0,); anything else (missing, UNKNOWN, low confidence) -> TWIN_BINS, the union (fail closed)."""
+    if model is None or now is None or now.confidence < LC.MIN_CONF or model.confidence < LC.MIN_CONF:
+        return TWIN_BINS
+    if now.state == State.STOPPED:
+        return (M.STOP_BIN,)
+    if now.state in (State.ACTIVE, State.IDLE) and math.isfinite(model.period_s) and model.period_s > 0:
+        return (0,)
+    return TWIN_BINS
+
+
+class TwinMapSnapshot(M.LayeredMap):
+    """The broadcast copy of the twin's live map (built by `ObserverLive.map_snapshot`, packed by `pack_map`):
+    envelope(machine, b) is the M-W7-inflated envelope of twin_bin(b). It shares the live map's count arrays, so pack
+    it right away (as sign_layers does); its box-cover cache is its own."""
+
+    _margin: Margin
+    _infl_cache: dict
+
+    @classmethod
+    def of(cls, live: M.LayeredMap, margin: Margin, unknown_rects: list) -> TwinMapSnapshot:
+        m2 = cls.__new__(cls)
+        m2.__dict__.update(live.__dict__)
+        m2.__dict__.pop("_hot_cache", None)
+        m2._cover_cache = {}
+        m2._infl_cache = {}
+        m2._margin = margin
+        m2.unknown_rects = list(unknown_rects)
+        return m2
+
+    def envelope(self, machine_id: str, phase_bin: int, p_min: float = 0.05) -> np.ndarray:
+        key = (machine_id, twin_bin(phase_bin), float(p_min))
+        if key not in self._infl_cache:
+            env = super().envelope(machine_id, key[1], p_min)
+            self._infl_cache[key] = inflate(env, self._margin, cell_m=float(self.spec["env_res"]))
+        return self._infl_cache[key].copy()
 
 
 # ------------------------------------------------------------------------------------------------ spec
@@ -297,37 +352,57 @@ class ObserverLive:
                                   consts=self.consts[i]))
         return FastLayer(self.spec["site_id"], self.spec["key_id"], DAY0_UNIX + t, self.seq, out)
 
-    def pred_l1(self, i: int) -> np.ndarray:
-        """Press i's L1 grid [nx, nz]: what the map marks occupied (envelope union over the twin bins) OR UNKNOWN (the
-        change detector, fail-closed unlearned cells included). This is the M-W7 `pred` on the cell_m = env_res grid."""
-        env = self.map.envelope_union(self.ids[i], TWIN_BINS, self.det.cfg.p_min)
+    def pred_l1(self, i: int, bins=TWIN_BINS) -> np.ndarray:
+        """Press i's L1 grid [nx, nz] for a lookup of map bins `bins`: what the map marks occupied (envelope union over
+        the twin bins of `bins`) OR UNKNOWN (the change detector, fail-closed unlearned cells included). The M-W7 `pred`
+        on the cell_m = env_res grid, before inflation. Default: the union of both twin bins (the fail-closed lookup)."""
+        tb = sorted({twin_bin(b) for b in bins})
+        if not tb:
+            raise ValueError("empty bin lookup")
+        env = self.map.envelope_union(self.ids[i], tb, self.det.cfg.p_min)
         return np.asarray(env, bool) | self.det.unknown_mask(self.ids[i])
 
-    def inflated_l1(self, i: int) -> np.ndarray:
-        return inflate(self.pred_l1(i), self.margin, cell_m=float(self.spec["env_res"]))
+    def inflated_l1(self, i: int, bins=TWIN_BINS) -> np.ndarray:
+        """What the robot gets for that lookup: pred_l1 inflated by the frozen margin (= the broadcast per-bin envelopes
+        of `bins` OR the broadcast UNKNOWN cells of the press grid)."""
+        return inflate(self.pred_l1(i, bins), self.margin, cell_m=float(self.spec["env_res"]))
 
-    def map_snapshot(self) -> M.LayeredMap:
-        """A copy of the live map whose unknown_rects also cover every margin-inflated cell of every press grid."""
-        m2 = copy.copy(self.map)
+    def unknown_l1(self, i: int) -> np.ndarray:
+        """Press i's broadcast UNKNOWN cells: the detector's UNKNOWN (CUSUM + fail-closed unlearned), inflated."""
+        return inflate(self.det.unknown_mask(self.ids[i]), self.margin, cell_m=float(self.spec["env_res"]))
+
+    def calibration_pred(self, fast: FastLayer) -> list[np.ndarray]:
+        """S7b's dev recorder: per press, the un-inflated pred of the lookup the robot makes from this fast layer
+        (`robot_bins` of the current slow model and the fast entry). inflate(pred) is what the robot gets."""
+        nows = {m.index: m for m in fast.machines}
+        return [self.pred_l1(i, robot_bins(self.models[i], nows.get(i))) for i in range(self.M)]
+
+    def map_snapshot(self) -> TwinMapSnapshot:
+        """The broadcast copy of the live map: per-bin inflated envelopes (`TwinMapSnapshot.envelope`), and
+        unknown_rects = the live map's own plus a safe box cover of every press grid's inflated detector UNKNOWN."""
         boxes = list(self.map.unknown_rects)
         res = float(self.spec["env_res"])
         for i in range(self.M):
-            U = self.inflated_l1(i)
+            U = self.unknown_l1(i)
             if not U.any():
                 continue
             x0, z0 = float(self.map.l1_x0[i]), float(self.map.l1_z0[i])
             for i0, j0, i1, j1 in M.safe_box_cover(U, 12):
                 boxes.append((x0 + i0 * res, z0 + j0 * res, x0 + i1 * res, z0 + j1 * res))
-        m2.unknown_rects = boxes
-        return m2
+        return TwinMapSnapshot.of(self.map, self.margin, boxes)
 
     def availability(self) -> dict:
         """What failing closed costs: share of press-grid cells UNKNOWN only because a twin bin is not learned yet
-        (M-W4 lead decision), and share of press-grid cells the robot gets as UNKNOWN after the M-W7 inflation."""
-        infl = [self.inflated_l1(i) for i in range(self.M)]
-        n = sum(int(a.size) for a in infl)
+        (M-W4 lead decision); share of press-grid cells broadcast UNKNOWN after the M-W7 inflation; and per lookup
+        (running = bin 0, stopped = STOP_BIN, union = fail-closed) the share of press-grid cells the robot gets closed."""
+        def share(grids: list[np.ndarray]) -> float:
+            n = sum(int(a.size) for a in grids)
+            return float(sum(int(a.sum()) for a in grids) / n) if n else 0.0
+
         return dict(unlearned=self.det.availability_cost(),
-                    inflated_unknown_share=float(sum(int(a.sum()) for a in infl) / n) if n else 0.0,
+                    inflated_unknown_share=share([self.unknown_l1(i) for i in range(self.M)]),
+                    closed_share={k: share([self.inflated_l1(i, b) for i in range(self.M)])
+                                  for k, b in (("running", (0,)), ("stopped", (M.STOP_BIN,)), ("union", TWIN_BINS))},
                     margin_m=self.margin.margin_m)
 
     def diagnostics(self) -> dict:
@@ -353,7 +428,7 @@ class ObserverLive:
         fast = sign(encode_fast(FastLayer(f.site_id, kid, f.issue_time, f.seq, f.machines)), key)
         m2 = self.map_snapshot()
         m2.spec = dict(m2.spec, key_id=kid)
-        bundle = ML.pack_map(m2, key, map_version, issue_time=DAY0_UNIX + t)
+        bundle = ML.pack_map(m2, key, map_version, issue_time=DAY0_UNIX + t, p_min=self.det.cfg.p_min)
         return dict(slow=slow, fast=fast, map=bundle, key_id=kid)
 
 
