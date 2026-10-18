@@ -34,7 +34,7 @@ import pandas as pd
 from intercycle.observer import mapping as OM
 from intercycle.observer import watchdog as WD
 from intercycle.perception.esk_ingest import project_tracks
-from twin.plant import _bbox
+from twin.cam_geom import bbox as _bbox
 from twin.schemas.site import Site
 
 TICK_S = 1.0 / OM.FRAME_HZ

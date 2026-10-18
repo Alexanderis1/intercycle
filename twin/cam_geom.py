@@ -199,3 +199,10 @@ def circle_prism(x: float, z: float, r: float, hgt: float, n: int = 8) -> np.nda
     a = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
     ring = np.column_stack([x + r * np.sin(a), z + r * np.cos(a)])
     return np.vstack([np.column_stack([ring, np.zeros(n)]), np.column_stack([ring, np.full(n, hgt)])])
+
+
+def bbox(poly, grow: float = 0.0) -> tuple[float, float, float, float]:
+    """Axis-aligned box (x0, z0, x1, z1) of a floor polygon grown by `grow` m (no truth: site geometry only). Shared by
+    twin/plant.py and the non-truth intercycle/observer/pixel_adapter.py."""
+    xs, zs = [p[0] for p in poly], [p[1] for p in poly]
+    return min(xs) - grow, min(zs) - grow, max(xs) + grow, max(zs) + grow

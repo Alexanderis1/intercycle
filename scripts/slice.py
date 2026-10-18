@@ -108,7 +108,9 @@ PROBE_MIN_TICKS = 8              # ... which must hold at least this many finite
 PROBE_MIN_FRAC = 0.6             # ... of which at least this share report motion (> the run's motion_thr). One tick
                                  # is not enough on stat_v1: its idle ROI energy exceeds the threshold on ~12 % of
                                  # ticks (stat_v1_params.json energy.motion_thr fpr_idle), so a single-tick rule sent
-                                 # the probe into idle presses (no trip); P(>= 60 % of >= 8 idle ticks) < 1e-4
+                                 # the probe into idle presses (no trip); P(>= 60 % of 8 idle ticks) = binom.sf(4, 8,
+                                 # 0.1189) ~ 1e-3 (worst case 8 ticks; assumes independent ticks, which consecutive
+                                 # ROI energies may not be, so the true rate can be higher)
 PARK = (-5.0, -5.0)              # robot parked off every zone's visible floor while the observer learns
 TICK_S = 0.5                     # Observation / realised stream tick (2 Hz)
 GUARD_TESTS = ("tests/test_truth_allowlist.py", "tests/test_isaac_deps.py")
@@ -345,11 +347,12 @@ def observer_spec(site: Site, compiled: dict[str, C.CompiledZone], adapter: PL.O
 
 
 def step_observer(out: Path, spec: dict, obs_path: Path, t_end: float,
-                  camera_model: str) -> tuple[dict, OL.ObserverLive]:
+                  camera_model: str, stub_run: bool = False) -> tuple[dict, OL.ObserverLive]:
     """Step 5: the observer config follows the camera model that wrote the Observation (`OL.config_for_camera`,
-    fail closed on any model other than stat_v1)."""
+    fail closed on any model other than stat_v1; the G0 stand-in camera_v0 only when the slice runs on the whole G0
+    v0 stub set, `stub_run`)."""
     mp, msrc = margin_path(out)
-    ob = OL.ObserverLive(spec, OL.config_for_camera(camera_model, str(mp)), obs_path=obs_path)
+    ob = OL.ObserverLive(spec, OL.config_for_camera(camera_model, str(mp), stub_run=stub_run), obs_path=obs_path)
     n = ob.advance(t_end + 10.0)
     if n < int(LEARN_S / TICK_S) - 1:
         raise SliceError(f"observer ingested {n} ticks")
@@ -749,7 +752,9 @@ def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: st
             ctx["learn_obs"], ctx["camera_model"], ctx["adapter"] = r[1], r[0]["camera_model"], r[2]
             site = load(Site, paths["site"])
             spec = ctx["spec"] = observer_spec(site, ctx["compiled"], ctx["adapter"])
-            r = do("5_observer", lambda: step_observer(out, spec, ctx["learn_obs"], t0 + LEARN_S, ctx["camera_model"]))
+            stub_run = all(C.is_stub(k, paths[k]) for k in ("site", "dynamics", "tasks"))
+            r = do("5_observer", lambda: step_observer(out, spec, ctx["learn_obs"], t0 + LEARN_S, ctx["camera_model"],
+                                                       stub_run=stub_run))
             if r:
                 ctx["observer"], ctx["motion_thr"] = r[1], r[1].cfg.motion_thr
                 do("signatures", lambda: step_signatures(ctx["observer"], t0 + LEARN_S), "assertions")

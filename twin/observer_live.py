@@ -325,12 +325,21 @@ def config_for_stat_v1(margin_path: str, params_path: str | os.PathLike = STAT_V
     return ObserverLiveConfig(margin_path=margin_path, motion_thr=thr, motion_thr_source=src, **kw)
 
 
-def config_for_camera(camera_model: str, margin_path: str, **kw) -> ObserverLiveConfig:
+def config_for_camera(camera_model: str, margin_path: str, *, stub_run: bool = False, **kw) -> ObserverLiveConfig:
     """The observer config of a twin run, chosen by the camera model that wrote its obs_v2.jsonl (the plant's
     `camera.provenance()["model"]`, recorded in summary.json `camera.model` and in the broadcaster's
     observer_spec.json). Only "stat_v1" is a twin-run camera (`config_for_stat_v1`); any other name (camera_v0, the
     G0 reference, an empty or unknown model) is refused, so a twin run never falls back to the placeholder
-    threshold (fail closed)."""
+    threshold (fail closed). The one exception is the G0 stub slice: with `stub_run=True` (set only by a caller that
+    runs on the whole G0 v0 stub set, scripts/slice.py) "camera_v0" (twin/plant.py `StubCameraV0`) gets the default
+    config's 0.5 threshold, recorded as the stub camera's (camera_v0 zone_motion = ram speed in m/s + N(0, 0.05), a
+    continuous value the PLACEHOLDER source would refuse); a sealed run is refused here (fail closed)."""
+    if camera_model == "camera_v0" and stub_run:
+        if kw.get("sealed") or os.environ.get(SEALED_ENV) == "1":
+            raise ValueError("camera model 'camera_v0' (G0 stub slice only) in a sealed run: refused")
+        return ObserverLiveConfig(margin_path=margin_path, motion_thr=ObserverLiveConfig.motion_thr,
+                                  motion_thr_source="STUB camera_v0 (G0 stub slice only): ram speed m/s > 0.5, the G0 "
+                                                    "slice threshold; never a twin run", **kw)
     if camera_model != "stat_v1":
         raise ValueError(f"camera model {camera_model!r}: a twin run's observer needs the stat_v1 camera "
                          "(config_for_stat_v1); no other camera model has a twin-run config")
