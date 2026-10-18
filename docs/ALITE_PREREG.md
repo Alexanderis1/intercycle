@@ -100,10 +100,12 @@ injected new arms it marked the cells UNKNOWN after a median of Z min, with F fa
   infrastructure failure (container lost, timeout) is re-run, once, same seed, disclosed.
 - Budget: estimate ~$0.3 (Section 6); stop and report at $0.5.
 - Dry run (done before FREEZE, local CPU, worlds 801 and 802): `scripts/alite_run.py --dry-run` (30 min of learning,
-  one 300 s mission on day 0) runs for all three conditions; the same dry run on Modal (`--dry-run --worlds 801,802`)
+  one 300 s mission on day 0) runs for all three conditions; the same dry run on Modal (`--dry-run --worlds 801,802 --mw4-worlds ""`;
+  without `--mw4-worlds ""` the entrypoint's default would also start M-W4 on the pre-registered worlds 811-814)
   gave identical numbers (learned Y 8, reactive 7, static 2 over 2 missions; no trip, no hold). Re-run locally on
   main after the lane S8-alitefix phase-origin change (Sun ~07:00, 205 s wall on the shared laptop): the same numbers;
-  S50 and S80 have no lag on both worlds. The Modal dry run was not repeated after that change.
+  S50 and S80 have no lag on both worlds. The Modal dry run was repeated on main c9a0abc (Sun ~07:40, 48 s wall,
+  ~$0.004): identical numbers, S50 and S80 again without a lag on both worlds.
 
 ## 6. Cost and time
 
@@ -128,8 +130,8 @@ episodes + ~3 600 for M-W4, x ($0.0000131 / core-s + 2 x $0.00000222 / GiB-s, H1
 - Robots get UNKNOWN boxes at mission start only (C-W7 cut); in Run A no change is injected, so any UNKNOWN box there is
   a false alarm, which can only make `learned` decline more.
 - Any time-of-day structure (mission times, the shift-change stop) is ASSUMED, from the body-shop scenario.
-- The phase-origin calibration can leave a machine without a lag (S80 lifter on world 801: fewer than 20 usable
-  pairs); the learned robot then never trusts the map's parked check there (fail closed) and uses its other rules.
+- The phase-origin calibration can leave a machine without a lag (S80 lifter: no lag on worlds 801 and 802 in the
+  dry runs; on world 801 because it had fewer than 20 usable pairs); the learned robot then never trusts the map's parked check there (fail closed) and uses its other rules.
 - Run A's JSON lists the observer's change events on day 1 (world 801 dev run: 7 `inzone_change` events near 18:00,
   no change injected); they are false alarms and are reported with the table.
 - The development run of world 801 (before the E-W6 walkway change and the mission-start UNKNOWN hand-over) gave
