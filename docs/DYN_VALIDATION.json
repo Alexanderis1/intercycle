@@ -2,12 +2,12 @@
  "speeds": [
   {
    "stat": "z14/forklift",
-   "n_twin": 4896,
+   "n_twin": 2128,
    "n_train": 36,
    "n_dev": 18,
    "n_dev_clips": 16,
    "n_train_clips": 29,
-   "ks_twin_dev": 0.49121732026143794,
+   "ks_twin_dev": 0.33526524644945704,
    "ks_train_dev": 0.38888888888888895,
    "limit_floor": 0.5833333333333335,
    "ks_boot_q95": 0.5175031565656565,
@@ -15,37 +15,37 @@
    "pass_floor": true,
    "pass_boot": true,
    "verdict": "PASS",
-   "median_twin": 1.352476594148143,
+   "median_twin": 1.2756301925221767,
    "median_train": 1.3100069194161692,
    "median_dev": 1.0120389449339413
   },
   {
    "stat": "z14/person",
-   "n_twin": 1224,
+   "n_twin": 1693,
    "n_train": 8,
    "n_dev": 4,
    "n_dev_clips": 3,
    "n_train_clips": 8,
-   "ks_twin_dev": 0.9207516339869282,
+   "ks_twin_dev": 0.3419964559952746,
    "ks_train_dev": 0.25,
    "limit_floor": 0.375,
    "ks_boot_q95": 0.625,
    "ks_boot_median": 0.375,
-   "pass_floor": false,
-   "pass_boot": false,
-   "verdict": "FAIL",
-   "median_twin": 1.7846329208076588,
+   "pass_floor": true,
+   "pass_boot": true,
+   "verdict": "PASS",
+   "median_twin": 1.1334139312716531,
    "median_train": 1.0263975069512619,
    "median_dev": 0.8486754324823128
   },
   {
    "stat": "z9/person",
-   "n_twin": 12901,
+   "n_twin": 2579,
    "n_train": 618,
    "n_dev": 302,
    "n_dev_clips": 116,
    "n_train_clips": 300,
-   "ks_twin_dev": 0.11221446461103946,
+   "ks_twin_dev": 0.09312480580542282,
    "ks_train_dev": 0.09538352729376975,
    "limit_floor": 0.14307529094065463,
    "ks_boot_q95": 0.12696538375550107,
@@ -53,7 +53,7 @@
    "pass_floor": true,
    "pass_boot": true,
    "verdict": "PASS",
-   "median_twin": 0.5490932786388362,
+   "median_twin": 0.4582143406679359,
    "median_train": 0.4744868465297375,
    "median_dev": 0.41053707647374327
   }
@@ -135,10 +135,10 @@
   }
  ],
  "hashes": {
-  "twin/daygen.py": "d016010a85f10235e3a21d9b848b3fce815ad3832c1f4dcce2f78f09873907aa",
+  "twin/daygen.py": "9ba3952a5279d32c7c26d9410ea34053a726845c84167ffe0737013482fe64fb",
   "twin/dynfit.py": "b5844ef16db6ba0347b89372451ad95031f249c470769873d6e059ab1c0bed3f",
   "twin/rng.py": "ff8bf5f8d7371a0c3b0d38aff7fceec4427040148bbfd405f9436d16e8cd57e2",
-  "twin/dynamics.json": "ea899be7c21016031bd4b592e887dc92d79b01fc2467a6fe5a3581ff4dcbc5aa",
+  "twin/dynamics.json": "a8ea6679c609ea2cb0324c94aaa9ede391e9d3480cca51ef766e5dd856cc2409",
   "twin/dyn/press_v1.json": "695f8d82397c0cca271cf00d752347e27107181c0c3d6541b1a429c945794628",
   "twin/dyn/valcam_v1.json": "ede611558a69bd0112f715d346099b18d8fc4c5a5b865937bb67b925bac0eb10"
  },
@@ -213,14 +213,15 @@
   "day": 1,
   "windows_per_day": 40,
   "n_windows": {
-   "z9": 2560,
-   "z14": 2560,
+   "z9/person": 2695,
+   "z14/person": 1993,
+   "z14/forklift": 2649,
    "P9a": 2560,
    "P9b": 2560
   },
   "footage_unsafe_share": 0.7055214723926381
  },
- "head": "e10ec012cdc424c546d6e727107501b49bd068f9",
+ "head": "578d281136f01f165243d01332773ac6466e7537",
  "floor_coverage": {
   "train": {
    "z14/forklift": 0.8957639219419324,
