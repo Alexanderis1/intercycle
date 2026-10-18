@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = ["numpy", "scipy", "astropy", "pyyaml", "pydantic>=2", "pynacl", "pandas", "pyarrow"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "jsonschema>=4.25"]
 phases = ["stumpy"]                         # optional matrix-profile engine (observer/phases.py has a numpy fallback); hmmlearn/ruptures have no py3.14 wheels
 dashboard = ["websockets", "imageio-ffmpeg"]   # live map view relay (observer/stream.py), screen recording
 cloud = ["modal", "openai"]

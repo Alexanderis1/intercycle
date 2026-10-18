@@ -106,6 +106,7 @@ from twin.schemas.safety import PressSafety, Safety
 from twin.schemas.site import Site, point_in_polygon
 from twin.schemas.tables import LogRow
 from twin.schemas.tasks import Tasks
+from twin.truth_guard import open_truth
 
 SAFETY_DT = 0.1                   # safety / zone check period (s)
 FOOT = ((-0.34, 0.32), (0.0, 0.32), (0.34, 0.32))   # ANYmal-D footprint ~1.0 x 0.64 m as 3 circles (fwd offset, r)
@@ -1241,3 +1242,13 @@ def write_log(rows: list[dict], run_dir: Path) -> Path:
 
 def make(cfg: dict) -> Plant:
     return Plant(cfg)
+
+
+def day_script_payload(path: str | Path) -> tuple[str, bytes]:
+    """(file name, bytes) of a day event script, read for shipping to a REMOTE plant process (the Modal episode),
+    through open_truth: the plant is an allowlisted truth reader, so the read is checked and logged in the truth access
+    log (PLAN_TWIN §2). The receiver writes it into a plant-only directory outside the robot's world dir
+    (cloud/modal_isaac_robot.py PLANT_DIR); only the remote plant opens it."""
+    p = Path(path)
+    with open_truth(p, "rb") as f:
+        return p.name, f.read()

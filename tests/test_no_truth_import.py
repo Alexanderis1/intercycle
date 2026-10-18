@@ -68,7 +68,8 @@ def test_robot_side_never_imports_twin():
 # Entry points: observer_live (S6), the policies (intercycle.robot.policies; the S5b reactive baseline when it lands)
 # and the robot process modules, plus the broadcaster (S1b). Entries not on disk yet are skipped.
 ENTRIES = ("twin.observer_live", "intercycle.robot.policies", "twin.policy_reactive", "intercycle_nav.timing_planner",
-           "intercycle_nav.observer_bridge", "intercycle_nav.masks", "intercycle_eval.broadcaster")
+           "intercycle_nav.observer_bridge", "intercycle_nav.masks", "intercycle_eval.broadcaster",
+           "twin.broadcast_live")
 TRUTH_PREFIXES = ("intercycle.truth", "intercycle.sim", "intercycle_sim", "intercycle_eval.plant")
 KNOWN_GRAPH = {
     "intercycle_eval.broadcaster": "S1b (R-W1): the body-shop broadcaster imports intercycle.sim (observer_learned, "
