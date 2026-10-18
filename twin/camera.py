@@ -83,7 +83,7 @@ ASSUMED (a stated value, no data).
     footprint): in generated days no mover stands where P9b's real occluders stand. The camera handles such at-press
     movers (image-only occluders, item 2) once the day generator places operators there (S3a). The held MISSING
     share the observer gets (`twin_replay_held_stat_v1_camera`, the camera itself on the library clips, 40 worlds;
-    `replay_library_held` below, `python -m twin.camera --replay-held`)
+    `replay_library_held` below, `python -m twin.camera --replay-held <path_library_v1.npz>`)
     is reported next to TRAIN's machines MISSING share in the same file: world medians P9a 32 % (TRAIN 38.5 %), P9b
     0 % (34.1 %), P14a-d 52 / 43 / 37 / 27 % (TRAIN 30 / 25 / 20 / 20 %; P14d MISSING in 10 of the 40 worlds, whose
     ROI is cut by the image border). Zone 14 is held above TRAIN (camera 14's fitted 7.5 s against the ingest's
@@ -842,11 +842,13 @@ def replay_library_held(site: Site, lib: Any, hdraws: dict, trace: dict, n_world
     return out
 
 
-def write_replay_held(n_worlds: int = REPLAY_WORLDS, out_path: str | Path = ROI_OCCLUDERS_PATH) -> dict:
-    """`replay_library_held` on twin/site.yaml and the DAYGEN v1 path library, written as HELD_KEY of
+def write_replay_held(library: str | Path, n_worlds: int = REPLAY_WORLDS,
+                      out_path: str | Path = ROI_OCCLUDERS_PATH) -> dict:
+    """`replay_library_held` on twin/site.yaml and the DAYGEN v1 path library (`library`:
+    $INTERCYCLE_DATA/dyn/path_library_v1.npz; passed in, so this Isaac-side module never imports intercycle.esk /
+    pandas, tests/test_isaac_deps.py), written as HELD_KEY of
     twin/stat_v1_roi_occluders.json next to TRAIN's machines MISSING share and unheld hit share of each ROI's framing
     (the file's TRAIN / DEV block, written by scripts/stat_v1_roi_occluders.py first; fails closed without it)."""
-    from intercycle import esk
     from twin.schemas import load
 
     site = load(Site, REPO / "twin" / "site.yaml")
@@ -854,7 +856,7 @@ def write_replay_held(n_worlds: int = REPLAY_WORLDS, out_path: str | Path = ROI_
     out = json.loads(out_p.read_text(encoding="utf-8"))
     if "by_split_press_framing" not in out:
         raise ValueError(f"{out_p}: no TRAIN / DEV block (run scripts/stat_v1_roi_occluders.py first)")
-    lib = np.load(esk.data_root() / "dyn" / "path_library_v1.npz")
+    lib = np.load(Path(library))
     hd = json.loads(HDRAWS_PATH.read_text(encoding="utf-8"))
     trace = json.loads(TRACE_PATH.read_text(encoding="utf-8"))
     held = replay_library_held(site, lib, hd, trace, n_worlds)
@@ -877,6 +879,6 @@ def stream(path: str | Path, site: Site, world_seed: int, **kw) -> Iterator[Dete
 if __name__ == "__main__":
     import sys
 
-    if sys.argv[1:] != ["--replay-held"]:
-        raise SystemExit("usage: python -m twin.camera --replay-held")
-    print(json.dumps(write_replay_held(), indent=1))
+    if len(sys.argv) != 3 or sys.argv[1] != "--replay-held":
+        raise SystemExit("usage: python -m twin.camera --replay-held $INTERCYCLE_DATA/dyn/path_library_v1.npz")
+    print(json.dumps(write_replay_held(sys.argv[2]), indent=1))

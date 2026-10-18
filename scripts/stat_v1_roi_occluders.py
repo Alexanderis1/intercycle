@@ -3,7 +3,8 @@ can never happen in the twin").
 
     python scripts/stat_v1_roi_occluders.py      # -> twin/stat_v1_roi_occluders.json (aggregates only, no image data)
     python scripts/stat_v1_roi_occluders.py --replay-only   # re-run the twin replays only, keep the TRAIN/DEV block
-    python -m twin.camera --replay-held      # then: the held replay of the stat_v1 camera itself (key HELD_KEY)
+    python -m twin.camera --replay-held $INTERCYCLE_DATA/dyn/path_library_v1.npz   # then: the held replay of the
+                                             # stat_v1 camera itself (key HELD_KEY)
 
 This script imports no truth module (tests/test_truth_allowlist.py): the held replay runs the stat_v1 camera
 (twin/camera.py, a truth reader) and therefore lives there, as `replay_library_held`; it reads no truth either.
@@ -264,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     OUT.write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps(out["by_split_press_framing"], indent=1))
     print(json.dumps(out["twin_replay_daygen_v1_library"], indent=1))
-    print(f"{HELD_KEY}: re-run with  python -m twin.camera --replay-held  (after this script)")
+    print(f"{HELD_KEY}: re-run with  python -m twin.camera --replay-held {esk.data_root() / 'dyn' / 'path_library_v1.npz'}")
     return 0
 
 
