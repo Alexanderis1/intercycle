@@ -404,9 +404,10 @@ def test_double_stage_runs_after_the_refusals_with_the_test_seeds(s):
         SR.run_double_stage(s["repo"], 9, [1000] * 16, fake_double)   # never outside an attempt
 
 
-def test_double_stage_refuses_before_any_runlog_record_while_the_backend_is_not_wired(s):
-    """No fake runner: run_double.SEALED_BACKEND_READY is False in this build, so sealed_run refuses before the drand
-    fetch and before the RUNLOG `started` record (no attempt number used up)."""
+def test_double_stage_refuses_before_any_runlog_record_while_the_backend_is_not_wired(s, monkeypatch):
+    """No fake runner and run_double.SEALED_BACKEND_READY False: sealed_run refuses before the drand fetch and before
+    the RUNLOG `started` record (no attempt number used up)."""
+    monkeypatch.setattr(SR._run_double_module(), "SEALED_BACKEND_READY", False)
     called = []
 
     def fetch(url):

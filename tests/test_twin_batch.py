@@ -11,6 +11,7 @@ import pytest
 
 from intercycle.eval import twin_batch as TB
 from intercycle.eval import twin_eval as E
+from twin import truth_guard as TG
 
 REPO = Path(__file__).resolve().parents[1]
 WORLDS = [TB.World(i, i, "test") for i in range(16)]
@@ -79,12 +80,109 @@ def test_sealed_batch_and_cli_refuse_without_the_sealed_flag(monkeypatch, tmp_pa
     assert RD.main(["--out", str(tmp_path)]) == 2                         # neither --dev nor sealed_run
     with pytest.raises(RD.DoubleError, match="dev worlds"):
         RD.dev_worlds([4])
-    with pytest.raises(RD.DoubleError, match="not wired"):
-        RD.run_batch(tmp_path, RD.dev_worlds([0]), backend="modal")
+    with pytest.raises(RD.DoubleError, match="unknown"):
+        RD.run_batch(tmp_path, RD.dev_worlds([0]), backend="isaac")
+    with pytest.raises(RD.DoubleError, match="dev worlds only"):
+        RD.run_batch(tmp_path, [RD.TB.World(0, 1000, "test")], max_cells=1)
     monkeypatch.setenv("INTERCYCLE_SEALED_RUN", "1")
-    for be in ("local", "modal"):                                       # never the wiring double; modal not ready
-        with pytest.raises(RD.DoubleError, match="sealed batch runs only"):
-            RD.run_sealed(tmp_path, [1000 + i for i in range(16)], backend=be)
+    with pytest.raises(RD.DoubleError, match="sealed batch runs only"):         # never the wiring double
+        RD.run_sealed(tmp_path, [1000 + i for i in range(16)], backend="local")
+    monkeypatch.setattr(RD, "SEALED_BACKEND_READY", False)
+    with pytest.raises(RD.DoubleError, match="sealed batch runs only"):         # modal refused while not ready
+        RD.run_sealed(tmp_path, [1000 + i for i in range(16)], backend="modal")
+
+
+def _modal_ctx(tmp_path):
+    sys.path.insert(0, str(REPO / "scripts"))
+    import run_double as RD  # pyright: ignore[reportMissingImports]  (scripts/ on sys.path)
+
+    ctx = RD.setup(tmp_path)
+    RD.SL.BW.build(ctx["paths"]["site"], ctx["paths"]["dynamics"], ctx["paths"]["tasks"], tmp_path / "worlds")
+    return RD, ctx
+
+
+def test_modal_cfg_runs_the_real_policy_of_each_condition(tmp_path):
+    """learned: the snapshot broadcaster (--snapshot-t0 = the mission start) + the bridge with the episode keyring;
+    static: no feed, static bridge and planner; reactive: own camera, frozen default config, world id from the design
+    index (never the seed), the mission tag, and the input state only when the chain has a previous step. Every cfg is
+    the full T, the plant condition = the arm, and the robot side carries the zone scenario (check_robot_scenario)."""
+    RD, ctx = _modal_ctx(tmp_path)
+    w = RD.TB.World(0, 0, "dev")
+    t0 = 8 * RD.TB.DAY_S + 1234.5
+    cfgs = {c: RD.modal_cfg(ctx, RD.TB.Mission(w, 9, "z9", c, t0), "d9.json")
+            for c in ("learned", "static", "reactive")}
+    for c, cfg in cfgs.items():
+        assert cfg["seconds"] == 720.0 and cfg["timeout_s"] == 720.0 and cfg["max_rtf"] == 2.0
+        assert cfg["plant"]["condition"] == c and cfg["plant"]["plant_t0"] == t0
+        assert cfg["plant"]["day_script"] == f"/root/plant/w0_d9_z9_{c}/d9.json"
+        assert "allow_short_mission" not in cfg["plant"]
+        assert f"-p condition:={c}" in cfg["goal_cmd"]
+        bridge = [x for x in cfg["extra_launch"] if "observer_bridge" in x]
+        assert len(bridge) == 1 and f"-p condition:={c}" in bridge[0]
+    lb = cfgs["learned"]["extra_launch"]
+    assert len(lb) == 2 and f"--snapshot-t0 {t0}" in lb[0] and "twin.broadcast_live" in lb[0]
+    assert "keyring:=" in lb[1] and "feed:=unix://" in lb[1]
+    assert len(cfgs["static"]["extra_launch"]) == 1 and "feed:=none" in cfgs["static"]["extra_launch"][0]
+    rb = cfgs["reactive"]["extra_launch"][0]
+    assert "world_id:=dev0" in rb and "mission_tag:=w0_d9_z9_reactive" in rb and "reactive_state:=" not in rb
+    assert "reactive_config.json" in rb
+    rb2 = RD.modal_cfg(ctx, RD.TB.Mission(w, 10, "z9", "reactive", t0 + 86400.0), "d10.json",
+                       reactive_in=True)["extra_launch"][0]
+    assert f"reactive_state:=$IC_WORLD/{RD.REACTIVE_IN}" in rb2
+    with pytest.raises(RD.DoubleError, match="cut design"):
+        RD.modal_cfg(ctx, RD.TB.Mission(w, 9, "z9", "oracle", t0), "d9.json")
+
+
+def test_modal_world_files_have_no_truth_and_the_frozen_default_reactive_config(tmp_path):
+    RD, ctx = _modal_ctx(tmp_path)
+    from intercycle_nav import reactive as RX  # pyright: ignore[reportMissingImports]
+    from twin import broadcast_live as BL
+
+    wb = RD.zone_world_bytes(ctx, tmp_path, "z9")
+    assert {BL.SPEC_FILE, BL.MARGIN_FILE, RD.REACTIVE_CFG, "map.yaml", "scenario.yaml"} <= set(wb)
+    assert not any(TG.is_truth_path(n) for n in wb)
+    assert RX.ReactiveConfig.from_dict(json.loads(wb[RD.REACTIVE_CFG])).sha256() == RX.ReactiveConfig().sha256()
+
+
+def test_snapshot_broadcaster_refuses_a_snapshot_from_after_the_mission_start(tmp_path):
+    import pickle
+
+    from twin import broadcast_live as BL
+
+    RD, ctx = _modal_ctx(tmp_path)
+    snaps, _ = RD.observer_phase(ctx, RD.TB.World(0, 0, "dev"), [(1, "z9", 1800.0)], day_s=3600.0)
+    (tmp_path / BL.SNAPSHOT_FILE).write_bytes(snaps[(1, "z9")])
+    ob, t_last, n = BL.snapshot_observer(tmp_path, 1800.0)
+    assert t_last < 1800.0 and n > 0 and ob.n_ticks == n
+    with pytest.raises(ValueError, match="predate"):
+        BL.snapshot_observer(tmp_path, t_last)
+    (tmp_path / BL.SNAPSHOT_FILE).write_bytes(pickle.dumps({"not": "an observer"}))
+    with pytest.raises(ValueError, match="ObserverLive"):
+        BL.snapshot_observer(tmp_path, 1800.0)
+
+
+def test_sealed_robot_stage_runs_the_double_with_the_revealed_seeds_only_under_the_flag(tmp_path, monkeypatch):
+    sys.path.insert(0, str(REPO / "scripts"))
+    import sealed_robot as SRB  # pyright: ignore[reportMissingImports]
+
+    seen = {}
+
+    def fake(out, seeds):
+        seen.update(out=out, seeds=seeds)
+        return {"runs_root": str(out / "runs"), "n_missions": 192}
+
+    rec = {"attempt": 2, "seeds": {"seed_ints": [1000 + i for i in range(16)]}}
+    monkeypatch.delenv("INTERCYCLE_SEALED_RUN", raising=False)
+    with pytest.raises(SRB.RobotStageError, match="sealed flag"):
+        SRB.run_stage("double", rec, repo=tmp_path, double_runner=fake)
+    monkeypatch.setenv("INTERCYCLE_SEALED_RUN", "1")
+    out = SRB.run_stage("double", rec, repo=tmp_path, double_runner=fake)
+    assert seen["seeds"] == rec["seeds"]["seed_ints"] and seen["out"] == tmp_path / SRB.DOUBLE_OUT / "attempt_002"
+    assert out["n_missions"] == 192
+    for st, r, msg in (("isaac", rec, "descriptive"), ("nope", rec, "unknown"),
+                       ("double", {"attempt": 3, "seeds": {"seed_ints": [1]}}, "16 revealed")):
+        with pytest.raises(SRB.RobotStageError, match=msg):
+            SRB.run_stage(st, r, repo=tmp_path, double_runner=fake)
 
 
 def test_local_batch_end_to_end_into_twin_eval(tmp_path, monkeypatch):

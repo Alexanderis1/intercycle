@@ -45,6 +45,7 @@ from twin import observer_live as OL
 SPEC_FILE = "observer_spec.json"
 MARGIN_FILE = "m7_margin.json"
 LEARN_FILE = "learn_obs.jsonl"
+SNAPSHOT_FILE = "observer_snapshot.pkl"     # = scripts/run_double.SNAPSHOT (the batch's learned-arm start state)
 VK_FILE = "observer_vk.txt"
 SPEC_CONTRACT = "twin.observer_spec/1"
 
@@ -105,6 +106,24 @@ def learned_observer(spec: dict, margin_path: str, learn_path: Path) -> tuple[OL
     return ob, t_now, n
 
 
+def snapshot_observer(world: Path, t0: float) -> tuple[OL.ObserverLive, float, int]:
+    """The CPU-double batch's learned arm: the observer state pickled by the batch's observer phase
+    (scripts/run_double.py observer_phase: days 1-8 + the robot-free stream of the scored day up to the mission start,
+    all of it Observation v2 only), shipped as <world>/observer_snapshot.pkl. Fail closed: the file must hold an
+    ObserverLive whose newest ingested capture predates the mission start t0 (plant seconds). The pickle is our own
+    observer-phase output (same image, same python), never a viewer- or network-supplied file.
+    Returns (observer, its newest capture time, ticks ingested)."""
+    import pickle
+
+    with open(world / SNAPSHOT_FILE, "rb") as f:
+        ob = pickle.load(f)
+    if not isinstance(ob, OL.ObserverLive):
+        raise ValueError(f"{SNAPSHOT_FILE}: not an ObserverLive ({type(ob).__name__})")
+    if ob.t_last is None or not float(ob.t_last) < float(t0):
+        raise ValueError(f"{SNAPSHOT_FILE}: newest capture {ob.t_last} does not predate the mission start {t0}")
+    return ob, float(ob.t_last), int(ob.n_ticks)
+
+
 def write_vk(work: Path, vk: str) -> None:
     tmp = work / (VK_FILE + ".tmp")
     tmp.write_text(vk, encoding="utf-8")
@@ -119,13 +138,23 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--log", default="", help="JSONL log (default <obs dir>/broadcast_live.jsonl)")
     ap.add_argument("--fast-every", type=float, default=0.5)
     ap.add_argument("--slow-every", type=float, default=10.0)
+    ap.add_argument("--snapshot-t0", type=float, default=None,
+                    help="start from <world>/observer_snapshot.pkl (the CPU-double batch), which must predate this "
+                         "mission start (plant seconds); default: re-ingest learn_obs.jsonl (the slice)")
     a = ap.parse_args(argv)
     work, world, obs_path = Path(a.work), Path(a.world), Path(a.obs)
     log = open(a.log or obs_path.parent / "broadcast_live.jsonl", "a", encoding="utf-8")
     key, vk = episode_key()
+    if a.snapshot_t0 is not None:
+        rec = json.loads((world / SPEC_FILE).read_text(encoding="utf-8"))
+        if rec.get("contract") != SPEC_CONTRACT:
+            raise ValueError(f"{SPEC_FILE}: contract {rec.get('contract')!r} != {SPEC_CONTRACT!r}")
+        spec, zone_machines = rec["spec"], list(rec["zone_machines"])
+        ob, t_now, n_learn = snapshot_observer(world, float(a.snapshot_t0))
+    else:
+        spec, zone_machines, margin_path, learn_path = load_inputs(world, work)
+        ob, t_now, n_learn = learned_observer(spec, margin_path, learn_path)
     write_vk(work, vk)
-    spec, zone_machines, margin_path, learn_path = load_inputs(world, work)
-    ob, t_now, n_learn = learned_observer(spec, margin_path, learn_path)
     bundle = pack_map_for_key(ob.map_snapshot(), key, version=1, issue_time=DAY0_UNIX + t_now)
     zv = ZoneView(ob, zone_machines)
     diag = ob.diagnostics()
