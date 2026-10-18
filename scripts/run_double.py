@@ -6,12 +6,16 @@
 Per world (intercycle.eval.twin_batch for the plan, the order, re-runs, layout and cost):
   1. day scripts: days 1-10 of the world from the generator in force (twin/daygen.py v1; the G0 stub generator
      twin/daygen_stub.py when the slice runs on the whole v0 stub set), written as plant-only files.
-  2. observer phase (`observer_phase`): the robot-free plant stream (twin/engine.py -> the plant's camera model ->
-     the plant's ObsAdapter, exactly the plant's per-tick path) of days 1-8 and of days 9-10 up to each mission start
-     feeds ONE twin/observer_live.py observer; at each mission start its state is pickled (snapshot). The learned arm's
-     broadcaster (twin/broadcast_state.py) starts from that snapshot and then tails the mission's live obs_v2.jsonl, so
-     its layers come ONLY from days 1-8 plus live observations (DISCLOSED: the stream of a day 9 mission's 720 s is
-     the robot-free stream in the observer phase, the same for all three conditions, so day 10's state stays paired).
+  2. observer phase, learn20 (`learn20_phase`, the DEFAULT for the sealed and dev paths; docs/LEARN20_AMENDMENT.md,
+     USER DECISION Sun ~08:35 CEST "Try days 1-8, else 20 min"): for each learned mission, a FRESH twin/observer_live.py
+     observer learns, as scripts/slice.py does, the robot-free plant stream (twin/engine.py -> the plant's camera model
+     -> the plant's ObsAdapter, exactly the plant's per-tick path) of the SAME world day over [t0 - 1200 s, t0)
+     (slice.py LEARN_S; clipped at the day start, `learn_window`); its state is pickled (snapshot). The learned arm's
+     broadcaster (twin/broadcast_live.py) starts from that snapshot and then tails the mission's live obs_v2.jsonl, so
+     its layers come ONLY from that 20 min plus live observations: no learning across days, zones or missions. Only
+     the mission days (9-10) are generated. The old phase (`observer_phase`: days 1-8 + the scored day up to t0
+     through ONE observer per world) is kept only behind the dev-only, non-default --observer-days18 (mode days18,
+     refused in a sealed run): measured ~14.4 h per world, it cannot run before the deadline.
   3. missions: twin_batch.rounds (the reactive chain per world in time order), each round in parallel; after a round,
      scripts/classify_invalid.py labels its batch dir from the logs alone and every (world, day, zone) with an
      infrastructure-invalid run is re-run with ALL conditions (twin_batch.reruns) before the next round.
@@ -72,6 +76,16 @@ SEALED_BACKEND = "modal"                # the sealed batch runs the real policie
 SEALED_BACKEND_READY = True             # the Modal backend is wired (dev smoke on the stub world: see the lane report)
 SNAPSHOT = "observer_snapshot.pkl"      # the pickled observer state at a mission start (one per (world, day, zone))
 SCORED_DAYS = (9, 10)
+# The learned arm's observer phase (docs/LEARN20_AMENDMENT.md, USER DECISION Sun ~08:35 CEST "Try days 1-8, else
+# 20 min"; days 1-8 measured at ~14.4 h per world, so the 20 min fallback is in force):
+#   learn20 (DEFAULT, sealed and dev): per learned mission, a FRESH observer learns the robot-free plant stream of the
+#            SAME world day over [t0 - LEARN_WINDOW_S, t0) (scripts/slice.py LEARN_S = 1200 s), then the snapshot.
+#   days18   (dev only, explicit --observer-days18; refused in a sealed run): the old PLAN_TWIN §5 phase, days 1-8 + the
+#            scored day up to t0 through ONE observer per world.
+LEARN_WINDOW_S = float(SL.LEARN_S)
+OBSERVER_LEARN20, OBSERVER_DAYS18 = "learn20", "days18"
+OBSERVER_MODES = (OBSERVER_LEARN20, OBSERVER_DAYS18)
+DEFAULT_OBSERVER_MODE = OBSERVER_LEARN20
 
 
 class DoubleError(RuntimeError):
@@ -174,8 +188,82 @@ def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float
     while pending:                                         # a slot at the very end of the last day
         d, z, _ = pending.pop(0)
         snaps[(d, z)] = pickle.dumps(ob, protocol=pickle.HIGHEST_PROTOCOL)
-    return snaps, {"world": world.index, "ticks": n, "wall_s": round(time.time() - t_wall, 1), "per_day_wall_s": per_day,
+    return snaps, {"world": world.index, "mode": OBSERVER_DAYS18, "ticks": n, "wall_s": round(time.time() - t_wall, 1),
+                   "per_day_wall_s": per_day, "snapshot_bytes": {f"d{d}_{z}": len(b) for (d, z), b in snaps.items()}}
+
+
+def learn_window(t0: float, day_start: float, learn_s: float = LEARN_WINDOW_S) -> tuple[float, float, bool]:
+    """The learn20 window of a mission starting at t0 (absolute plant seconds): [t0 - learn_s, t0) of the SAME world
+    day, clipped at the day's start (twin_batch.SLOT_PAD_S = 600 s lets a slot start < learn_s into its day; the day
+    before is never used). Returns (t_from, t_to, clipped)."""
+    a = float(t0) - float(learn_s)
+    return (max(a, float(day_start)), float(t0), a < float(day_start) - 1e-9)
+
+
+def learn20_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float]], day_s: float = TB.DAY_S,
+                  scripts: dict[int, Any] | None = None,
+                  learn_s: float = LEARN_WINDOW_S) -> tuple[dict[tuple[int, str], bytes], dict]:
+    """The learn20 observer phase (docs/LEARN20_AMENDMENT.md), as scripts/slice.py learns: for each slot (day, zone,
+    t0) a FRESH observer ingests the robot-free plant stream of that day (twin/engine.py -> the plant's camera model,
+    built fresh as a plant started at the window start builds it -> the plant's ObsAdapter) whose captures lie in
+    `learn_window` = [t0 - learn_s, t0); its pickle is the slot's snapshot. Nothing crosses days or zones (no state is
+    carried from one slot to the next). The delivery rule of `observer_phase` is kept: the snapshot holds the longest
+    capture-order prefix whose every obs.t <= t0 (the one-latency gap at the mission start, same for all conditions).
+    Returns (snapshots, stats)."""
+    t_wall = time.time()
+    model = _camera(ctx, world.seed, 1).provenance()["model"]
+    cfg = OL.config_for_camera(model, str(ctx["margin"]), stub_run=ctx["stub"])
+    snaps: dict[tuple[int, str], bytes] = {}
+    windows: dict[str, dict] = {}
+    n_all = 0
+    for d, z, t0 in sorted(slots, key=lambda s: (s[2], s[0], s[1])):
+        t_slot = time.time()
+        script = scripts[d] if scripts and d in scripts else generate_day(ctx, world.seed, d, day_s)
+        eng = Engine(script, ctx["site"], ctx["dyn"])
+        a, b, clipped = learn_window(t0, eng.t0, learn_s)
+        cam = _camera(ctx, world.seed, d)
+        ad = PL.ObsAdapter(ctx["site"], hold_s=dict(cam.hold_s_by_press), roi_vis=cam.roi_vis,
+                           occlusion=cam.occlusion_rule)
+        ob = OL.ObserverLive(ctx["spec"], cfg)
+        n = 0
+        t_first = t_last = None
+        for t in eng.tick_times(a, b):                       # captures in [a, t0) only: robot-free (no extra movers)
+            obs = ad(cam.observe(eng.tick(float(t))))
+            if obs.t > t0 + 1e-9:                            # not out by t0: neither this one nor any later capture
+                break
+            ob.ingest(obs)
+            t_first = obs.t_cap if t_first is None else t_first
+            t_last = obs.t_cap
+            n += 1
+        if n == 0:
+            raise DoubleError(f"w{world.index} d{d} {z}: the learn window [{a}, {b}) holds no observation (fail closed)")
+        snaps[(d, z)] = pickle.dumps(ob, protocol=pickle.HIGHEST_PROTOCOL)
+        n_all += n
+        windows[f"d{d}_{z}"] = {"t0": float(t0), "t_from": a, "t_to": b, "learn_s": round(b - a, 3), "clipped": clipped,
+                                "ticks": n, "t_cap_first": t_first, "t_cap_last": t_last, "day_start": eng.t0,
+                                "wall_s": round(time.time() - t_slot, 1)}
+    return snaps, {"world": world.index, "mode": OBSERVER_LEARN20, "learn_window_s": float(learn_s), "ticks": n_all,
+                   "wall_s": round(time.time() - t_wall, 1), "windows": windows,
                    "snapshot_bytes": {f"d{d}_{z}": len(b) for (d, z), b in snaps.items()}}
+
+
+def run_observer_phase(mode: str, ctx: dict, world: TB.World, slots: list[tuple[int, str, float]], day_s: float,
+                       scripts: dict[int, Any] | None = None) -> tuple[dict[tuple[int, str], bytes], dict]:
+    """The observer phase of `mode` (OBSERVER_MODES; the default learn20)."""
+    if mode == OBSERVER_LEARN20:
+        return learn20_phase(ctx, world, slots, day_s, scripts=scripts)
+    if mode == OBSERVER_DAYS18:
+        return observer_phase(ctx, world, slots, day_s, scripts=scripts)
+    raise DoubleError(f"observer mode {mode!r} unknown ({' | '.join(OBSERVER_MODES)})")
+
+
+def check_observer_mode(mode: str) -> None:
+    """learn20 is the default; days18 is a dev-only explicit choice, refused in a sealed run (USER DECISION)."""
+    if mode not in OBSERVER_MODES:
+        raise DoubleError(f"observer mode {mode!r} unknown ({' | '.join(OBSERVER_MODES)})")
+    if mode != DEFAULT_OBSERVER_MODE and os.environ.get(SEALED_ENV) == "1":
+        raise DoubleError(f"observer mode {mode!r} refused in a sealed run: the sealed batch learns {OBSERVER_LEARN20} "
+                          "(docs/LEARN20_AMENDMENT.md)")
 
 
 # ------------------------------------------------------------------------------------------------ missions
@@ -261,18 +349,23 @@ def _remote(ctx: dict, k: str) -> str:
 
 def remote_observer_phase(job: dict, plant_dir: Path, vol_root: Path) -> dict:
     """In the observer-phase container (cloud/modal_isaac_robot.double_observer_phase): the day scripts written by the
-    LOCAL generator (shipped as plant-only files; the engine opens them through the truth guard) -> observer_phase ->
-    one pickled snapshot per slot on the volume. Returns the stats with the snapshots' volume-relative paths."""
+    LOCAL generator (shipped as plant-only files; the engine opens them through the truth guard) -> the observer phase
+    of job["observer_mode"] (run_observer_phase; learn20 when absent) -> one pickled snapshot per slot on the volume. Returns the stats with the snapshots' volume-relative paths."""
     from twin.engine import load_day_script
 
     site, dyn = load(Site, REPO / job["site"]), load(Dynamics, REPO / job["dynamics"])
     margin = Path("/tmp") / f"{job['tag']}_m7_margin.json"
     margin.write_bytes(job["margin"])
-    ctx = {"spec": job["spec"], "margin": margin, "site": site, "dyn": dyn, "stub": bool(job["stub"])}
+    # _camera picks the camera from the site FILE name (StubCameraV0 on the G0 stub site, else stat_v1), so the remote
+    # ctx carries the shipped site / dynamics paths as setup() does locally (without it: KeyError 'paths' on Modal)
+    ctx = {"spec": job["spec"], "margin": margin, "site": site, "dyn": dyn, "stub": bool(job["stub"]),
+           "paths": {"site": REPO / job["site"], "dynamics": REPO / job["dynamics"]}}
     scripts = {int(d): load_day_script(plant_dir / name) for d, name in job["days"].items()}
     world = TB.World(**job["world"])
-    snaps, st = observer_phase(ctx, world, [(int(d), str(z), float(t)) for d, z, t in job["slots"]], float(job["day_s"]),
-                               scripts=scripts)
+    mode = str(job.get("observer_mode", DEFAULT_OBSERVER_MODE))
+    check_observer_mode(mode)
+    snaps, st = run_observer_phase(mode, ctx, world, [(int(d), str(z), float(t)) for d, z, t in job["slots"]],
+                                   float(job["day_s"]), scripts=scripts)
     rels = {}
     for (d, z), b in snaps.items():
         rel = f"{job['snap_dir']}/snap_d{d}_{z}.pkl"
@@ -424,7 +517,8 @@ class ModalRunner:
 
 
 def modal_batch(ctx: dict, out: Path, worlds: list[TB.World], missions: list[TB.Mission], rnds, scripts, objs_days,
-                classify: Callable[[Path], dict], costs: list[dict], phase_stats: list[dict]) -> tuple[list, list]:
+                classify: Callable[[Path], dict], costs: list[dict], phase_stats: list[dict],
+                observer_mode: str = DEFAULT_OBSERVER_MODE) -> tuple[list, list]:
     """Observer phases (one container per world, all in parallel), then the rounds (module doc step 3) on Modal."""
     import modal_isaac_robot as R  # pyright: ignore[reportMissingImports]
 
@@ -438,6 +532,7 @@ def modal_batch(ctx: dict, out: Path, worlds: list[TB.World], missions: list[TB.
         files = dict(PL.day_script_payload(scripts[(w.index, d)]) for d in days)
         jobs.append(({"tag": f"{batch_id}_obs_w{w.index}", "world": TB.asdict(w), "slots": [list(s) for s in slots],
                       "days": days, "day_s": objs_days, "stub": ctx["stub"], "spec": ctx["spec"],
+                      "observer_mode": observer_mode,
                       "margin": Path(ctx["margin"]).read_bytes(),
                       "site": Path(ctx["paths"]["site"]).resolve().relative_to(REPO).as_posix(),
                       "dynamics": Path(ctx["paths"]["dynamics"]).resolve().relative_to(REPO).as_posix(),
@@ -513,12 +608,15 @@ def chain_check(state_out: Path, m: TB.Mission, prev_local: Path | None) -> dict
 
 def run_batch(out: Path, worlds: list[TB.World], *, backend: str = "local", zones: list[str] | None = None,
               day_s: float = TB.DAY_S, wave_size: int = TB.WAVE_SIZE,
-              classify: Callable[[Path], dict] | None = None, stubs: bool = False, max_cells: int = 0) -> dict:
+              classify: Callable[[Path], dict] | None = None, stubs: bool = False, max_cells: int = 0,
+              observer_mode: str = DEFAULT_OBSERVER_MODE) -> dict:
     """Steps 1-4 of the module doc for every world; returns the batch record (also <out>/double_batch.json).
     `stubs` (the stub-world end-to-end test only) runs on the whole G0 v0 stub set (setup), local backend only.
-    max_cells > 0 (dev smoke only) keeps the first max_cells (world, day, zone) cells of the plan."""
+    max_cells > 0 (dev smoke only) keeps the first max_cells (world, day, zone) cells of the plan. observer_mode =
+    OBSERVER_MODES (learn20 default; days18 dev only, refused in a sealed run)."""
     if backend not in ("local", "modal"):
         raise DoubleError(f"backend {backend!r} unknown (local | modal)")
+    check_observer_mode(observer_mode)
     if stubs and backend != "local":
         raise DoubleError("the G0 stub set runs on the local wiring backend only (fail closed)")
     t_wall = time.time()
@@ -539,20 +637,22 @@ def run_batch(out: Path, worlds: list[TB.World], *, backend: str = "local", zone
     snaps: dict[tuple[int, int, str], bytes] = {}
     phase_stats: list[dict] = []
     last_day = max(m.day for m in missions)
+    # learn20 learns on the mission days only (no day before them is generated); days18 needs days 1..last_day
+    gen_days = (sorted({m.day for m in missions}) if observer_mode == OBSERVER_LEARN20 else range(1, last_day + 1))
     objs_by_world = {}
     for w in worlds:
-        sp, objs = write_days(ctx, w, range(1, last_day + 1), day_s, days_dir)
+        sp, objs = write_days(ctx, w, gen_days, day_s, days_dir)
         scripts.update({(w.index, d): p for d, p in sp.items()})
         objs_by_world[w.index] = objs
     classify = classify or classify_batch
     if backend == "modal":
         all_missions, invalid_lists = modal_batch(ctx, out, worlds, missions, rnds, scripts, day_s, classify, costs,
-                                                  phase_stats)
+                                                  phase_stats, observer_mode)
         return finish_batch(out, ctx, backend, worlds, zs, missions, rnds, runs, all_missions, invalid_lists,
-                            phase_stats, costs, t_wall)
+                            phase_stats, costs, t_wall, observer_mode)
     for w in worlds:
         slots = sorted({(m.day, m.zone, m.t0) for m in missions if m.world == w})
-        s, st = observer_phase(ctx, w, list(slots), day_s, scripts=objs_by_world[w.index])
+        s, st = run_observer_phase(observer_mode, ctx, w, list(slots), day_s, scripts=objs_by_world[w.index])
         snaps.update({(w.index, d, z): b for (d, z), b in s.items()})
         phase_stats.append(st)
         costs.append({"what": f"observer_phase w{w.index}", "wall_s": st["wall_s"], "usd": 0.0})
@@ -580,17 +680,20 @@ def run_batch(out: Path, worlds: list[TB.World], *, backend: str = "local", zone
             todo = TB.reruns(todo, lst.get("invalid", []))
             k += 1
     return finish_batch(out, ctx, backend, worlds, zs, missions, rnds, runs, all_missions, invalid_lists, phase_stats,
-                        costs, t_wall)
+                        costs, t_wall, observer_mode)
 
 
 def finish_batch(out: Path, ctx: dict, backend: str, worlds, zs, missions, rnds, runs: Path, all_missions,
-                 invalid_lists, phase_stats, costs, t_wall: float) -> dict:
+                 invalid_lists, phase_stats, costs, t_wall: float,
+                 observer_mode: str = DEFAULT_OBSERVER_MODE) -> dict:
     inv = TB.merge_invalid(invalid_lists, TB.mission_records(all_missions))
     TB.write_json(runs / TB.INVALID_ALL, inv)
     rec = {"contract": "twin.double_batch/1", "backend": backend, "split": worlds[0].split,
            "worlds": [TB.asdict(w) for w in worlds], "zones": zs, "conditions": list(SEALED_CONDITIONS),
            "n_missions": len(missions), "n_rounds": len(rnds), "runs_root": str(runs),
-           "invalid": str(runs / TB.INVALID_ALL), "observer_phase": phase_stats, "costs": costs,
+           "invalid": str(runs / TB.INVALID_ALL), "observer_mode": observer_mode,
+           "learn_window_s": LEARN_WINDOW_S if observer_mode == OBSERVER_LEARN20 else None,
+           "observer_phase": phase_stats, "costs": costs,
            "usd": round(sum(c.get("usd", c.get("container_usd", 0.0)) or 0.0 for c in costs), 4),
            "wall_s": round(time.time() - t_wall, 1), "margin": ctx["margin_source"], "stub_inputs": ctx["stub"]}
     TB.write_json(out / "double_batch.json", rec)
@@ -624,7 +727,8 @@ def run_sealed(out: Path, seed_ints: list[int], *, backend: str = "modal") -> di
     if backend != SEALED_BACKEND or not SEALED_BACKEND_READY:
         raise DoubleError(f"the sealed batch runs only on the {SEALED_BACKEND} backend (ready: {SEALED_BACKEND_READY}); "
                           f"{backend!r} refused (the local backend is a wiring double, not the policies)")
-    return run_batch(out, [TB.World(i, s, "test") for i, s in enumerate(seed_ints)], backend=backend)
+    return run_batch(out, [TB.World(i, s, "test") for i, s in enumerate(seed_ints)], backend=backend,
+                     observer_mode=OBSERVER_LEARN20)                # always learn20 (docs/LEARN20_AMENDMENT.md)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -637,6 +741,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backend", default="local", choices=("local", "modal"))
     ap.add_argument("--day-s", type=float, default=TB.DAY_S, help="generated day length (dev smoke only)")
     ap.add_argument("--max-cells", type=int, default=0, help="dev smoke: keep the first N (world, day, zone) cells")
+    ap.add_argument("--observer-days18", action="store_true",
+                    help="dev only, non-default: the old days 1-8 observer phase instead of learn20 (LEARN20_AMENDMENT)")
     a = ap.parse_args(argv)
     if a.sealed or not a.dev:
         print("run_double REFUSED: the sealed batch runs only through scripts/sealed_run.py (after the robot FREEZE); "
@@ -644,7 +750,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     out = Path(a.out) if a.out else REPO / "out" / "double" / time.strftime("%m%d_%H%M%S")
     rec = run_batch(out, dev_worlds([int(x) for x in a.worlds.split(",") if x]), backend=a.backend,
-                    zones=[z for z in a.zones.split(",") if z] or None, day_s=a.day_s, max_cells=a.max_cells)
+                    zones=[z for z in a.zones.split(",") if z] or None, day_s=a.day_s, max_cells=a.max_cells,
+                    observer_mode=OBSERVER_DAYS18 if a.observer_days18 else DEFAULT_OBSERVER_MODE)
     print(json.dumps({k: rec[k] for k in ("n_missions", "n_rounds", "usd", "wall_s", "runs_root")}, indent=1))
     return 0
 
