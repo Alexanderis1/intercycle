@@ -42,8 +42,15 @@ import pandas as pd
 from intercycle.observer import mapping as OM
 from intercycle.observer import watchdog as WD
 from intercycle.perception.esk_ingest import project_tracks
-from twin.plant import _bbox
 from twin.schemas.site import Site
+
+
+def _bbox(poly, grow: float = 0.0) -> tuple[float, float, float, float]:
+    """Axis-aligned danger rect of a press polygon grown by its dilation: the same rule as twin.plant._bbox (a truth
+    module, which this real-clip path may not import: tests/test_truth_allowlist.py; equality is tested)."""
+    xs, zs = [p[0] for p in poly], [p[1] for p in poly]
+    return min(xs) - grow, min(zs) - grow, max(xs) + grow, max(zs) + grow
+
 
 TICK_S = 1.0 / OM.FRAME_HZ
 WATCH_WIDTH = 960                     # train keyframes are 960 px wide; live frames are resized to it (sharpness scale)

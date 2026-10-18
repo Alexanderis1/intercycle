@@ -265,3 +265,26 @@ def test_site_adapter_roi_occluder_is_missing():
     o = ad.step(0.5, det, _frame(13), PA.motion_at(mach, 0.5))
     assert bool(np.asarray(o.cam_floor_ok)[0]) and o.machine[0] == 0
     assert np.asarray(o.zone_motion)[0] == pytest.approx(0.5)                     # no floor rule on real clips
+
+
+def test_danger_rect_rule_equals_the_twin_plant_rule():
+    """pixel_adapter keeps its own copy of the danger-rect rule (it may not import the truth module twin.plant)."""
+    from twin import plant
+
+    for poly, grow in (([(0.0, 0.0), (2.0, 1.0), (1.0, 3.0)], 0.0), ([(-1.5, 2.0), (4.0, -3.0)], 0.6)):
+        assert PA._bbox(poly, grow) == plant._bbox(poly, grow)
+
+
+def test_run_reads_tables_and_clips_from_the_given_dirs(tmp_path):
+    """Sealed scoring passes perc / clips_dir: a missing PERC table is looked for there, not under data."""
+    from types import SimpleNamespace as NS
+
+    inv = pd.DataFrame({"clip_id": ["0_te1"], "camera": [9], "framing_id": ["c9_f1"], "group_id": ["g"],
+                        "class": [0], "duration": [4.0], "sha256": ["x"], "split": ["test"], "dup_of": [None],
+                        "dup_classes": [None]})
+    inv.to_parquet(tmp_path / "inventory.parquet")
+    sd = NS(frames=[NS(clip_id="0_te1", t_pts=1.0, boxes=[], sample_id="f1")], windows=[], hidden={}, ignore={})
+    site = Path(__file__).resolve().parents[1] / "twin" / "site.yaml"
+    with pytest.raises(FileNotFoundError, match="0_te1"):
+        RC.run(None, tmp_path, site, ("test",), watchdog=False, scored=sd, perc=tmp_path / "perc",
+               clips_dir=tmp_path / "clips")

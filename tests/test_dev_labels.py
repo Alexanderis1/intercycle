@@ -211,3 +211,58 @@ def test_committed_c9_f1_frames_box_the_left_border_operator():
         left = [b for b in fr[sid].boxes if b.cls == "person" and b.x0 == 0.0 and 330 <= b.y0 <= 420
                 and b.y1 <= 480]
         assert len(left) == 1 and left[0].truncated and left[0].occluded, sid
+
+
+# ---- RC-freeze fix1: the sealed TEST labels (load_scored_test, scripts/sealed_run.py score) -----------------------
+
+def _test_sets(win_labels, extra_frame_in_windows=False):
+    items = [SampleItem(sample_id="test-f-c9-01", kind="frame", clip_id="c0", group_id="g", camera=9, split="test",
+                        t_pts=1.0)]
+    items += [SampleItem(sample_id=sid, kind="stroke_window", clip_id=c, group_id="g", camera=9, split="test",
+                         press="P9b", t0=0.0, t1=8.0)
+              for sid, c in (("test-sw-P9b-01", "c1"), ("test-sw-P9b-02", "c2"), ("test-sw-P9b-r1", "c3"))]
+    sl = dict(contract="twin.label_samples/1", split="test", seed=1, rule="r",
+              items=[i.model_dump(mode="json") for i in items], items_sha256=sample_items_sha256(items))
+    head = dict(contract="twin.labels/1", split="test", labeller_id="agent:t", labeller_kind="claude_agent",
+                blind=True, proposals_shown=False, rules_sha256=SHA, sample_list_sha256=sl["items_sha256"])
+    fr = dict(sample_id="test-f-c9-01", clip_id="c0", t_pts=1.0, boxes=[], note="nobody in view")
+    frames = dict(head, frames=[fr], stroke_windows=[])
+    wins = dict(head, frames=[fr] if extra_frame_in_windows else [],
+                stroke_windows=[dict(sample_id=i.sample_id, clip_id=i.clip_id, press="P9b", t0=0.0, t1=8.0,
+                                     strokes=win_labels[i.sample_id][0], note=win_labels[i.sample_id][1])
+                                for i in items if i.sample_id in win_labels])
+    blobs = {"labels/sample.json": json.dumps(sl).encode(), "labels/labels_windows.json": json.dumps(wins).encode(),
+             "labels/labels_frames.json": json.dumps(frames).encode()}
+    return blobs, {"c0": "s0", "c1": "s1", "c2": "s2", "c3": "s3"}
+
+
+def test_load_scored_test_uses_list_order_for_reserves(monkeypatch):
+    monkeypatch.setattr(DL, "TARGET_PER_PRESS", 2)
+    full = {"test-sw-P9b-01": ([1.0], "ok"), "test-sw-P9b-02": ([2.0], "hidden 3.00-4.00 s"),
+            "test-sw-P9b-r1": ([1.5], "ok")}
+    blobs, sha = _test_sets(full)
+    sd = DL.load_scored_test(blobs, "labels/sample.json", sha)
+    assert [f.sample_id for f in sd.frames] == ["test-f-c9-01"]
+    assert [w.sample_id for w in sd.windows] == ["test-sw-P9b-01", "test-sw-P9b-02"]       # r1 not needed
+    assert sd.hidden["test-sw-P9b-02"] == [[3.0, 4.0]]
+    assert sd.doc["counts"]["short_presses"] == {}
+    stopped = dict(full, **{"test-sw-P9b-02": ([], "press not running")})                  # r1 fills the gap
+    sd = DL.load_scored_test(_test_sets(stopped)[0], "labels/sample.json", sha)
+    assert [w.sample_id for w in sd.windows] == ["test-sw-P9b-01", "test-sw-P9b-r1"]
+    short = dict(stopped, **{"test-sw-P9b-r1": ([], "NOT SCORABLE: ram not seen")})       # reported, not refused
+    sd = DL.load_scored_test(_test_sets(short)[0], "labels/sample.json", sha)
+    assert sd.doc["counts"]["short_presses"] == {"P9b": 1}
+
+
+def test_load_scored_test_fails_closed():
+    full = {"test-sw-P9b-01": ([1.0], "ok"), "test-sw-P9b-02": ([2.0], "ok"), "test-sw-P9b-r1": ([1.5], "ok")}
+    blobs, sha = _test_sets({k: v for k, v in full.items() if k != "test-sw-P9b-r1"})
+    with pytest.raises(ValueError, match="unlabelled"):                     # every item is labelled, reserves too
+        DL.load_scored_test(blobs, "labels/sample.json", sha)
+    blobs, sha = _test_sets(full, extra_frame_in_windows=True)
+    with pytest.raises(ValueError, match="more than one label file"):
+        DL.load_scored_test(blobs, "labels/sample.json", sha)
+    blobs, sha = _test_sets(full)
+    dev = blobs["labels/labels_windows.json"].replace(b'"split": "test"', b'"split": "dev"')
+    with pytest.raises(ValueError):                                          # a dev set is refused
+        DL.load_scored_test(dict(blobs, **{"labels/labels_windows.json": dev}), "labels/sample.json", sha)
