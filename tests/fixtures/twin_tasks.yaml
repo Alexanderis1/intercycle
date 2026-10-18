@@ -1,0 +1,60 @@
+# Golden fixture for twin.tasks/1 (tests/test_twin_contracts.py). Synthetic values, not real data.
+contract: twin.tasks/1
+site_id: fixture_site
+inspection: {defect_rate: 0.25, zoom_max: 20.0, detectability: p_detect = 1 - exp(-(px_per_mm / 2.0)) * cos(incidence)}
+zones:
+- zone: z9
+  dock: {x: 1.0, z: 1.0, yaw: 0.0}
+  mission_order: [cp1, cp2]
+- zone: z14
+  dock: {x: 31.0, z: 1.0, yaw: 0.0}
+  mission_order: [cp3]
+checkpoints:
+- id: cp1
+  zone: z9
+  press: P9a
+  target_kind: press
+  target_xzh: [6.2, 5.5, 1.2]
+  normal_xz: [0.0, -1.0]
+  candidate_poses:
+  - pose: {x: 6.2, z: 4.0, yaw: 0.0}
+    source: generated
+    standoff_m: 1.5
+  inside_danger: true
+  dwell_s: 8.0
+  zoom: 20.0
+  thermal: true
+  source: traced_v0
+  clips: [c9_train_0001]
+- id: cp2
+  zone: z9
+  press: null
+  target_kind: panel
+  target_xzh: [11.0, 3.0, 1.2]
+  normal_xz: [0.0, -1.0]
+  candidate_poses:
+  - pose: {x: 11.0, z: 1.5, yaw: 0.0}
+    source: generated
+    standoff_m: 1.5
+  inside_danger: false
+  dwell_s: 8.0
+  zoom: 4.0
+  thermal: false
+  source: traced_v0
+  clips: [c9_train_0001]
+- id: cp3
+  zone: z14
+  press: P14a
+  target_kind: press
+  target_xzh: [34.2, 4.5, 1.2]
+  normal_xz: [0.0, -1.0]
+  candidate_poses:
+  - pose: {x: 34.2, z: 3.0, yaw: 0.0}
+    source: generated
+    standoff_m: 1.5
+  inside_danger: true
+  dwell_s: 8.0
+  zoom: 20.0
+  thermal: true
+  source: traced_v0
+  clips: [c14_train_0002]

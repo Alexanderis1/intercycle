@@ -1,0 +1,157 @@
+{
+  "$defs": {
+    "SampleItem": {
+      "additionalProperties": false,
+      "properties": {
+        "sample_id": {
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "frame",
+            "stroke_window"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "clip_id": {
+          "minLength": 1,
+          "title": "Clip Id",
+          "type": "string"
+        },
+        "group_id": {
+          "minLength": 1,
+          "title": "Group Id",
+          "type": "string"
+        },
+        "camera": {
+          "enum": [
+            9,
+            14
+          ],
+          "title": "Camera",
+          "type": "integer"
+        },
+        "split": {
+          "enum": [
+            "dev",
+            "test"
+          ],
+          "title": "Split",
+          "type": "string"
+        },
+        "t_pts": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T Pts"
+        },
+        "press": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Press"
+        },
+        "t0": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T0"
+        },
+        "t1": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T1"
+        }
+      },
+      "required": [
+        "sample_id",
+        "kind",
+        "clip_id",
+        "group_id",
+        "camera",
+        "split"
+      ],
+      "title": "SampleItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.label_samples/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "dev",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "seed": {
+      "minimum": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "rule": {
+      "minLength": 1,
+      "title": "Rule",
+      "type": "string"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/SampleItem"
+      },
+      "minItems": 1,
+      "title": "Items",
+      "type": "array"
+    },
+    "items_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Items Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "contract",
+    "split",
+    "seed",
+    "rule",
+    "items",
+    "items_sha256"
+  ],
+  "title": "SampleList",
+  "type": "object"
+}

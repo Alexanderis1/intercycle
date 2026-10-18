@@ -1,0 +1,57 @@
+{
+ "contract": "twin.labels/1",
+ "split": "dev",
+ "labeller_id": "agent:dev-labeller-a",
+ "labeller_kind": "claude_agent",
+ "blind": true,
+ "proposals_shown": false,
+ "rules_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+ "sample_list_sha256": "abb5e5e7b2c3302876c01d367d65e5b4cabe058019734da7963d7f2695738ab6",
+ "frames": [
+  {
+   "sample_id": "f0001",
+   "clip_id": "c9_dev_0003",
+   "t_pts": 2.0,
+   "boxes": [
+    {
+     "cls": "person",
+     "x0": 800.0,
+     "y0": 400.0,
+     "x1": 860.0,
+     "y1": 600.0,
+     "foot_u": 830.0,
+     "foot_v": 598.0
+    },
+    {
+     "cls": "forklift",
+     "x0": 1300.0,
+     "y0": 200.0,
+     "x1": 1600.0,
+     "y1": 420.0,
+     "occluded": true
+    }
+   ]
+  },
+  {
+   "sample_id": "f0002",
+   "clip_id": "c9_dev_0003",
+   "t_pts": 4.0,
+   "boxes": [],
+   "note": "empty frame"
+  }
+ ],
+ "stroke_windows": [
+  {
+   "sample_id": "w0001",
+   "clip_id": "c9_dev_0003",
+   "press": "P9a",
+   "t0": 0.4,
+   "t1": 4.8,
+   "strokes": [
+    0.9167,
+    2.9167,
+    4.75
+   ]
+  }
+ ]
+}

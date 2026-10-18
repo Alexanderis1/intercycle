@@ -1,0 +1,268 @@
+{
+  "$defs": {
+    "Box": {
+      "additionalProperties": false,
+      "properties": {
+        "cls": {
+          "enum": [
+            "person",
+            "forklift"
+          ],
+          "title": "Cls",
+          "type": "string"
+        },
+        "x0": {
+          "minimum": 0,
+          "title": "X0",
+          "type": "number"
+        },
+        "y0": {
+          "minimum": 0,
+          "title": "Y0",
+          "type": "number"
+        },
+        "x1": {
+          "title": "X1",
+          "type": "number"
+        },
+        "y1": {
+          "title": "Y1",
+          "type": "number"
+        },
+        "foot_u": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Foot U"
+        },
+        "foot_v": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Foot V"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "occluded": {
+          "default": false,
+          "title": "Occluded",
+          "type": "boolean"
+        },
+        "src": {
+          "default": "labeller",
+          "enum": [
+            "labeller",
+            "proposal_accepted",
+            "proposal_corrected"
+          ],
+          "title": "Src",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cls",
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
+      "title": "Box",
+      "type": "object"
+    },
+    "FrameLabel": {
+      "additionalProperties": false,
+      "properties": {
+        "sample_id": {
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "clip_id": {
+          "minLength": 1,
+          "title": "Clip Id",
+          "type": "string"
+        },
+        "t_pts": {
+          "minimum": 0,
+          "title": "T Pts",
+          "type": "number"
+        },
+        "boxes": {
+          "items": {
+            "$ref": "#/$defs/Box"
+          },
+          "title": "Boxes",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "sample_id",
+        "clip_id",
+        "t_pts",
+        "boxes"
+      ],
+      "title": "FrameLabel",
+      "type": "object"
+    },
+    "StrokeWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "sample_id": {
+          "minLength": 1,
+          "title": "Sample Id",
+          "type": "string"
+        },
+        "clip_id": {
+          "minLength": 1,
+          "title": "Clip Id",
+          "type": "string"
+        },
+        "press": {
+          "minLength": 1,
+          "title": "Press",
+          "type": "string"
+        },
+        "t0": {
+          "minimum": 0,
+          "title": "T0",
+          "type": "number"
+        },
+        "t1": {
+          "title": "T1",
+          "type": "number"
+        },
+        "strokes": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Strokes",
+          "type": "array"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "sample_id",
+        "clip_id",
+        "press",
+        "t0",
+        "t1",
+        "strokes"
+      ],
+      "title": "StrokeWindow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.labels/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "split": {
+      "enum": [
+        "dev",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string"
+    },
+    "labeller_id": {
+      "minLength": 1,
+      "title": "Labeller Id",
+      "type": "string"
+    },
+    "labeller_kind": {
+      "enum": [
+        "claude_agent",
+        "human"
+      ],
+      "title": "Labeller Kind",
+      "type": "string"
+    },
+    "blind": {
+      "title": "Blind",
+      "type": "boolean"
+    },
+    "proposals_shown": {
+      "title": "Proposals Shown",
+      "type": "boolean"
+    },
+    "rules_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Rules Sha256",
+      "type": "string"
+    },
+    "sample_list_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Sample List Sha256",
+      "type": "string"
+    },
+    "frames": {
+      "items": {
+        "$ref": "#/$defs/FrameLabel"
+      },
+      "title": "Frames",
+      "type": "array"
+    },
+    "stroke_windows": {
+      "items": {
+        "$ref": "#/$defs/StrokeWindow"
+      },
+      "title": "Stroke Windows",
+      "type": "array"
+    }
+  },
+  "required": [
+    "contract",
+    "split",
+    "labeller_id",
+    "labeller_kind",
+    "blind",
+    "proposals_shown",
+    "rules_sha256",
+    "sample_list_sha256",
+    "frames",
+    "stroke_windows"
+  ],
+  "title": "LabelSet",
+  "type": "object"
+}

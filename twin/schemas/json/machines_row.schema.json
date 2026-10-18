@@ -1,0 +1,86 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "split": {
+      "enum": [
+        "train",
+        "dev",
+        "test"
+      ],
+      "title": "Split",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "clip_id": {
+      "minLength": 1,
+      "title": "Clip Id",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "press": {
+      "minLength": 1,
+      "title": "Press",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "framing": {
+      "minLength": 1,
+      "title": "Framing",
+      "type": "string",
+      "x-arrow": "string"
+    },
+    "t": {
+      "minimum": 0,
+      "title": "T",
+      "type": "number",
+      "x-arrow": "float64"
+    },
+    "flow_v": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Flow V",
+      "x-arrow": "float64"
+    },
+    "roi_energy": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Roi Energy",
+      "x-arrow": "float64"
+    },
+    "stroke": {
+      "title": "Stroke",
+      "type": "boolean",
+      "x-arrow": "bool"
+    },
+    "missing": {
+      "title": "Missing",
+      "type": "boolean",
+      "x-arrow": "bool"
+    }
+  },
+  "required": [
+    "split",
+    "clip_id",
+    "press",
+    "framing",
+    "t",
+    "flow_v",
+    "roi_energy",
+    "stroke",
+    "missing"
+  ],
+  "title": "MachineRow",
+  "type": "object"
+}

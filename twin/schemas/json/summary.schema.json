@@ -1,0 +1,206 @@
+{
+  "$defs": {
+    "CodeHashes": {
+      "additionalProperties": false,
+      "properties": {
+        "head": {
+          "title": "Head",
+          "type": "string"
+        },
+        "generator_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generator Sha256"
+        },
+        "dynamics_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dynamics Sha256"
+        }
+      },
+      "required": [
+        "head"
+      ],
+      "title": "CodeHashes",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "contract": {
+      "const": "twin.summary/1",
+      "title": "Contract",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "engine": {
+      "enum": [
+        "double",
+        "isaac"
+      ],
+      "title": "Engine",
+      "type": "string"
+    },
+    "world": {
+      "minimum": 0,
+      "title": "World",
+      "type": "integer"
+    },
+    "world_split": {
+      "enum": [
+        "dev",
+        "test"
+      ],
+      "title": "World Split",
+      "type": "string"
+    },
+    "day": {
+      "minimum": 1,
+      "title": "Day",
+      "type": "integer"
+    },
+    "zone": {
+      "title": "Zone",
+      "type": "string"
+    },
+    "condition": {
+      "enum": [
+        "no_map",
+        "static",
+        "learned",
+        "reactive",
+        "oracle"
+      ],
+      "title": "Condition",
+      "type": "string"
+    },
+    "T_s": {
+      "maximum": 720.0,
+      "minimum": 720.0,
+      "title": "T S",
+      "type": "number"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "error",
+        "infra_invalid"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "status_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Status Reason"
+    },
+    "checkpoints_planned": {
+      "minimum": 0,
+      "title": "Checkpoints Planned",
+      "type": "integer"
+    },
+    "attempted": {
+      "minimum": 0,
+      "title": "Attempted",
+      "type": "integer"
+    },
+    "passed": {
+      "minimum": 0,
+      "title": "Passed",
+      "type": "integer"
+    },
+    "declined": {
+      "minimum": 0,
+      "title": "Declined",
+      "type": "integer"
+    },
+    "robot_caused_press_stops": {
+      "minimum": 0,
+      "title": "Robot Caused Press Stops",
+      "type": "integer"
+    },
+    "holds": {
+      "minimum": 0,
+      "title": "Holds",
+      "type": "integer"
+    },
+    "incidents": {
+      "minimum": 0,
+      "title": "Incidents",
+      "type": "integer"
+    },
+    "press_time_lost_s": {
+      "minimum": 0,
+      "title": "Press Time Lost S",
+      "type": "number"
+    },
+    "path_length_m": {
+      "minimum": 0,
+      "title": "Path Length M",
+      "type": "number"
+    },
+    "code": {
+      "$ref": "#/$defs/CodeHashes"
+    },
+    "wall_s": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Wall S"
+    }
+  },
+  "required": [
+    "contract",
+    "run_id",
+    "engine",
+    "world",
+    "world_split",
+    "day",
+    "zone",
+    "condition",
+    "T_s",
+    "status",
+    "checkpoints_planned",
+    "attempted",
+    "passed",
+    "declined",
+    "robot_caused_press_stops",
+    "holds",
+    "incidents",
+    "press_time_lost_s",
+    "path_length_m",
+    "code"
+  ],
+  "title": "Summary",
+  "type": "object"
+}

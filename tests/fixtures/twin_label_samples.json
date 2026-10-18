@@ -1,0 +1,45 @@
+{
+ "contract": "twin.label_samples/1",
+ "split": "dev",
+ "seed": 20261017,
+ "rule": "frames: seeded RNG over (group, clip), 1 frame every 2 s, stratified by camera; stroke windows: seeded-random start per press clip, whole clip up to 10 s",
+ "items": [
+  {
+   "sample_id": "f0001",
+   "kind": "frame",
+   "clip_id": "c9_dev_0003",
+   "group_id": "g02",
+   "camera": 9,
+   "split": "dev",
+   "t_pts": 2.0,
+   "press": null,
+   "t0": null,
+   "t1": null
+  },
+  {
+   "sample_id": "f0002",
+   "kind": "frame",
+   "clip_id": "c9_dev_0003",
+   "group_id": "g02",
+   "camera": 9,
+   "split": "dev",
+   "t_pts": 4.0,
+   "press": null,
+   "t0": null,
+   "t1": null
+  },
+  {
+   "sample_id": "w0001",
+   "kind": "stroke_window",
+   "clip_id": "c9_dev_0003",
+   "group_id": "g02",
+   "camera": 9,
+   "split": "dev",
+   "t_pts": null,
+   "press": "P9a",
+   "t0": 0.4,
+   "t1": 4.8
+  }
+ ],
+ "items_sha256": "abb5e5e7b2c3302876c01d367d65e5b4cabe058019734da7963d7f2695738ab6"
+}
