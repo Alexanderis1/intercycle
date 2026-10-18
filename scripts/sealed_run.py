@@ -760,6 +760,11 @@ def modal_runner(batches: list[list[dict]]) -> list[dict]:
     if spec is None or spec.loader is None or not (REPO / PERC_IMAGE_MODULE).is_file():
         raise Refusal(f"{PERC_IMAGE_MODULE} is missing (PERC not merged)")
     mp = importlib.util.module_from_spec(spec)
+    # Registered BEFORE exec: Modal resolves the image's build-step function (modal_perc._prefetch_weights) through
+    # inspect.getmodule; an unregistered module makes it a SERIALIZED function, which Modal refuses when the client
+    # Python (3.14) differs from the image's (3.12). Registered, it is a FILE function (cloud/modal_perc.py, imported
+    # by name in the build container), as under `modal run cloud/modal_perc.py`. Found by the RC-freeze dry run.
+    sys.modules[spec.name] = mp
     spec.loader.exec_module(mp)
     si = _ingest_module()
     fs = modal_function_spec()
