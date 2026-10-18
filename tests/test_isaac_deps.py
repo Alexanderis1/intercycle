@@ -30,6 +30,8 @@ CPU_ONLY: tuple[str, ...] = ()          # twin modules that never run in the Isa
 # (repo-relative file, top-level package) -> why the lazy (function-level) import is not Isaac-side.
 LAZY_EXCEPTIONS: dict[tuple[str, str], str] = {
     ("twin/schemas/tables.py", "pyarrow"): "validate_table() checks parquet files on the CPU side only",
+    ("twin/plant.py", "pyarrow"): "write_log() writes log.parquet on the CPU double only; in the Isaac python the "
+                                  "import fails and the plant writes the same rows to log.jsonl (S5a)",
 }
 IMPORT_CALLS = ("import_module", "__import__")
 
