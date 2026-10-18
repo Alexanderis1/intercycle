@@ -8,9 +8,12 @@ twin.truth_guard.PLAN_READERS; §5 gate 3).
 
 Gate 3 (map unsafe-free share) compares the observer map the robot held with the realised occupancy, so it needs
 truth. This module:
-  1. refuses to open any truth file until every run under RUNS_ROOT is closed: summary.json present and valid JSON
-     (the plant writes it last) and the log closed (log.parquet with its PAR1 footer, or log.jsonl); a run directory
-     without summary.json must be in classify_invalid's committed list (a crashed container), otherwise it refuses;
+  1. refuses to open any truth file until every run under RUNS_ROOT is finished: summary.json present and valid JSON
+     (the plant writes it last) and the log closed (log.parquet with its PAR1 footer, or log.jsonl). The two records
+     of classify_invalid's committed list (intercycle.eval.twin_design.load_classified; matched by run_id or directory
+     name, as twin_design matches) count as finished too: an `invalid` run (infrastructure-invalid, re-run, never
+     scored) in any state, and a `crashed` run (crashed after the robot's first command: no summary.json) whose log is
+     closed. Any other run refuses;
   2. builds one stream per (world, day, zone) of the design from the run directories (`h3_from_runs`): the scored
      attempt of the cell's `learned` run (the condition whose robot holds the observer's map; the attempt rule is
      intercycle.eval.twin_design's, shared with twin_eval), its `realised_state.jsonl` opened through `twin.truth_guard.open_truth`
@@ -20,8 +23,10 @@ truth. This module:
      carries the realised_state token) are accepted too;
   3. writes per-tick counts at the frozen M-W7 margin: occ = truly occupied cells, miss = those the inflated
      prediction does not cover (`intercycle.margin_inflate.inflate`, the rule the robot applies and the calibration
-     cross-checks), valid = a prediction existed at t - age_s, summed over the stream's grids. Only streams of the
-     evaluated split and the scored days are accepted (any other is refused). No grid leaves this module.
+     cross-checks), valid = a prediction existed at t - age_s, summed over the stream's grids, with the run_id and
+     attempt of the run each stream came from (twin_eval refuses a stream that is not the learned run it scored). Only
+     streams of the evaluated split and the scored days are accepted (any other is refused). No grid leaves this
+     module.
 intercycle.eval.twin_eval turns the counts into units and the per-world unit-mean miss share with
 intercycle.eval.conformal_margin (stream_units, per_world_miss_share): the estimand the margin was calibrated on.
 
@@ -65,7 +70,7 @@ CONTRACT = "twin.h3_tick_counts/1"
 TOKEN = "realised_state"
 REALISED = "realised_state.jsonl"
 HELD_MAP = "held_map.npz"
-STREAM_KEYS = ("t", "t_pred", "age_s", "slice_id", "world", "day", "zone", "cell_m", "split")
+STREAM_KEYS = ("t", "t_pred", "age_s", "slice_id", "world", "day", "zone", "cell_m", "split", "run_id")
 HELD_KEYS = ("press_ids", "res", "x0", "z0", "nx", "nz", "t_pred", "t_use", "age_s", "slice_id")
 RUNNING = "running"
 H3_CONDITION = "learned"
@@ -76,16 +81,12 @@ class NotClosed(RuntimeError):
     """A run is not closed yet: truth may not be read."""
 
 
-def run_closed(run_dir: str | os.PathLike) -> str | None:
-    """None if the run is closed, else why not."""
+NO_SUMMARY = "no summary.json"
+
+
+def log_closed(run_dir: str | os.PathLike) -> str | None:
+    """None if the run's log is closed (log.parquet with its PAR1 footer, or log.jsonl), else why not."""
     d = Path(run_dir)
-    s = d / "summary.json"
-    if not s.is_file():
-        return "no summary.json"
-    try:
-        json.loads(s.read_text(encoding="utf-8"))
-    except ValueError as e:
-        return f"summary.json is not valid JSON ({e})"
     p = d / "log.parquet"
     if p.is_file():
         b = p.read_bytes()
@@ -97,21 +98,51 @@ def run_closed(run_dir: str | os.PathLike) -> str | None:
     return "no log.parquet or log.jsonl"
 
 
+def run_closed(run_dir: str | os.PathLike) -> str | None:
+    """None if the run is closed (summary.json valid JSON and the log closed), else why not."""
+    d = Path(run_dir)
+    s = d / "summary.json"
+    if not s.is_file():
+        return NO_SUMMARY
+    try:
+        json.loads(s.read_text(encoding="utf-8"))
+    except ValueError as e:
+        return f"summary.json is not valid JSON ({e})"
+    return log_closed(d)
+
+
+def _run_id(run_dir: Path) -> str:
+    """The run's id: summary.json's run_id when readable, else the directory name (twin_design.read_summary's rule)."""
+    try:
+        rid = json.loads((run_dir / "summary.json").read_text(encoding="utf-8")).get("run_id")
+        return str(rid) if rid is not None else run_dir.name
+    except (OSError, ValueError, AttributeError):
+        return run_dir.name
+
+
 def run_dirs(root: str | os.PathLike) -> list[Path]:
     """Every directory under root holding a run file (intercycle.eval.twin_design.RUN_MARKERS)."""
     return TD.find_runs(Path(root))
 
 
-def assert_runs_closed(root: str | os.PathLike, invalid: Iterable[str] = ()) -> int:
-    """Fail closed unless every run under root is closed (crashed dirs without summary.json must be listed invalid).
-    Returns the number of closed runs."""
-    inv = set(invalid)
+def assert_runs_closed(root: str | os.PathLike, invalid: Iterable[str] = (), crashed: Iterable[str] = ()) -> int:
+    """Fail closed unless every run under root is finished (module doc, step 1: closed, or listed invalid, or listed
+    crashed with no summary.json and a closed log; lists matched by run_id or directory name). Returns the number of
+    finished runs that are not listed invalid."""
+    inv, cr = set(invalid), set(crashed)
     bad, n = [], 0
     for d in run_dirs(root):
+        rid = _run_id(d)
+        if TD.listed(rid, d.name, inv):
+            continue                                       # infrastructure-invalid: re-run, never scored
         why = run_closed(d)
+        if why == NO_SUMMARY and TD.listed(rid, d.name, cr):
+            why = log_closed(d)                            # crashed after the first command: finished if its log is
+            if why is not None:
+                why = f"listed crashed, but {why}"
         if why is None:
             n += 1
-        elif not (why == "no summary.json" and d.name in inv):
+        else:
             bad.append(f"{d}: {why}")
     if bad:
         raise NotClosed("truth stays closed until every run is closed: " + "; ".join(bad[:10]))
@@ -202,17 +233,20 @@ def stream_counts(stream: str | os.PathLike | Mapping[str, Any], margin: Margin)
         o, m = tick_counts(tr, pr, idx, margin, cell)
         occ += o
         miss += m
+    rid = str(np.asarray(d["run_id"]).item())
     return {"stream": name, "world": int(d["world"]), "day": int(d["day"]), "zone": str(d["zone"]),
-            "split": str(d["split"]), "cell_m": cell, "t": np.asarray(d["t"], float).tolist(),
+            "split": str(d["split"]), "run_id": rid, "attempt": TD.attempt_of(rid), "cell_m": cell,
+            "t": np.asarray(d["t"], float).tolist(),
             "slice_id": np.asarray(d["slice_id"]).astype(int).tolist(), "occ": occ.tolist(), "miss": miss.tolist(),
             "valid": (idx >= 0).tolist()}
 
 
 def h3_tick_counts(streams: Sequence[str | os.PathLike | Mapping[str, Any]], runs_root: str | os.PathLike,
-                   margin: Margin, invalid: Iterable[str] = (), *, split: str, days: Sequence[int]) -> dict:
-    """The gate-3 counts file (module doc). One stream per (world, day, zone); truth only after every run closed.
+                   margin: Margin, invalid: Iterable[str] = (), *, split: str, days: Sequence[int],
+                   crashed: Iterable[str] = ()) -> dict:
+    """The gate-3 counts file (module doc). One stream per (world, day, zone); truth only after every run finished.
     Refuses a stream of another split or of a day that is not scored."""
-    assert_runs_closed(runs_root, invalid)
+    assert_runs_closed(runs_root, invalid, crashed)
     ds = {int(x) for x in days}
     out, seen = [], set()
     for p in streams:
@@ -323,19 +357,19 @@ def build_stream(run_dir: str | os.PathLike, site: Site, margin: Margin) -> dict
 def h3_from_runs(runs_root: str | os.PathLike, tasks: str | os.PathLike, site_path: str | os.PathLike,
                  margin: Margin, *, worlds: Sequence[int] | None, days: Sequence[int] | None = None,
                  split: str = "test", engine: str = "double", invalid: str | os.PathLike | None = None,
-                 allow_partial_design: bool = False) -> dict:
+                 allow_partial_design: bool = False, conditions: Sequence[str] | None = None) -> dict:
     """The gate-3 counts file built from the run directories (module doc, step 2). The design and the scored attempt
     per cell come from intercycle.eval.twin_design (the rule twin_eval scores the primary with); truth is opened only
     after every run under runs_root is closed."""
-    inv = TD.load_invalid(None if invalid is None else Path(invalid))
-    assert_runs_closed(runs_root, inv)                    # before any truth opening
+    inv, crashed = TD.load_classified(None if invalid is None else Path(invalid))
+    assert_runs_closed(runs_root, inv, crashed)           # before any truth opening
     planned = TD.mission_orders(Path(tasks))
     runs = TD.summary_runs(Path(runs_root), inv)
-    design = TD.make_design(runs, inv, split=split, engine=engine, worlds=worlds, days=days,
-                            allow_partial_design=allow_partial_design)
+    design = TD.make_design(runs, {**crashed, **inv}, split=split, engine=engine, worlds=worlds, days=days,
+                            conditions=conditions, allow_partial_design=allow_partial_design)
     if H3_CONDITION not in design.conditions:
         raise ValueError(f"the design has no {H3_CONDITION} condition")
-    cells = TD.index_cells(runs, planned, inv, split=split, engine=engine, design=design)
+    cells = TD.index_cells(runs, planned, inv, split=split, engine=engine, design=design, crashed=crashed)
     site = load(Site, Path(site_path))
     streams, skipped = [], []
     for w, d, z in sorted(cells.chosen):
@@ -348,7 +382,7 @@ def h3_from_runs(runs_root: str | os.PathLike, tasks: str | os.PathLike, site_pa
             streams.append(build_stream(r.run_dir, site, margin))
         except (OSError, ValueError, KeyError) as e:
             skipped.append({"cell": where, "run_id": r.run_id, "reason": repr(e)[:300]})
-    body = h3_tick_counts(streams, runs_root, margin, inv, split=split, days=design.days)
+    body = h3_tick_counts(streams, runs_root, margin, inv, split=split, days=design.days, crashed=crashed)
     body.update(design=design.as_dict(), skipped=skipped)
     return body
 
@@ -364,7 +398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--margin-file", help="the frozen M-W7 margin JSON (twin/m7_margin.json)")
     ap.add_argument("--margin-m", type=float, help="the disclosed fallback margin (with --cell-m) instead")
     ap.add_argument("--cell-m", type=float)
-    ap.add_argument("--invalid", help="classify_invalid's committed list (crashed run dirs without summary.json)")
+    ap.add_argument("--invalid", help="classify_invalid's committed list ({\"invalid\": [...], \"crashed\": [...]})")
     ap.add_argument("--split", default="test", choices=("dev", "test"))
     ap.add_argument("--engine", default="double", choices=("double", "isaac"))
     ap.add_argument("--days", type=_ints, help="scored days (default 9,10 on the test split)")
@@ -390,7 +424,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         days = a.days or (list(TD.TEST_DAYS) if a.split == "test" else None)
         if not days:
             ap.error("--days is required on the dev split")
-        rep = h3_tick_counts(a.streams, a.runs, margin, TD.load_invalid(a.invalid), split=a.split, days=days)
+        inv, crashed = TD.load_classified(a.invalid)
+        rep = h3_tick_counts(a.streams, a.runs, margin, inv, split=a.split, days=days, crashed=crashed)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(rep) + "\n", encoding="utf-8", newline="\n")
     print(f"{len(rep['streams'])} streams at margin {margin.margin_m} m -> {a.out}"

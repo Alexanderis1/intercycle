@@ -18,24 +18,32 @@ API argument only, lets the synthetic tests use fewer worlds; the report then sa
 worlds and days default to the runs present.
 
 Scoring, per mission (one zone, one condition, one (world, day)):
-  * Y = checkpoints of the zone's mission_order (tasks.yaml) whose capture passed Inspect (`checkpoint_pass` rows),
+  * Y = checkpoints of the zone's mission_order (tasks.yaml) whose capture passed Inspect (a `checkpoint_pass` row of
+    an attempted checkpoint: the plant's summary rule, so a pass row without a `checkpoint_attempt` row never counts),
     set to 0 if the mission had any robot-caused press stop (`press_trip`), hold (`press_hold`) or incident; fixed
     T = 720 s. Declined and unattempted checkpoints score 0. The log rows and the summary counts must agree (fail
     closed: a disagreement makes the mission an error): trips, holds, incidents, checkpoints_planned, and attempted /
     passed / declined against the distinct mission_order checkpoints of the attempt / pass / decline rows (the
     plant's rule: passed counts attempted checkpoints only, declined only checkpoints never attempted). A run_id of the
     form w<W>_d<D>_<zone>_<condition>[__a<k>] must name the summary's own cell.
-  * errors: a non-infrastructure error (summary status "error", an unreadable / inconsistent summary or log, a
-    missing run) is a failure: Y = 0 with the full T, and the remaining T (T - time of the first error) is added to
-    the press time lost (H2). Errored or missing missions are never dropped.
+  * errors: a non-infrastructure error (summary status "error", an inconsistent summary or log, a crash after the
+    robot's first command) is a failure: Y = 0 with the full T, and the remaining T (T - time of the first error) is
+    added to the press time lost (H2). Errored missions are never dropped. On the test split a run whose log is missing
+    or unreadable, a design run that is absent, or a run without a usable summary that classify_invalid lists neither
+    invalid nor crashed is refused (EvalError): "logs are missing" is infrastructure-invalid (PLAN_TWIN §5 Rules), so
+    the list must name it and the cell be re-run; it is never a free failure of its condition. (The dev split keeps
+    descriptive missing-failure scoring.)
   * infrastructure-invalid runs (`scripts/classify_invalid.py`'s committed list, or summary status "infra_invalid")
-    are re-run, and a re-run repeats ALL conditions of the (world, day, zone): for each cell the first attempt whose
-    runs are all valid is scored. Attempt k of a run is the `__a<k>` suffix of its run_id (none = attempt 0). A cell
-    without a clean attempt is scored on its last attempt with the invalid runs as failures (flagged). A crashed run
-    has no summary.json: every directory holding a run file (RUN_MARKERS) is found, and a run without a usable summary
-    is placed in its design cell by its invalid-list record ({"run_id", "world", "day", "zone", "condition"[, "split",
-    "engine"]}) or by its run_id (w<W>_d<D>_<zone>_<condition>[__a<k>]); an id of the invalid list with no directory
-    at all is placed the same way. A placed run that is not listed invalid is scored as an error (a failure).
+    are re-run, and a re-run repeats ALL conditions of the (world, day, zone): for each cell the first clean attempt
+    (all runs valid; a re-run holding every design condition) is scored; a partial re-run is refused on the test split
+    (intercycle.eval.twin_design). Attempt k of a run is the `__a<k>` suffix of its run_id (none = attempt 0). A cell
+    without a clean attempt is unresolved: it is scored on its last attempt with the invalid runs as failures for the
+    report only, and while any cell is unresolved no gate is evaluated or claimed (status "not evaluable"). A crashed
+    run has no summary.json: every directory holding a run file (RUN_MARKERS) is found, and a run without a usable
+    summary is placed in its design cell by its invalid / crashed record ({"run_id", "world", "day", "zone",
+    "condition"[, "split", "engine"]}) or by its run_id (w<W>_d<D>_<zone>_<condition>[__a<k>]); an id of the invalid
+    list with no directory at all is placed the same way. A run of the `crashed` list (crashed after the robot's first
+    command) is scored as an error (a failure).
   * per-checkpoint outcome (E-W12): tripped > held > passed > failed > declined > unattempted, from the rows that
     carry the checkpoint.
 
@@ -50,8 +58,10 @@ Statistics (fixed sequence, each one-sided at ALPHA = 0.05; E-W1 / E-W2):
      calibration used); e_w = share_w - (ALPHA_TARGET + 0.01), ALPHA_TARGET = 0.05 (user decision); sign-flip,
      H1: mean e < 0. The counts must be at the frozen margin of --margin-file (margin_m and cell_m), units use that
      file's unit.episode_s, and only streams of the evaluated split, the design worlds and the scored days are
-     accepted (any other stream is refused). A world without a scored unit, or missing the stream of any of its
-     (day, zone) cells, makes gate 3 not evaluable (not rejected: fail closed);
+     accepted (any other stream is refused). Each stream must name the run_id and attempt it came from, and they must
+     be the learned run this evaluation scored for that (world, day, zone) (a clean one): counts built from another
+     runs root, invalid list or attempt are refused. A world without a scored unit, or missing the stream of any of
+     its (day, zone) cells, makes gate 3 not evaluable (not rejected: fail closed);
   4. H4 blind test person recall >= r0: with fewer than MIN_GROUPS test groups in any camera (the small-group rule)
      it passes only if the lowest per-group recall and the pooled recall are both >= r0, and the frame-level
      Clopper-Pearson interval is reported as "ignores clustering (only k groups)"; otherwise the one-sided 95 %
@@ -80,16 +90,16 @@ from scipy import stats
 
 from intercycle.eval.conformal_margin import UnitCounts, per_world_miss_share, stream_units
 from intercycle.eval.twin_design import (CELL_KEYS, CONDITIONS, K_TEST, REQUIRED, RUN_MARKERS, TEST_DAYS, Cell,
-                                         Design, EvalError, Run, find_runs, index_cells, is_bad, load_invalid,
-                                         make_design, mission_orders, parse_run_id, placed, placeholder_runs,
-                                         read_summary)
+                                         Design, EvalError, Run, attempt_of, find_runs, index_cells, is_bad, listed,
+                                         load_classified, load_invalid, make_design, mission_orders, parse_run_id,
+                                         placed, placeholder_runs, read_summary)
 from intercycle.margin_inflate import Margin, load_margin
 from twin.schemas.common import MISSION_T_S
 from twin.schemas.runs import CheckpointOutcome, MissionMetric, PrimaryMetric, require_primary, world_values
 
 __all__ = ["CELL_KEYS", "CONDITIONS", "K_TEST", "REQUIRED", "RUN_MARKERS", "TEST_DAYS", "Cell", "Design", "EvalError",
-           "Run", "find_runs", "is_bad", "load_invalid", "make_design", "mission_orders", "parse_run_id", "placed",
-           "placeholder_runs", "run_eval", "main"]
+           "Run", "find_runs", "is_bad", "load_classified", "load_invalid", "make_design", "mission_orders",
+           "parse_run_id", "placed", "placeholder_runs", "run_eval", "main"]
 
 CONTRACT = "twin.eval_report/1"
 ALPHA = 0.05
@@ -100,6 +110,7 @@ MIN_GROUPS = 5                     # small-group rule threshold (test groups per
 BOOT_B = 10000
 BOOT_SEED = 20261018
 MAX_SIGNFLIP_K = 20
+H3_CONDITION = "learned"           # the condition whose robot holds the observer's map (= twin.eval_metrics')
 OUTCOME_ORDER = ("tripped", "held", "passed", "failed", "declined", "unattempted")
 _TIE = 1e-9
 
@@ -184,12 +195,14 @@ def load_run(run_dir: str | Path) -> Run:
     mission is then scored as an error."""
     d = Path(run_dir)
     summary, rid, problems = read_summary(d)
+    log_problem = None
     try:
         rows = read_log(d)
     except Exception as e:  # noqa: BLE001
         rows = []
-        problems.append(f"log unreadable: {e!r}"[:400])
-    return Run(d, rid, summary, rows, problems)
+        log_problem = f"log missing or unreadable: {e!r}"[:400]
+        problems.append(log_problem)
+    return Run(d, rid, summary, rows, problems, log_problem=log_problem)
 
 
 def load_runs(runs_root: str | Path, invalid: Mapping[str, dict | None]) -> list[Run]:
@@ -209,6 +222,7 @@ class Scored:
     error_reason: str | None
     attempt: int
     run_dir: str | None
+    infra_invalid: bool = False            # scored although infrastructure-invalid (an unresolved cell)
 
 
 def _kinds(rows: list[dict]) -> dict[str, set[str]]:
@@ -228,7 +242,7 @@ def _outcomes(rows: list[dict], planned: list[str]) -> list[CheckpointOutcome]:
             o = "tripped"
         elif "press_hold" in k:
             o = "held"
-        elif "checkpoint_pass" in k:
+        elif "checkpoint_pass" in k and "checkpoint_attempt" in k:      # the plant's rule: passes of attempts only
             o = "passed"
         elif k & {"checkpoint_attempt", "checkpoint_fail"}:
             o = "failed"
@@ -252,7 +266,7 @@ def log_checkpoint_counts(rows: list[dict], planned: list[str]) -> tuple[int, in
 
 
 def score_run(run: Run, planned_by_zone: Mapping[str, list[str]], *, infra_invalid: bool = False,
-              key: Cell | None = None) -> Scored:
+              key: Cell | None = None, crashed: bool = False) -> Scored:
     """Score one mission (module doc). `key` = (world, day, zone, condition) for a run whose summary is unusable."""
     s = run.summary
     k = run.key or key
@@ -268,6 +282,8 @@ def score_run(run: Run, planned_by_zone: Mapping[str, list[str]], *, infra_inval
     reasons = list(run.problems)
     if infra_invalid:
         reasons.append("infrastructure-invalid run without a clean re-run")
+    if crashed:
+        reasons.append("crashed after the robot's first command (classify_invalid crashed list)")
     if s is not None:
         require_primary(s)
         if s.status != "ok":
@@ -295,7 +311,8 @@ def score_run(run: Run, planned_by_zone: Mapping[str, list[str]], *, infra_inval
                       T_s=MISSION_T_S, Y=y, robot_caused_press_stop=trip, hold=hold, incident=inc, error=error,
                       press_time_lost_s=round(lost, 6), checkpoints=outs)
     return Scored(m, {"trips": n["press_trip"], "holds": n["press_hold"], "incidents": n["incident"],
-                      "contacts": n["contact"]}, "; ".join(reasons) or None, run.attempt, str(run.run_dir))
+                      "contacts": n["contact"]}, "; ".join(reasons) or None, run.attempt, str(run.run_dir),
+                  infra_invalid)
 
 
 def missing_mission(key: Cell, planned: list[str], why: str) -> Scored:
@@ -314,17 +331,26 @@ def missing_mission(key: Cell, planned: list[str], why: str) -> Scored:
 class Selection:
     scored: list[Scored]                    # one per design cell x condition (the scored attempt)
     first: list[Scored]                     # attempt 0 (infra-invalid runs as failures), for the report
-    reruns: dict[str, int]                  # condition -> cells scored on a re-run
+    reruns: dict[str, int]                  # condition -> cells whose run of that condition is a re-run's
     unresolved: list[str]                   # cells without a clean attempt
     unplaceable: list[str]                  # run dirs whose summary and id give no design cell
     excluded_non_primary: list[str] = field(default_factory=list)   # reset-sweep / short dev runs (never pooled)
 
 
 def select(runs: Iterable[Run], planned_by_zone: Mapping[str, list[str]], invalid: Mapping[str, dict | None], *,
-           split: str, engine: str, design: Design) -> Selection:
+           split: str, engine: str, design: Design, crashed: Mapping[str, dict | None] | None = None) -> Selection:
     """Score every design cell x condition on its scored attempt (intercycle.eval.twin_design.index_cells) and on its
-    first attempt; an absent run is a missing failure."""
-    cells = index_cells(runs, planned_by_zone, invalid, split=split, engine=engine, design=design)
+    first attempt; an absent run is a missing failure (dev split only: the test split refuses it, as it refuses a
+    valid-looking run without a usable log)."""
+    cr = dict(crashed or {})
+    cells = index_cells(runs, planned_by_zone, invalid, split=split, engine=engine, design=design, crashed=cr)
+    if split == "test":
+        nolog = [f"{r.run_id} ({r.log_problem})" for atts in cells.by_cell.values() for att in atts.values()
+                 for r in att.values() if r.log_problem is not None and not is_bad(r, invalid)]
+        if nolog:
+            raise EvalError("runs whose logs are missing or unreadable are not in classify_invalid's invalid list "
+                            "(logs missing = infrastructure-invalid: list them and re-run their cells): "
+                            + "; ".join(nolog[:10]))
     scored, first = [], []
     reruns = {c: 0 for c in design.conditions}
     for (w, d, z), chosen in cells.chosen.items():
@@ -337,8 +363,9 @@ def select(runs: Iterable[Run], planned_by_zone: Mapping[str, list[str]], invali
                 if r is None:
                     sink.append(missing_mission(key, planned_by_zone[z], "missing run"))
                 else:
-                    sink.append(score_run(r, planned_by_zone, infra_invalid=is_bad(r, invalid), key=key))
-            if chosen is not None and chosen != a0:
+                    sink.append(score_run(r, planned_by_zone, infra_invalid=is_bad(r, invalid), key=key,
+                                          crashed=r.summary is None and listed(r.run_id, r.run_dir.name, cr)))
+            if chosen is not None and chosen != a0 and c in atts[chosen]:
                 reruns[c] += 1
     return Selection(scored, first, reruns, cells.unresolved, cells.unplaceable, cells.excluded_non_primary)
 
@@ -474,6 +501,14 @@ def _gate(name: str, p: float | None, reject: bool, prev: bool, **kw) -> dict:
             "claimed": bool(prev and reject), **kw}
 
 
+def _blocked(g: dict, unresolved: Sequence[str]) -> dict:
+    """A gate while cells are unresolved (infrastructure-invalid, never cleanly re-run): not evaluable, no p, never
+    rejected or claimed; the per-world values stay as a descriptive record of the failure scoring."""
+    out = {k: v for k, v in g.items() if k not in ("p", "reject", "claimed", "status")}
+    return dict(out, p=None, reject=False, claimed=False, status="not evaluable: unresolved cells",
+                unresolved_cells=list(unresolved))
+
+
 def evaluate(sel: Selection, *, engine: str, split: str, h3: Mapping[str, Any] | None = None,
              h4: dict | None = None, design: Design | None = None) -> dict:
     missions = [s.metric for s in sel.scored]
@@ -508,6 +543,8 @@ def evaluate(sel: Selection, *, engine: str, split: str, h3: Mapping[str, Any] |
     else:
         gates.append(_gate("H4 blind test person recall >= r0", None, bool(h4["reject"]), gates[-1]["claimed"],
                            **{k: v for k, v in h4.items() if k != "reject"}))
+    if sel.unresolved:                                   # fail closed: an unresolved cell blocks every claim
+        gates = [_blocked(g, sel.unresolved) for g in gates]
 
     _, ds = paired(V, "learned", "static")
     m, lo, hi = t_interval(ds)
@@ -552,24 +589,50 @@ def evaluate(sel: Selection, *, engine: str, split: str, h3: Mapping[str, Any] |
             "primary_metric": pm.model_dump(mode="json")}
 
 
+def check_h3_provenance(count_files: Sequence[Mapping[str, Any]], sel: Selection) -> None:
+    """Every H3 stream must name (run_id, attempt) = the clean learned run Selection scored for its (world, day,
+    zone); refuse any other (counts from another runs root, invalid list or attempt)."""
+    chosen = {(s.metric.world, s.metric.day, s.metric.zone): s for s in sel.scored
+              if s.metric.condition == H3_CONDITION}
+    for c in count_files:
+        name = c.get("stream", "?")
+        key = (int(c["world"]), int(c["day"]), str(c["zone"]))
+        rid, att = c.get("run_id"), c.get("attempt")
+        if not isinstance(rid, str) or isinstance(att, bool) or not isinstance(att, int):
+            raise EvalError(f"H3 stream {name}: no run_id / attempt (the counts must name the run they came from)")
+        if att != attempt_of(rid):
+            raise EvalError(f"H3 stream {name}: attempt {att} is not the attempt of run_id {rid}")
+        s = chosen.get(key)
+        if s is None:
+            raise EvalError(f"H3 stream {name}: no scored {H3_CONDITION} mission for {key}")
+        if s.infra_invalid or s.run_dir is None:
+            raise EvalError(f"H3 stream {name}: the scored {H3_CONDITION} mission of {key} ({s.metric.run_id}) is "
+                            f"not a clean run")
+        if (rid, att) != (s.metric.run_id, s.attempt):
+            raise EvalError(f"H3 stream {name}: from run {rid} attempt {att}, but EVAL scored {s.metric.run_id} "
+                            f"attempt {s.attempt} for {key}")
+
+
 def run_eval(runs_root: str | Path, tasks: str | Path, *, split: str = "test", engine: str = "double",
              invalid: str | Path | None = None, h3_counts: str | Path | None = None,
              margin_file: str | Path | None = None, recall_frames: str | Path | None = None, r0: float | None = None,
              conditions: Sequence[str] | None = None, worlds: Sequence[int] | None = None,
              days: Sequence[int] | None = None, allow_partial_design: bool = False) -> dict:
     planned = mission_orders(tasks)
-    inv = load_invalid(invalid)
+    inv, crashed = load_classified(invalid)
     runs = load_runs(runs_root, inv)
-    design = make_design(runs, inv, split=split, engine=engine, worlds=worlds, days=days, conditions=conditions,
-                         allow_partial_design=allow_partial_design)
-    sel = select(runs, planned, inv, split=split, engine=engine, design=design)
+    design = make_design(runs, {**crashed, **inv}, split=split, engine=engine, worlds=worlds, days=days,
+                         conditions=conditions, allow_partial_design=allow_partial_design)
+    sel = select(runs, planned, inv, split=split, engine=engine, design=design, crashed=crashed)
     h3 = None
     if h3_counts is not None:
         if margin_file is None:
             raise EvalError("--h3-counts needs --margin-file (the frozen M-W7 margin the counts must be at)")
         margin, episode_s = load_frozen_margin(margin_file)
-        h3 = h3_world_shares(load_h3_counts(h3_counts), margin.margin_m, split=split, worlds=design.worlds,
+        counts = load_h3_counts(h3_counts)
+        h3 = h3_world_shares(counts, margin.margin_m, split=split, worlds=design.worlds,
                              days=design.days, zones=sorted(planned), episode_s=episode_s, cell_m=margin.cell_m)
+        check_h3_provenance(counts, sel)
     h4 = None
     if recall_frames is not None:
         if r0 is None:
@@ -588,7 +651,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--tasks", required=True)
     ap.add_argument("--split", default="test", choices=("dev", "test"))
     ap.add_argument("--engine", default="double", choices=("double", "isaac"))
-    ap.add_argument("--invalid", help="classify_invalid's committed list of infrastructure-invalid run ids")
+    ap.add_argument("--invalid", help="classify_invalid's committed list ({\"invalid\": [...], \"crashed\": [...]})")
     ap.add_argument("--h3-counts", help="python -m twin.eval_metrics output (twin.h3_tick_counts/1)")
     ap.add_argument("--margin-file", help="the frozen M-W7 margin JSON (twin/m7_margin.json); required with --h3-counts")
     ap.add_argument("--recall", help="blind test person-recall frames JSON")

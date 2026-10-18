@@ -41,7 +41,7 @@ def write_run(root: Path, world: int, day: int, zone: str, cond: str, *, passed:
               hold: str | None = None, incident: bool = False, contacts: int = 0, lost: float = 0.0,
               status: str = "ok", error_t: float | None = None, attempt: int = 0, split: str = "test",
               engine: str = "double", variant: str = "primary", jsonl: bool = False, counts_override=None,
-              summary_override: dict | None = None, rid: str | None = None) -> Path:
+              summary_override: dict | None = None, rid: str | None = None, extra_rows: Iterable[dict] = ()) -> Path:
     rid = rid or f"w{world}_d{day}_{zone}_{cond}" + (f"__a{attempt}" if attempt else "")
     d = root / rid
     d.mkdir(parents=True)
@@ -68,6 +68,7 @@ def write_run(root: Path, world: int, day: int, zone: str, cond: str, *, passed:
         rows.append(dict(t=40.0, kind="incident", entity="robot", checkpoint=None, zone=zone, value=0.1, detail=None))
     for _ in range(contacts):
         rows.append(dict(t=41.0, kind="contact", entity="m1", checkpoint=None, zone=zone, value=0.2, detail=None))
+    rows.extend(dict(r) for r in extra_rows)
     if error_t is not None:
         rows.append(dict(t=error_t, kind="error", entity="robot", checkpoint=None, zone=zone, value=None, detail="{}"))
     rows.append(dict(t=720.0 if error_t is None else error_t, kind="mission_end", entity="robot", checkpoint=None,
@@ -98,14 +99,21 @@ def write_run(root: Path, world: int, day: int, zone: str, cond: str, *, passed:
 
 
 def design(root: Path, worlds: Iterable[int] = range(6), conds=("static", "learned", "reactive"), learned_extra: int = 1,
-           split: str = "test") -> None:
+           split: str = "test", engine: str = "double", attempt: int = 0, days=(9, 10)) -> None:
     """Complete design: per (world, day, zone): static passes 1, reactive 1, learned 1 + learned_extra (z9 only)."""
     for w in worlds:
-        for day in (9, 10):
+        for day in days:
             for z, cps in ORDERS.items():
                 for c in conds:
                     n = 1 + (learned_extra if c == "learned" and z == "z9" else 0)
-                    write_run(root, w, day, z, c, passed=tuple(cps[:n]), split=split)
+                    write_run(root, w, day, z, c, passed=tuple(cps[:n]), split=split, engine=engine,
+                              jsonl=engine == "isaac", attempt=attempt)
+
+
+def write_list(p: Path, invalid=(), crashed=()) -> Path:
+    """classify_invalid's committed list (intercycle.eval.twin_design.load_classified)."""
+    p.write_text(json.dumps({"invalid": list(invalid), "crashed": list(crashed)}), encoding="utf-8")
+    return p
 
 
 def drop(root: Path, rid: str) -> None:
@@ -214,20 +222,30 @@ def test_errors_and_missing_runs_are_failures_with_remaining_time_lost(tmp_path)
     design(root)
     drop(root, "w0_d9_z9_learned")
     write_run(root, 0, 9, "z9", "learned", passed=("a1", "a2"), status="error", error_t=500.0, lost=20.0)
-    drop(root, "w1_d10_z14_learned")                               # missing run
     drop(root, "w2_d9_z9_learned")                                 # summary says 0 trips, log has one: error
     write_run(root, 2, 9, "z9", "learned", passed=("a1",), trip="a2", counts_override=(0, 0, 0))
     rep = evaluate(root, tmp_path)
     ms = {m["run_id"]: m for m in rep["primary_metric"]["missions"]}
     e = ms["w0_d9_z9_learned"]
     assert e["error"] and e["Y"] == 0 and e["T_s"] == 720.0 and e["press_time_lost_s"] == pytest.approx(20.0 + 220.0)
-    m = ms["missing:w1_d10_z14_learned"]
-    assert m["error"] and m["Y"] == 0 and m["press_time_lost_s"] == 720.0
     assert ms["w2_d9_z9_learned"]["error"]
     reasons = {x["run_id"]: x["reason"] for x in rep["errored_missions"]}
-    assert "status error" in reasons["w0_d9_z9_learned"] and reasons["missing:w1_d10_z14_learned"] == "missing run"
+    assert "status error" in reasons["w0_d9_z9_learned"]
     assert "!= log rows" in reasons["w2_d9_z9_learned"]
     assert len(rep["primary_metric"]["missions"]) == 6 * 2 * 2 * 3          # never dropped
+
+
+def test_dev_split_scores_a_missing_run_as_a_failure(tmp_path):
+    """Descriptive dev scoring keeps the missing failure (the test split refuses an absent run, see below)."""
+    root = tmp_path / "runs"
+    design(root, split="dev")
+    drop(root, "w1_d10_z14_learned")
+    rep = evaluate(root, tmp_path, split="dev")
+    ms = {m["run_id"]: m for m in rep["primary_metric"]["missions"]}
+    m = ms["missing:w1_d10_z14_learned"]
+    assert m["error"] and m["Y"] == 0 and m["press_time_lost_s"] == 720.0
+    assert {x["run_id"]: x["reason"] for x in rep["errored_missions"]}["missing:w1_d10_z14_learned"] == "missing run"
+    assert len(rep["primary_metric"]["missions"]) == 6 * 2 * 2 * 3
 
 
 @pytest.mark.parametrize("override", [{"passed": 0}, {"attempted": 3}, {"declined": 1}])
@@ -280,6 +298,7 @@ def test_infra_invalid_reruns_repeat_all_conditions(tmp_path):
     assert rep["reruns_per_condition"] == {"static": 1, "learned": 1, "reactive": 1}
     assert ms["w3_d10_z14_reactive"]["error"]                     # no re-run: scored as a failure, flagged
     assert rep["unresolved_cells"] == ["w3_d10_z14"]
+    assert all(g["status"] == "not evaluable: unresolved cells" and not g["claimed"] for g in rep["gatekeeping"])
     first = {(w["world"], w["condition"]): w for w in rep["first_attempt_per_world"]}
     assert first[(0, "learned")]["sum_Y"] < next(w for w in rep["primary_metric"]["per_world"]
                                                   if (w["world"], w["condition"]) == (0, "learned"))["sum_Y"]
@@ -324,24 +343,63 @@ def test_invalid_id_without_any_directory_is_placed_by_its_record(tmp_path):
         E.load_invalid(inv)
 
 
-def test_crashed_run_not_listed_invalid_is_an_error_failure(tmp_path):
+def test_crashed_run_listed_crashed_is_an_error_failure_and_unlisted_is_refused(tmp_path, monkeypatch):
+    """Audit S1b-eval fix2 #4: a run that crashed after the robot's first command (no summary.json, closed log) is a
+    valid failure once classify_invalid's `crashed` record names it; both twin_eval and the truth slot then accept it.
+    Unlisted, it may still be running: both refuse."""
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "access.log"))
     root = tmp_path / "runs"
     design(root)
-    (root / "w2_d9_z14_reactive" / "summary.json").unlink()        # crashed after the first command: valid
-    rep = evaluate(root, tmp_path)
+    (root / "w2_d9_z14_reactive" / "summary.json").unlink()
+    with pytest.raises(E.EvalError, match="neither the invalid nor the crashed list"):
+        evaluate(root, tmp_path)
+    with pytest.raises(EM.NotClosed, match="no summary.json"):
+        EM.assert_runs_closed(root)
+    lst = write_list(tmp_path / "classified.json", crashed=["w2_d9_z14_reactive"])
+    rep = evaluate(root, tmp_path, invalid=lst)
     reasons = {x["run_id"]: x["reason"] for x in rep["errored_missions"]}
-    assert "summary.json unreadable" in reasons["w2_d9_z14_reactive"]
+    assert "crashed after the robot's first command" in reasons["w2_d9_z14_reactive"]
     ms = {m["run_id"]: m for m in rep["primary_metric"]["missions"]}
     assert ms["w2_d9_z14_reactive"]["Y"] == 0 and ms["w2_d9_z14_reactive"]["press_time_lost_s"] == 720.0
+    assert rep["unresolved_cells"] == [] and rep["reruns_per_condition"]["reactive"] == 0
+    assert EM.assert_runs_closed(root, crashed=["w2_d9_z14_reactive"]) == 6 * 2 * 2 * 3
+    torn = root / "w2_d9_z14_reactive" / "log.parquet"
+    torn.write_bytes(torn.read_bytes()[:-8])                       # a crashed run's log must still be closed
+    with pytest.raises(EM.NotClosed, match="listed crashed, but"):
+        EM.assert_runs_closed(root, crashed=["w2_d9_z14_reactive"])
+    with pytest.raises(E.EvalError, match="both invalid and crashed"):
+        evaluate(root, tmp_path, invalid=write_list(tmp_path / "both.json", invalid=["x"], crashed=["x"]))
 
 
-def test_a_missing_world_is_scored_as_failures_not_dropped(tmp_path):
-    """Audit S1b-eval #4: every w5_* run is absent; world 5 stays in the design and scores missing failures."""
+def test_truth_slot_matches_the_lists_by_run_id_or_directory_name(tmp_path):
+    """Audit S1b-eval fix2 #4: like twin_design, assert_runs_closed matches a listed run by its run_id or its
+    directory name; an invalid-listed run is re-run, so its state never blocks truth."""
+    root = tmp_path / "runs"
+    write_run(root, 0, 9, "z9", "learned")
+    d = write_run(root, 0, 9, "z9", "static", rid="tag-17")
+    (d / "log.parquet").unlink()                                   # logs missing: infrastructure-invalid
+    with pytest.raises(EM.NotClosed, match="no log"):
+        EM.assert_runs_closed(root)
+    d.rename(root / "dir-17")                                      # directory name != run_id
+    assert EM.assert_runs_closed(root, invalid=["tag-17"]) == 1    # by run_id (summary.json)
+    (root / "dir-17" / "summary.json").unlink()
+    assert EM.assert_runs_closed(root, invalid=["dir-17"]) == 1    # by directory name
+
+
+def test_a_missing_world_is_refused_on_test_and_scored_as_failures_on_dev(tmp_path):
+    """Audit S1b-eval #4 / fix2 #3: every w5_* run is absent. On the test split that fails closed (no run and none
+    listed invalid); on the dev split world 5 stays in the design and scores missing failures."""
     root = tmp_path / "runs"
     design(root)
     for d in sorted(root.glob("w5_*")):
         shutil.rmtree(d)
-    rep = evaluate(root, tmp_path)
+    with pytest.raises(E.EvalError, match="no run at all"):
+        evaluate(root, tmp_path)
+    root = tmp_path / "dev"
+    design(root, split="dev")
+    for d in sorted(root.glob("w5_*")):
+        shutil.rmtree(d)
+    rep = evaluate(root, tmp_path, split="dev")
     g1 = rep["gatekeeping"][0]
     assert g1["worlds"] == list(range(6)) and g1["d_w"][5] == 0.0
     missing = [x["run_id"] for x in rep["errored_missions"]]
@@ -374,13 +432,16 @@ def test_test_design_is_explicit_and_sealed(tmp_path):
 def test_sealed_design_scores_all_320_cells(tmp_path):
     """The fixed sealed design: 16 worlds x 2 days x 2 zones x 5 conditions; absent conditions are missing failures."""
     root = tmp_path / "runs"
-    design(root, worlds=range(16), conds=("static", "learned", "reactive"))
-    rep = E.run_eval(root, write_tasks(tmp_path / "tasks.json"), worlds=range(16))
+    design(root, worlds=range(16), conds=E.CONDITIONS)
+    tasks = write_tasks(tmp_path / "tasks.json")
+    rep = E.run_eval(root, tasks, worlds=range(16))
     assert rep["design"]["fixed"] and rep["design"]["conditions"] == list(E.CONDITIONS)
-    assert len(rep["primary_metric"]["missions"]) == 320
-    miss = {x["run_id"].split("_")[-1] for x in rep["errored_missions"]}
-    assert miss == {"map", "oracle"} and len(rep["errored_missions"]) == 128
+    assert len(rep["primary_metric"]["missions"]) == 320 and rep["errored_missions"] == []
     assert rep["gatekeeping"][0]["p"] == pytest.approx(1 / 2 ** 16)
+    for d in sorted(root.glob("*_oracle")):                        # a whole condition never synced: refused
+        shutil.rmtree(d)
+    with pytest.raises(E.EvalError, match="design runs absent"):
+        E.run_eval(root, tasks, worlds=range(16))
 
 
 def test_non_primary_runs_and_other_splits_are_not_pooled(tmp_path):
@@ -388,14 +449,15 @@ def test_non_primary_runs_and_other_splits_are_not_pooled(tmp_path):
     design(root)
     write_run(root / "sweep", 0, 9, "z9", "learned", passed=("a1", "a2", "a3"), variant="reset_sweep")
     write_run(root / "dev", 0, 9, "z9", "learned", passed=("a1", "a2", "a3"), split="dev")
+    design(root / "isaac", worlds=[0], engine="isaac")
+    drop(root / "isaac", "w0_d9_z9_learned")
     write_run(root / "isaac", 0, 9, "z9", "learned", passed=("a1", "a2", "a3"), engine="isaac", jsonl=True)
     rep = evaluate(root, tmp_path)
     assert rep["excluded_non_primary_runs"] == ["w0_d9_z9_learned"]
     assert len(rep["primary_metric"]["missions"]) == 72
     rep_i = evaluate(root / "isaac", tmp_path, engine="isaac", worlds=[0])   # an Isaac run with log.jsonl
     mi = {m["run_id"]: m for m in rep_i["primary_metric"]["missions"]}
-    assert mi["w0_d9_z9_learned"]["Y"] == 3 and rep_i["engine"] == "isaac"
-    assert mi["missing:w0_d9_z9_reactive"]["error"]
+    assert mi["w0_d9_z9_learned"]["Y"] == 3 and rep_i["engine"] == "isaac" and len(mi) == 12
 
 
 def test_static_beats_learned_flag_and_failed_primary_stops_the_chain(tmp_path):
@@ -437,7 +499,7 @@ def _stream(path: Path, world: int, day: int, zone: str, rng, T: int = 40, miss_
     # prediction k is built from data observed at t_k - 0.5 s = what the robot holds at t_k (age 0.5 s)
     np.savez(path, t=np.arange(T) * 0.5, truth=truth, t_pred=np.arange(T) * 0.5 - 0.5, pred=pred,
              age_s=np.full(T, 0.5), slice_id=np.zeros(T, np.int64), world=world, day=day, zone=zone,
-             cell_m=0.25, split=split)
+             cell_m=0.25, split=split, run_id=f"w{world}_d{day}_{zone}_learned")
 
 
 def _streams(tmp_path: Path, worlds=range(6), miss_p: float = 0.0) -> list[Path]:
@@ -519,6 +581,12 @@ def test_gate3_end_to_end(tmp_path, monkeypatch):
     g3 = rep["gatekeeping"][2]
     assert g3["shares"] == pytest.approx([0.0] * 6) and g3["p"] == pytest.approx(1 / 64) and g3["claimed"]
     assert g3["episode_s"] == 720.0 and g3["margin_m"] == 0.25
+    s0 = next(s for s in body["streams"] if (s["world"], s["day"], s["zone"]) == (0, 9, "z9"))
+    assert (s0["run_id"], s0["attempt"]) == ("w0_d9_z9_learned", 0)
+    with pytest.raises(E.EvalError, match="H3 stream"):           # counts must name the run they came from
+        bare = dict(body, streams=[{k: v for k, v in s.items() if k != "run_id"} for s in body["streams"]])
+        (tmp_path / "bare.json").write_text(json.dumps(bare), encoding="utf-8")
+        evaluate(root, tmp_path, h3_counts=tmp_path / "bare.json", margin_file=mf)
     with pytest.raises(E.EvalError, match="margin-file"):
         evaluate(root, tmp_path, h3_counts=out)                    # the frozen margin is required
     with pytest.raises(E.EvalError, match="frozen margin"):
@@ -533,6 +601,33 @@ def test_gate3_end_to_end(tmp_path, monkeypatch):
     out.write_text(json.dumps(body), encoding="utf-8")             # one (day, zone) cell missing: not evaluable
     g3 = evaluate(root, tmp_path, h3_counts=out, margin_file=mf)["gatekeeping"][2]
     assert math.isnan(g3["shares"][4]) and "w4_d10_z14" in g3["missing_streams"]
+
+
+def test_h3_counts_from_another_attempt_are_refused(tmp_path, monkeypatch):
+    """Audit S1b-eval fix2 #5: the counts were built before w0_d9_z9 was listed invalid and re-run; EVAL now scores
+    the __a1 learned run, so the attempt-0 stream is refused."""
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "access.log"))
+    root = tmp_path / "runs"
+    design(root)
+    out = tmp_path / "h3.json"
+    out.write_text(json.dumps(EM.h3_tick_counts(_streams(tmp_path), root, Margin(0.25, 0.25), split="test",
+                                                days=(9, 10))), encoding="utf-8")
+    mf = write_margin(tmp_path / "m7.json")
+    for c in ("static", "learned", "reactive"):
+        write_run(root, 0, 9, "z9", c, passed=("a1",), attempt=1)
+    inv = write_list(tmp_path / "inv.json", invalid=["w0_d9_z9_static"])
+    with pytest.raises(E.EvalError, match=r"from run w0_d9_z9_learned attempt 0, but EVAL scored w0_d9_z9_learned__a1"):
+        evaluate(root, tmp_path, invalid=inv, h3_counts=out, margin_file=mf)
+    body = json.loads(out.read_text(encoding="utf-8"))
+    s0 = next(s for s in body["streams"] if (s["world"], s["day"], s["zone"]) == (0, 9, "z9"))
+    s0.update(run_id="w0_d9_z9_learned__a1", attempt=0)            # attempt must be the run_id's
+    out.write_text(json.dumps(body), encoding="utf-8")
+    with pytest.raises(E.EvalError, match="is not the attempt of run_id"):
+        evaluate(root, tmp_path, invalid=inv, h3_counts=out, margin_file=mf)
+    s0["attempt"] = 1
+    out.write_text(json.dumps(body), encoding="utf-8")
+    g3 = evaluate(root, tmp_path, invalid=inv, h3_counts=out, margin_file=mf)["gatekeeping"][2]
+    assert g3["p"] is not None and g3["shares"] == pytest.approx([0.0] * 6)
 
 
 def _count(world: int, day: int, zone: str, miss: int, split: str = "test", T: int = 10) -> dict:
@@ -631,7 +726,7 @@ def test_stream_builder_end_to_end_into_h3(tmp_path, monkeypatch):
             _realised(d, d.name, 0, day, n)
             _held(d, n)
     tasks = write_tasks(tmp_path / "tasks.json")
-    kw: dict[str, Any] = dict(worlds=[0], allow_partial_design=True)
+    kw: dict[str, Any] = dict(worlds=[0], allow_partial_design=True, conditions=("static", "learned", "reactive"))
     open_run = root / "w0_d9_z9_static" / "summary.json"
     saved = open_run.read_text(encoding="utf-8")
     open_run.unlink()                                              # one run still open: no truth is read
@@ -642,6 +737,7 @@ def test_stream_builder_end_to_end_into_h3(tmp_path, monkeypatch):
     body = EM.h3_from_runs(root, tasks, SITE, Margin(0.0, 0.25), **kw)
     assert body["skipped"] == [] and len(body["streams"]) == 4
     s = next(c for c in body["streams"] if (c["day"], c["zone"]) == (9, "z9"))
+    assert (s["run_id"], s["attempt"]) == ("w0_d9_z9_learned", 0)
     occ, miss = np.array(s["occ"]), np.array(s["miss"])
     assert np.array_equal(occ, [16] * (n - 4) + [0] * 4)           # only the zone's press (P9a) is scored
     assert np.array_equal(miss, [16 if k % 2 else 0 for k in range(n - 4)] + [0] * 4)
@@ -651,14 +747,100 @@ def test_stream_builder_end_to_end_into_h3(tmp_path, monkeypatch):
     assert log.count("twin/eval_metrics.py") == 4 and "realised_state.jsonl" in log
     out = tmp_path / "h3.json"
     out.write_text(json.dumps(body), encoding="utf-8")
-    rep = E.run_eval(root, tasks, conditions=("static", "learned", "reactive"), h3_counts=out,
-                     margin_file=write_margin(tmp_path / "m7.json", margin_m=0.0), **kw)
+    rep = E.run_eval(root, tasks, h3_counts=out, margin_file=write_margin(tmp_path / "m7.json", margin_m=0.0), **kw)
     g3 = rep["gatekeeping"][2]
     assert g3["shares"] == pytest.approx([(0.5 + 0.5 + 1.0 + 1.0) / 4])
     # a cell without a held map gets no stream (skipped), so its world is not evaluable downstream
     (root / "w0_d10_z14_learned" / EM.HELD_MAP).unlink()
     body2 = EM.h3_from_runs(root, tasks, SITE, Margin(0.0, 0.25), **kw)
     assert [x["cell"] for x in body2["skipped"]] == ["w0_d10_z14"] and len(body2["streams"]) == 3
+
+
+# ------------------------------------------------------------------------------------------------ fix round 2 probes
+
+
+def _no_effect(root: Path) -> None:
+    design(root, learned_extra=0)                                  # learned = reactive = static: H1 p = 1.0
+
+
+def test_probe_partial_rerun_is_refused_on_test_and_never_clean_on_dev(tmp_path):
+    """Audit S1b-eval fix2 #1: w*_d9_z9_learned listed invalid and re-run ALONE as __a1. It used to be the 'first
+    clean attempt', scoring static / reactive as missing failures (H1 p 1.0 -> 1/64, claimed)."""
+    for split in ("test", "dev"):
+        root = tmp_path / split
+        design(root, learned_extra=0, split=split)
+        for w in range(6):
+            write_run(root, w, 9, "z9", "learned", passed=("a1",), attempt=1, split=split)
+        inv = write_list(tmp_path / f"{split}.json", invalid=[f"w{w}_d9_z9_learned" for w in range(6)])
+        if split == "test":
+            with pytest.raises(E.EvalError, match="partial re-run"):
+                evaluate(root, tmp_path, invalid=inv)
+            continue
+        rep = evaluate(root, tmp_path, invalid=inv, split="dev")
+        assert rep["unresolved_cells"] == [f"w{w}_d9_z9" for w in range(6)]
+        assert not any(g["claimed"] or g["reject"] for g in rep["gatekeeping"])
+        assert all(g["p"] is None for g in rep["gatekeeping"])
+        assert rep["reruns_per_condition"]["static"] == 0 and rep["reruns_per_condition"]["reactive"] == 0
+
+
+def test_probe_unresolved_cell_blocks_every_claim(tmp_path):
+    """Audit S1b-eval fix2 #2: w*_d9_z9_reactive (or static) listed invalid with no re-run. The invalid comparator
+    used to count as its failure (H1 p 1.0 -> 1/64, claimed)."""
+    for cond in ("reactive", "static"):
+        root = tmp_path / cond
+        _no_effect(root)
+        inv = write_list(tmp_path / f"{cond}.json", invalid=[f"w{w}_d9_z9_{cond}" for w in range(6)])
+        rep = evaluate(root, tmp_path, invalid=inv)
+        assert len(rep["unresolved_cells"]) == 6
+        for g in rep["gatekeeping"]:
+            assert g["p"] is None and not g["reject"] and not g["claimed"]
+            assert g["status"] == "not evaluable: unresolved cells" and len(g["unresolved_cells"]) == 6
+    root = tmp_path / "effect"                                     # even a real effect is not claimed while unresolved
+    design(root)
+    rep = evaluate(root, tmp_path, invalid=write_list(tmp_path / "one.json", invalid=["w0_d9_z9_reactive"]))
+    assert rep["unresolved_cells"] == ["w0_d9_z9"] and not any(g["claimed"] for g in rep["gatekeeping"])
+
+
+def test_probe_missing_log_or_absent_comparator_is_refused_not_a_free_failure(tmp_path):
+    """Audit S1b-eval fix2 #3: (a) log.parquet of w*_d9_z9_reactive deleted, not listed invalid; (b) the
+    w*_d9_z9_reactive directories deleted. Both used to give H1 p 1/64 and a claim."""
+    root = tmp_path / "a"
+    _no_effect(root)
+    for w in range(6):
+        (root / f"w{w}_d9_z9_reactive" / "log.parquet").unlink()
+    with pytest.raises(E.EvalError, match="logs are missing or unreadable"):
+        evaluate(root, tmp_path)
+    inv = write_list(tmp_path / "a.json", invalid=[f"w{w}_d9_z9_reactive" for w in range(6)])
+    for w in range(6):                                             # listed invalid and the whole cell re-run: scored
+        for c, cps in (("static", ("a1",)), ("learned", ("a1",)), ("reactive", ("a1",))):
+            write_run(root, w, 9, "z9", c, passed=cps, attempt=1)
+    rep = evaluate(root, tmp_path, invalid=inv)
+    assert rep["gatekeeping"][0]["p"] == 1.0 and rep["unresolved_cells"] == []
+    assert rep["reruns_per_condition"] == {"static": 6, "learned": 6, "reactive": 6}
+    root = tmp_path / "b"
+    _no_effect(root)
+    for w in range(6):
+        drop(root, f"w{w}_d9_z9_reactive")
+    with pytest.raises(E.EvalError, match="design runs absent"):
+        evaluate(root, tmp_path)
+    (root / "w0_d9_z9_learned" / "log.parquet").write_bytes(b"PAR1 torn")   # unreadable log: refused too
+    for w in range(6):
+        write_run(root, w, 9, "z9", "reactive", passed=("a1",))
+    with pytest.raises(E.EvalError, match="w0_d9_z9_learned"):
+        evaluate(root, tmp_path)
+
+
+def test_a_pass_row_without_an_attempt_row_never_counts(tmp_path):
+    """Audit S1b-eval fix2 #6: Y uses the plant's summary rule (a pass counts only for an attempted checkpoint)."""
+    root = tmp_path / "runs"
+    design(root)
+    drop(root, "w0_d9_z9_learned")
+    stray = dict(t=25.0, kind="checkpoint_pass", entity="robot", checkpoint="a3", zone="z9", value=None, detail=None)
+    write_run(root, 0, 9, "z9", "learned", passed=("a1", "a2"), extra_rows=[stray])   # summary passed = 2
+    rep = evaluate(root, tmp_path)
+    m = next(x for x in rep["primary_metric"]["missions"] if x["run_id"] == "w0_d9_z9_learned")
+    assert not m["error"] and m["Y"] == 2
+    assert {c["checkpoint"]: c["outcome"] for c in m["checkpoints"]}["a3"] == "unattempted"
 
 
 # ------------------------------------------------------------------------------------------------ gate 4

@@ -5,6 +5,12 @@ Isaac-safe imports only (stdlib, yaml, pydantic via twin.schemas): twin.eval_met
 dependency scan follows it here. Nothing here reads a log or opens truth; a run is known by its summary.json, its
 directory name and classify_invalid's committed list.
 
+  * classify_invalid's committed list (one JSON file, PLAN_TWIN §5 Rules): `invalid` = the infrastructure-invalid runs
+    (re-run, never scored as failures); `crashed` = runs that crashed AFTER the robot's first command (no summary.json,
+    a closed log): valid failures, finished, so the truth slot may open truth with them present. Entries are run ids or
+    records {"run_id", "world", "day", "zone", "condition"[, "split", "engine"]}; both are matched by run_id or by
+    directory name (`listed`). A run is never in both.
+
   * Design: on the test split the design is explicit (the world list is required; days default to TEST_DAYS; the CPU
     double has all CONDITIONS) and, for the CPU double, the sealed design K_TEST x TEST_DAYS x CONDITIONS is enforced
     unless allow_partial_design (an API argument for synthetic tests only; `Design.fixed` is then False). A test run
@@ -13,9 +19,14 @@ directory name and classify_invalid's committed list.
     placeholder per invalid-listed id with no directory. A run without a usable summary is placed in its design cell
     by its invalid-list record ({"run_id", "world", "day", "zone", "condition"[, "split", "engine"]}) or by its run_id
     (w<W>_d<D>_<zone>_<condition>[__a<k>]).
-  * Re-runs: attempt k = the `__a<k>` suffix of the run_id (none = 0). Per (world, day, zone) the first attempt whose
-    runs are all valid (none listed invalid, none with status infra_invalid) is scored; without one, the last attempt
-    is scored and the cell is unresolved.
+  * Re-runs: attempt k = the `__a<k>` suffix of the run_id (none = 0). A re-run repeats ALL conditions: an attempt
+    k > 0 that lacks a design condition is a partial re-run and never clean. Per (world, day, zone) the first clean
+    attempt (every run valid: none listed invalid, none with status infra_invalid; complete if k > 0) is scored; without
+    one, the last attempt is scored descriptively and the cell is unresolved (twin_eval then claims no gate).
+  * Test split (fail closed, PLAN_TWIN §5 Rules: "logs are missing" is infrastructure-invalid, so a run the list does
+    not name must be there): every attempt of every design (world, day, zone) must hold every design condition (an
+    invalid-listed id without a directory counts), a cell with no run at all is refused, a partial re-run is refused,
+    and a run without a usable summary must be listed invalid or crashed. Any of these raises EvalError.
 """
 from __future__ import annotations
 
@@ -49,6 +60,12 @@ class EvalError(ValueError):
     """The EVAL inputs are inconsistent (fail closed)."""
 
 
+def attempt_of(rid: str) -> int:
+    """Attempt k of a run_id: its `__a<k>` suffix (none = attempt 0)."""
+    m = _ATTEMPT.search(rid)
+    return int(m.group(1)) if m else 0
+
+
 def parse_run_id(rid: str) -> tuple[Cell, int] | None:
     """(cell, attempt) of a run_id of the form w<W>_d<D>_<zone>_<condition>[__a<k>], else None."""
     m = _RUN_ID.match(rid)
@@ -65,11 +82,11 @@ class Run:
     rows: list[dict] = field(default_factory=list)     # the log rows (twin_eval.load_run; empty here)
     problems: list[str] = field(default_factory=list)
     cell: Cell | None = None                # design cell of a run without a usable summary (set by `index_cells`)
+    log_problem: str | None = None          # why the log is missing / unreadable (twin_eval.load_run; None here)
 
     @property
     def attempt(self) -> int:
-        m = _ATTEMPT.search(self.run_id)
-        return int(m.group(1)) if m else 0
+        return attempt_of(self.run_id)
 
     @property
     def key(self) -> Cell | None:
@@ -111,17 +128,9 @@ def mission_orders(tasks_path: str | Path) -> dict[str, list[str]]:
     return {str(z["zone"]): [str(c) for c in z["mission_order"]] for z in t["zones"]}
 
 
-def load_invalid(path: str | Path | None) -> dict[str, dict | None]:
-    """classify_invalid's committed list: a JSON list, or {"invalid": [...]} / {"runs": [...]}, of run ids or of
-    records {"run_id", "world", "day", "zone", "condition"[, "split", "engine"]} that place a crashed run in its
-    design cell. Returns run id -> its record (None for a bare id)."""
-    if path is None:
-        return {}
-    body = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(body, Mapping):
-        body = body.get("invalid", body.get("runs"))
+def _records(body: Any, path: str | Path, what: str) -> dict[str, dict | None]:
     if not isinstance(body, list):
-        raise EvalError(f"{path}: expected a list of run ids or records")
+        raise EvalError(f"{path}: expected a list of {what} run ids or records")
     out: dict[str, dict | None] = {}
     for e in body:
         if isinstance(e, str):
@@ -137,6 +146,38 @@ def load_invalid(path: str | Path | None) -> dict[str, dict | None]:
             raise EvalError(f"{path}: run id {rid} is listed twice")
         out[rid] = rec
     return out
+
+
+def load_classified(path: str | Path | None) -> tuple[dict[str, dict | None], dict[str, dict | None]]:
+    """(invalid, crashed) of classify_invalid's committed list (module doc): a JSON list (invalid ids only), or
+    {"invalid": [...] (or "runs"), "crashed": [...]}. Each maps run id -> its record (None for a bare id)."""
+    if path is None:
+        return {}, {}
+    body = json.loads(Path(path).read_text(encoding="utf-8"))
+    crashed: dict[str, dict | None] = {}
+    if isinstance(body, Mapping):
+        crashed = _records(body.get("crashed", []), path, "crashed")
+        body = body.get("invalid", body.get("runs", []))
+    invalid = _records(body, path, "invalid")
+    both = sorted(set(invalid) & set(crashed))
+    if both:
+        raise EvalError(f"{path}: runs listed both invalid and crashed: {both}")
+    return invalid, crashed
+
+
+def load_invalid(path: str | Path | None) -> dict[str, dict | None]:
+    """The infrastructure-invalid part of classify_invalid's committed list (`load_classified`)."""
+    return load_classified(path)[0]
+
+
+def load_crashed(path: str | Path | None) -> dict[str, dict | None]:
+    """The crashed-after-the-first-command part of classify_invalid's committed list (`load_classified`)."""
+    return load_classified(path)[1]
+
+
+def listed(run_id: str, dir_name: str, ids: Mapping[str, Any] | Iterable[str]) -> bool:
+    """A run is in a classify_invalid list when its run_id or its directory name is."""
+    return run_id in ids or dir_name in ids
 
 
 def placeholder_runs(invalid: Mapping[str, dict | None], runs: Sequence[Run]) -> list[Run]:
@@ -156,8 +197,8 @@ def summary_runs(runs_root: str | Path, invalid: Mapping[str, dict | None]) -> l
 
 
 def placed(r: Run, invalid: Mapping[str, dict | None]) -> tuple[Cell, Any, Any] | None:
-    """(cell, split, engine) of a run without a usable summary: from its invalid record, else from its run_id; None if
-    neither places it. split / engine are None unless the record names them."""
+    """(cell, split, engine) of a run without a usable summary: from its record (invalid or crashed list), else from
+    its run_id; None if neither places it. split / engine are None unless the record names them."""
     rec = invalid.get(r.run_id) or invalid.get(r.run_dir.name)
     if rec is not None and all(k in rec for k in CELL_KEYS):
         cell = (int(rec["world"]), int(rec["day"]), str(rec["zone"]), str(rec["condition"]))
@@ -168,7 +209,7 @@ def placed(r: Run, invalid: Mapping[str, dict | None]) -> tuple[Cell, Any, Any] 
 
 def is_bad(r: Run, invalid: Mapping[str, dict | None]) -> bool:
     """Infrastructure-invalid: listed by classify_invalid (by run_id or directory name), or status infra_invalid."""
-    return (r.run_id in invalid or r.run_dir.name in invalid
+    return (listed(r.run_id, r.run_dir.name, invalid)
             or (r.summary is not None and r.summary.status == "infra_invalid"))
 
 
@@ -241,7 +282,7 @@ class Cells:
     by_cell: dict[tuple[int, int, str], dict[int, dict[str, Run]]]
     chosen: dict[tuple[int, int, str], int | None]          # scored attempt (None: no run at all)
     first: dict[tuple[int, int, str], int | None]           # attempt 0 / the earliest attempt
-    unresolved: list[str]                                   # cells without a clean attempt
+    unresolved: list[str]                                   # cells without a clean attempt (no gate claimed)
     unplaceable: list[str]                                  # run dirs whose summary and id give no design cell
     excluded_non_primary: list[str]                         # reset-sweep / short dev runs (never pooled)
 
@@ -252,9 +293,12 @@ class Cells:
 
 
 def index_cells(runs: Iterable[Run], zones: Iterable[str], invalid: Mapping[str, dict | None], *, split: str,
-                engine: str, design: Design) -> Cells:
-    """Place every run of the evaluated split and engine in its design cell and pick the scored attempt per cell."""
+                engine: str, design: Design, crashed: Mapping[str, dict | None] | None = None) -> Cells:
+    """Place every run of the evaluated split and engine in its design cell and pick the scored attempt per cell
+    (module doc: re-runs; the test split's completeness and classification checks raise EvalError)."""
     zs = set(zones)
+    cr = dict(crashed or {})
+    records = {**cr, **invalid}
     by_cell: dict[tuple[int, int, str], dict[int, dict[str, Run]]] = defaultdict(lambda: defaultdict(dict))
     unplaceable, non_primary = [], []
     strict = split == "test"
@@ -268,7 +312,7 @@ def index_cells(runs: Iterable[Run], zones: Iterable[str], invalid: Mapping[str,
                 continue
             key = (s.world, s.day, s.zone, s.condition)
         else:
-            p = placed(r, invalid)
+            p = placed(r, records)
             if p is None:
                 unplaceable.append(str(r.run_dir))
                 continue
@@ -276,6 +320,10 @@ def index_cells(runs: Iterable[Run], zones: Iterable[str], invalid: Mapping[str,
             if (sp is not None and sp != split) or (en is not None and en != engine):
                 continue
             r.cell = key
+            if strict and not is_bad(r, invalid) and not listed(r.run_id, r.run_dir.name, cr):
+                raise EvalError(f"run {r.run_id} ({r.run_dir}) has no usable summary and is in neither the invalid nor "
+                                f"the crashed list of classify_invalid ({'; '.join(r.problems)[:200]}): a run still "
+                                f"running or unclassified is never scored")
         w, d, z, c = key
         if w not in design.worlds or d not in design.days or c not in design.conditions or z not in zs:
             if strict:
@@ -289,12 +337,24 @@ def index_cells(runs: Iterable[Run], zones: Iterable[str], invalid: Mapping[str,
     chosen: dict[tuple[int, int, str], int | None] = {}
     first: dict[tuple[int, int, str], int | None] = {}
     unresolved = []
+    need = set(design.conditions)
     for w in design.worlds:
         for d in design.days:
             for z in sorted(zs):
                 atts = by_cell.get((w, d, z), {})
                 order = sorted(atts)
-                clean = [a for a in order if not any(is_bad(r, invalid) for r in atts[a].values())]
+                where = f"w{w}_d{d}_{z}"
+                if strict and not order:
+                    raise EvalError(f"design cell {where} has no run at all and none is listed invalid (logs missing "
+                                    f"= infrastructure-invalid: classify_invalid must list it and the cell re-run)")
+                for a in order:
+                    lack = sorted(need - set(atts[a]))
+                    if strict and lack:
+                        what = ("design runs absent" if a == order[0] else
+                                "partial re-run (a re-run repeats ALL conditions of the cell)")
+                        raise EvalError(f"{where} attempt {a}: {what}: no run for {lack}, and none is listed invalid")
+                clean = [a for a in order if not any(is_bad(r, invalid) for r in atts[a].values())
+                         and (a == order[0] or not need - set(atts[a]))]
                 chosen[(w, d, z)] = clean[0] if clean else (order[-1] if order else None)
                 first[(w, d, z)] = order[0] if order else None
                 if order and not clean:                     # infrastructure-invalid and never cleanly re-run
