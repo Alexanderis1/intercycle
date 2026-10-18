@@ -47,3 +47,24 @@ def test_changes_become_unknown_within_5_min_and_no_false_alarm(short):
     for name, c in short["changes"].items():
         assert c["n_samples"] > 200, name
         assert c["t_unknown_s"] <= 240.0, (name, c)
+
+
+def test_learned_envelopes_are_scored_against_truth(short):
+    e = short["envelopes"]
+    print({k: e[k] for k in ("coverage", "iou", "bins_scored", "bins_seen")}, e["per_machine"])
+    assert e["bins_scored"] >= 64
+    assert 0.0 <= e["iou"] <= e["coverage"] <= 1.0
+    assert e["coverage"] > 0.5
+
+
+def test_envelope_score_counts_cells_outside_the_grid_as_missed():
+    from intercycle.alite.observer import AliteObserver
+    mp = AliteObserver(SCN).map
+    sc = mw4.EnvelopeScore(mp)
+    i = mp.machine_ids().index("HEM1")
+    far = np.array([[mp.l1_x0[i] - 50.0, mp.l1_z0[i] - 50.0, 0.3]])
+    for _ in range(10):
+        sc.add(mp, i, 3, far)
+    mp.l1_visits[i, 3] = mp.min_visits
+    r = sc.score(mp)
+    assert r["bins_scored"] == 1 and r["coverage"] == 0.0 and r["iou"] == 0.0

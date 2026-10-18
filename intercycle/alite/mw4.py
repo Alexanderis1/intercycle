@@ -137,6 +137,66 @@ def first_full(series: list[tuple[float, float]], hold_s: float = HOLD_S) -> flo
     return math.inf
 
 
+ENV_P_MIN = 0.05                   # = LayeredMap.envelope's default p_min: the truth envelope uses the same rule
+
+
+class EnvelopeScore:
+    """Truth side (scoring only): the learned time-binned arm envelopes against the truth ones. For every machine i and
+    every phase bin b the map assigned (cond.phase_bin, the map's own origin), the truth envelope is the set of the
+    map's L1 cells the machine's true arm circles occupy in at least ENV_P_MIN of the sampled ticks of that bin (the
+    same rule as LayeredMap.envelope); truth cells outside the map's L1 grid count as missed. Scored over the bins the
+    map has learned (>= min_visits observed ticks): coverage = |truth & learned| / |truth|, IoU = |truth & learned| /
+    |truth | learned|, both summed over all (machine, bin) before dividing (micro-average)."""
+
+    def __init__(self, mp: M.LayeredMap):
+        self.cnt: dict[tuple[int, int], np.ndarray] = {}
+        self.out: dict[tuple[int, int], dict[int, int]] = {}
+        self.n: dict[tuple[int, int], int] = {}
+        self.shape = {i: mp.envelope(m["id"], 0).shape for i, m in enumerate(mp.spec["machines"])}
+
+    def add(self, mp: M.LayeredMap, i: int, b: int, circles: np.ndarray) -> None:
+        if b < 0:
+            return
+        key = (i, b)
+        nx, nz = self.shape[i]
+        if key not in self.cnt:
+            self.cnt[key], self.out[key], self.n[key] = np.zeros((nx, nz), np.int32), {}, 0
+        self.n[key] += 1
+        pts = occupied_cells(circles, mp.spec["env_res"])
+        if not len(pts):
+            return
+        res = mp.spec["env_res"]
+        ix = np.floor((pts[:, 0] - mp.l1_x0[i]) / res + 1e-9).astype(int)
+        iz = np.floor((pts[:, 1] - mp.l1_z0[i]) / res + 1e-9).astype(int)
+        ok = (ix >= 0) & (ix < nx) & (iz >= 0) & (iz < nz)
+        np.add.at(self.cnt[key], (ix[ok], iz[ok]), 1)
+        for c in (ix[~ok] * 100003 + iz[~ok]).tolist():
+            self.out[key][c] = self.out[key].get(c, 0) + 1
+
+    def score(self, mp: M.LayeredMap) -> dict:
+        inter = truth = union = 0
+        per: dict[str, dict] = {}
+        n_seen = n_learned = 0
+        for (i, b), c in sorted(self.cnt.items()):
+            n_seen += 1
+            if mp.l1_visits[i, b] < mp.min_visits or self.n[(i, b)] == 0:
+                continue
+            n_learned += 1
+            mid = mp.spec["machines"][i]["id"]
+            tr = c >= ENV_P_MIN * self.n[(i, b)]
+            n_out = sum(v >= ENV_P_MIN * self.n[(i, b)] for v in self.out[(i, b)].values())
+            le = mp.envelope(mid, b, ENV_P_MIN)
+            a, t_, u = int((tr & le).sum()), int(tr.sum()) + n_out, int((tr | le).sum()) + n_out
+            inter, truth, union = inter + a, truth + t_, union + u
+            d = per.setdefault(mid, {"inter": 0, "truth": 0, "union": 0})
+            d["inter"], d["truth"], d["union"] = d["inter"] + a, d["truth"] + t_, d["union"] + u
+        return {"coverage": inter / truth if truth else float("nan"), "iou": inter / union if union else float("nan"),
+                "bins_scored": n_learned, "bins_seen": n_seen,
+                "per_machine": {m: {"coverage": round(d["inter"] / d["truth"], 4) if d["truth"] else None,
+                                    "iou": round(d["inter"] / d["union"], 4) if d["union"] else None}
+                                for m, d in per.items()}}
+
+
 def _win(series, a, b) -> float:
     v = [s for dt, s in series if a <= dt < b]
     return float(np.mean(v)) if v else float("nan")
@@ -163,6 +223,8 @@ def run(scn: Scenario, world_seed: int, t_learn0: float, learn_s: float, after_s
     n_ticks = int(round((t_end - t_learn0) * hz))
     pre_events: list[dict] = []
     post_events: list[dict] = []
+    env_score = EnvelopeScore(ob.map)
+    env_result: dict | None = None
     for k in range(n_ticks):
         t = t_learn0 + k / hz
         n_ev = len(ob.events)
@@ -171,8 +233,16 @@ def run(scn: Scenario, world_seed: int, t_learn0: float, learn_s: float, after_s
         (pre_events if t < t_ch else post_events).extend(new)
         if progress and k % int(3600 * hz) == 0:
             print(f"  world {world_seed} t={t / 3600:.2f} h", flush=True)
-        if t < t_ch or k % int(hz):
+        if k % int(hz):
             continue
+        if t < t_ch:                                   # learning window: truth envelopes, 1 Hz, in the map's bins
+            bodies = plant.kin.bodies(float(cond.t))
+            for i, mid in enumerate(ids):
+                if mid in bodies:
+                    env_score.add(ob.map, i, int(cond.phase_bin[i]), np.asarray(bodies[mid]))
+            continue
+        if env_result is None:                         # scored on the map as learned, before any change is seen
+            env_result = env_score.score(ob.map)
         mp = ob.map
         rects = list(mp.unknown_rects)
         tc = float(cond.t)
@@ -192,7 +262,8 @@ def run(scn: Scenario, world_seed: int, t_learn0: float, learn_s: float, after_s
             unk[name].append((tc - t_ch, float(box.mean())))
     out = {"world_seed": world_seed, "t_change": t_ch, "learn_h": learn_s / 3600, "after_min": after_s / 60,
            "false_alarms_before_change": len(pre_events), "false_alarm_kinds": sorted({e["kind"] for e in pre_events}),
-           "detector_hours_before_change": learn_s / 3600, "changes": {}}
+           "detector_hours_before_change": learn_s / 3600,
+           "envelopes": env_result if env_result is not None else env_score.score(ob.map), "changes": {}}
     for name in cover:
         c, u = cover[name], unk[name]
         out["changes"][name] = {

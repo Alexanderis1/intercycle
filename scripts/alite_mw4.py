@@ -1,6 +1,6 @@
 """A-lite M-W4 scenario runner (PLAN_TWIN §7 item 4; SIMULATED body shop, descriptive only).
 
-    .venv/Scripts/python.exe scripts/alite_mw4.py --worlds 801,802 --learn-h 24 --after-min 30 --out results/alite/mw4.json
+    .venv/Scripts/python.exe scripts/alite_mw4.py --worlds 811,812,813,814 --learn-h 24 --after-min 30 --out results/alite/mw4.json
 
 Per world: the A-lite observer learns the floor for --learn-h hours from 06:05 of day 0, then a program change (S60)
 and 4 new arms 0.5-2 m from an existing cell appear (intercycle/alite/mw4.py) and the run goes on for --after-min.
@@ -40,12 +40,16 @@ def table(results: list[dict]) -> str:
             rows.append(f"{r['world_seed']} | {name} | {c['t_unknown_s']:.1f} | {c['t_cover_s']:.1f} | "
                         f"{c['unknown_0_1min']:.2f} / {c['unknown_1_5min']:.2f} / {c['unknown_5_30min']:.2f} | "
                         f"{r['false_alarms_before_change']} in {r['detector_hours_before_change']:.1f} h")
+    rows.append("world | learned envelopes: coverage | IoU | bins scored / seen")
+    for r in results:
+        e = r["envelopes"]
+        rows.append(f"{r['world_seed']} | {e['coverage']:.3f} | {e['iou']:.3f} | {e['bins_scored']} / {e['bins_seen']}")
     return "\n".join(rows)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="A-lite M-W4 scenario runner (SIMULATED, descriptive)")
-    ap.add_argument("--worlds", default="801")
+    ap.add_argument("--worlds", default="811,812,813,814")
     ap.add_argument("--learn-h", type=float, default=24.0)
     ap.add_argument("--after-min", type=float, default=30.0)
     ap.add_argument("--workers", type=int, default=1)
