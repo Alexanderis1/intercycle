@@ -320,3 +320,21 @@ The A5 table was computed from a working tree that did not match the merge commi
 - The other seven A5 rows are correct. So 8 of the 15 §1 paths changed, not 12.
 - Any later change to a §1 path (for example fix (a), A5 item 8, if it is merged before FREEZE) gets its own entry
   listing the old and new blobs.
+
+## Amendment 6 (A6): real clips ROI-only (already in force), corrections to A2 item 4 and A4, two open differences
+
+- **Recorded:** Sun 18 Oct 2026, ~09:50 CEST, lead session intercycle-74, before FREEZE_REALCLIP. Text only, no code.
+- **User decision (~09:35 CEST), verbatim:** "Make real clips ROI-only". Checked on main by lane rc-roi-only and its
+  auditor: `intercycle/observer/pixel_adapter.py` has applied only the image-space ram-ROI rule since 1205db0
+  ("RC-freeze item 1"); it builds no `ObsV2Converter` and calls no floor rule. So nothing changes, and the dev numbers
+  stand (a re-score from the same PERC outputs gave the identical results/dev/realclip_dev.json): MISSING under
+  occlusion 31/35 = 0.886, not occluded 145/292 = 0.497, stroke F1 0.803 (full dev set) / 0.886 (base pair), person
+  recall 0.614.
+- **Correction to A2 item 4:** "the twin keeps its rule" is superseded by A4: the twin and the real clips both use the
+  ROI rule (the floor rule remains only for the G0 stand-in camera_v0 and the body-shop shim).
+- **Correction to A4:** "with the same hold" means the same rule with different hold values (next item).
+- **Differences still standing, not changed (no tuning):**
+  1. Hold: the real ingest holds 1.33 s (16 frames at 12 fps, `esk_ingest._default_hold`); the twin holds 34 s on
+     camera 9 and 7.5 s on camera 14.
+  2. Occluder input: in the twin, only movers the camera detects that tick occlude; on real clips every confirmed track
+     box occludes, plus every person or forklift detection at conf >= occ_conf 0.4.
