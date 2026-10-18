@@ -472,8 +472,8 @@ def age_summary(age_s: np.ndarray, source: str) -> dict:
 
 
 def write_margin_file(result: dict, path: str | os.PathLike, overwrite: bool = False) -> Path:
-    """Write the frozen margin constant (JSON). Refuses a result without a valid margin (the plan's fallback, a fixed
-    latency-p99 margin, is the lead's decision, not this module's) and refuses to overwrite a frozen file.
+    """Write the frozen margin constant (JSON). Refuses a result without a valid margin and any non-LTT result (the
+    fixed latency-p99 fallback is written only by `write_fixed_margin_file`) and refuses to overwrite a frozen file.
 
     It re-checks the result rather than trusting its caller: the schema; every required time slice covered with at
     least min_units_per_slice scored units; Kish n_eff over world clusters; and an `inflation` block that is exactly
@@ -495,6 +495,125 @@ def write_margin_file(result: dict, path: str | os.PathLike, overwrite: bool = F
     p = Path(path)
     if p.exists() and not overwrite:
         raise FileExistsError(f"{p} exists: the margin is frozen")
+    body = dict(result, frozen=True, frozen_at_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(body, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return p
+
+
+# ------------------------------------------------------------------------------------------------ fixed-margin fallback
+
+FIXED_METHOD = "fixed_latency_p99"
+FIXED_DISCLOSURE = "fixed latency-p99 margin, not certified"
+FIXED_RULE = ("k = ceil(age_p99 * v_max / cell_m - 1e-9); margin_m = round(k * cell_m, 2); "
+              "radius2_cells = k^2 (PREREG_TWIN section 7)")
+FIXED_V_MAX_KEYS = ("forklift.z14.speed_mps", "person.z14.speed_mps", "person.z9.speed_mps")
+DYNAMICS_JSON = REPO_ROOT / "twin" / "dynamics.json"
+FIXED_CELL_M = 0.25                  # observer_live twin_spec env_res default: the robot's inflation grid cell
+FIXED_AGE_CELLS_TOL = 1e-9           # PREREG section 7: only absorbs float error (margin_inflate.R2_EPS does the same)
+
+
+def v_max_from_dynamics(path: str | os.PathLike | None = None) -> tuple[float, dict]:
+    """PREREG section 7 v_max: the largest `sweep.hi` over the three mover speed keys of twin/dynamics.json `observed`.
+    Returns (v_max, source block naming the file, its sha256, the keys and their values). Refuses a missing key."""
+    p = Path(path) if path is not None else DYNAMICS_JSON
+    raw = p.read_bytes()
+    obs = json.loads(raw.decode("utf-8")).get("observed") or {}
+    vals = {}
+    for k in FIXED_V_MAX_KEYS:
+        try:
+            vals[k] = float(obs[k]["sweep"]["hi"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"{p}: observed[{k!r}].sweep.hi is missing or not a number") from e
+    if not all(math.isfinite(v) and v > 0 for v in vals.values()):
+        raise ValueError(f"{p}: mover speed bounds must be finite and > 0, got {vals}")
+    return max(vals.values()), dict(file=p.name, sha256=hashlib.sha256(raw).hexdigest(),
+                                    keys=list(FIXED_V_MAX_KEYS), sweep_hi_mps=vals, rule="max of sweep.hi")
+
+
+def fixed_margin_cells(age_p99_s: float, v_max_mps: float, cell_m: float) -> int:
+    """k = ceil(age_p99 * v_max / cell_m - 1e-9): the integer number of cells (PREREG_TWIN section 7)."""
+    for name, v in (("age_p99_s", age_p99_s), ("v_max_mps", v_max_mps), ("cell_m", cell_m)):
+        if not math.isfinite(float(v)):
+            raise ValueError(f"{name} must be finite, got {v!r}")
+    if age_p99_s < 0 or v_max_mps <= 0 or cell_m <= 0:
+        raise ValueError(f"need age_p99_s >= 0, v_max_mps > 0, cell_m > 0, got {age_p99_s}, {v_max_mps}, {cell_m}")
+    return max(0, int(math.ceil(float(age_p99_s) * float(v_max_mps) / float(cell_m) - FIXED_AGE_CELLS_TOL)))
+
+
+def fixed_margin_result(age_s: np.ndarray, *, age_source: dict, v_max_mps: float, v_max_source: dict,
+                        cell_m: float = FIXED_CELL_M, episode_s: float = DEFAULT_EPISODE_S,
+                        n_ticks_no_fast_layer: int = 0, grid_margin_m: float | None = None) -> dict:
+    """The content of the fixed-margin fallback file (PREREG_TWIN section 7), same schema as the LTT result.
+
+    age_s: the fast-layer age the robot holds at each tick (finite, >= 0), pooled over the runs named in age_source;
+    n_ticks_no_fast_layer is recorded. Fail closed, no clipping: (a) margin_m must lie on DEFAULT_MARGINS_M (every
+    multiple of 0.25 m up to 4 m does); (b) only when grid_margin_m is given: margin_m must fit in that observer grid
+    margin (PREREG section 7 (b) uses 1.0). The margin is never cut to fit: a violation raises ValueError."""
+    a = np.asarray(age_s, float)
+    if a.ndim != 1 or not len(a):
+        raise ValueError("age_s must be a non-empty 1-D array of fast-layer ages")
+    if not np.isfinite(a).all() or (a < 0).any():
+        raise ValueError("fast-layer ages must be finite and >= 0")
+    if not isinstance(age_source, dict) or not age_source:
+        raise ValueError("age_source (the dev runs the ages come from) is required")
+    if not isinstance(v_max_source, dict) or not v_max_source:
+        raise ValueError("v_max_source is required")
+    summ = age_summary(a, str(age_source.get("description", "dev learned-arm runs")))
+    k = fixed_margin_cells(summ["p99"], v_max_mps, cell_m)
+    margin_m = round(k * float(cell_m), 2)
+    _margin_index(np.asarray(DEFAULT_MARGINS_M, float), margin_m)       # (a): raises, never clips
+    if grid_margin_m is not None and margin_m > float(grid_margin_m) + _EPS:
+        raise ValueError(f"fixed margin {margin_m} m does not fit in the {grid_margin_m} m observer grid margin "
+                         f"(k={k}): the robot part is not ready, the margin is never cut to fit")
+    mg = Margin(margin_m, float(cell_m))
+    if mg.radius2_cells != k * k:
+        raise ValueError(f"radius2_cells {mg.radius2_cells} != k^2 = {k * k}: cell_m {cell_m} is not a grid of the rule")
+    return dict(schema=SCHEMA, status="ok", alpha=None, delta=None, margin_m=margin_m, margin_cells=k,
+                cell_m=float(cell_m), inflation=inflation_spec(mg),
+                estimand="unweighted mean over units of the unit-pooled miss share",
+                unit=dict(episode_s=float(episode_s), kind="one mission (PLAN_TWIN section 5, T = 720 s)"),
+                method=dict(name=FIXED_METHOD, certified=False, disclosure=FIXED_DISCLOSURE, rule=FIXED_RULE,
+                            age_p99_s=summ["p99"], v_max_mps=float(v_max_mps), cell_m=float(cell_m), k=k,
+                            inputs=dict(age_p99=dict(value=summ["p99"], statistic="numpy linear percentile, 99",
+                                                     source=age_source, n_ticks=int(len(a)),
+                                                     n_ticks_no_fast_layer=int(n_ticks_no_fast_layer)),
+                                        v_max=dict(value=float(v_max_mps), source=v_max_source),
+                                        cell_m=dict(value=float(cell_m), source="observer_live twin_spec env_res default"))),
+                fast_layer_age_s=summ)
+
+
+def write_fixed_margin_file(result: dict, path: str | os.PathLike, overwrite: bool = False) -> Path:
+    """Write the fixed-margin fallback (frozen=True, status ok) in the format intercycle.margin_inflate.load_margin and
+    twin_eval.load_frozen_margin read. Re-checks the result (schema, method, the rule recomputed from its own inputs,
+    the inflation block) and refuses to overwrite a file that is already frozen, whatever `overwrite` says."""
+    if result.get("status") != "ok" or result.get("margin_m") is None:
+        raise ValueError("no valid margin: nothing to freeze")
+    if result.get("schema") != SCHEMA:
+        raise ValueError(f"result schema {result.get('schema')!r} is not {SCHEMA}")
+    method = result.get("method") or {}
+    if method.get("name") != FIXED_METHOD or method.get("certified") is not False:
+        raise ValueError(f"not a fixed-margin result: method {method.get('name')!r}")
+    cell_m = result.get("cell_m")
+    if cell_m is None:
+        raise ValueError("cell_m is missing: the robot could not apply the margin on the right grid")
+    k = fixed_margin_cells(float(method["age_p99_s"]), float(method["v_max_mps"]), float(cell_m))
+    if k != method.get("k") or round(k * float(cell_m), 2) != float(result["margin_m"]):
+        raise ValueError("margin_m is not the rule of PREREG_TWIN section 7 applied to the method's own inputs")
+    _margin_index(np.asarray(DEFAULT_MARGINS_M, float), float(result["margin_m"]))
+    if result.get("inflation") != inflation_spec(Margin(float(result["margin_m"]), float(cell_m))):
+        raise ValueError("the inflation block is missing or differs from intercycle.margin_inflate's rule")
+    ep = (result.get("unit") or {}).get("episode_s")
+    if isinstance(ep, bool) or not isinstance(ep, (int, float)) or not math.isfinite(ep) or ep <= 0:
+        raise ValueError(f"unit.episode_s must be a number > 0, got {ep!r}")
+    p = Path(path)
+    if p.exists():
+        try:
+            already = json.loads(p.read_text(encoding="utf-8")).get("frozen") is True
+        except (OSError, ValueError):
+            already = True      # unreadable: treat as frozen, fail closed
+        if already or not overwrite:
+            raise FileExistsError(f"{p} exists: the margin is frozen")
     body = dict(result, frozen=True, frozen_at_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(body, indent=1, sort_keys=True) + "\n", encoding="utf-8")

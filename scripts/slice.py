@@ -78,7 +78,7 @@ from nacl.signing import SigningKey  # noqa: E402
 
 from intercycle.codec import maplayer as ML  # noqa: E402
 from intercycle.codec.trust import TrustError, TrustStore, issue_cert  # noqa: E402
-from intercycle.margin_inflate import SCHEMA as MARGIN_SCHEMA, Margin, inflation_spec  # noqa: E402
+from intercycle.margin_inflate import SCHEMA as MARGIN_SCHEMA, Margin, inflation_spec, load_margin  # noqa: E402
 from intercycle.observer import mapping as OM  # noqa: E402
 from intercycle.types import DAY0_UNIX  # noqa: E402
 from twin import build_worlds as BW  # noqa: E402
@@ -87,6 +87,7 @@ from twin import daygen as DG1  # noqa: E402
 from twin import daygen_stub as DG  # noqa: E402
 from twin import observer_live as OL  # noqa: E402
 from twin import plant as PL  # noqa: E402
+from twin.rng import DEV_SEED_MAX  # noqa: E402
 from twin.schemas import json_schema, load  # noqa: E402
 from twin.schemas.dayscript import FILE_SUFFIX  # noqa: E402
 from twin.schemas.dynamics import Dynamics  # noqa: E402
@@ -117,6 +118,8 @@ GUARD_TESTS = ("tests/test_truth_allowlist.py", "tests/test_isaac_deps.py")
 FILES_STEP1 = ("boxes.json", "static.usda", "mesh.npz", "map.pgm", "map.yaml")
 REMOTE_REPO = "/root/repo"       # cloud/modal_isaac_robot.py mounts twin/, intercycle/ and scenario/ here
 STUB_MARGIN = dict(margin_m=0.5, cell_m=0.25)
+L1_GRID_MARGIN_M = 1.0          # the observer grid margin around the zone (twin_spec default); grown to fit a larger margin_m
+SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 SAFETY = ("safety.yaml", "safety_v0.yaml")   # (twin/site.yaml's safety file, the G0 stub site_v0's)
 
 
@@ -321,11 +324,29 @@ def run_learn(out: Path, paths: dict[str, Path], script_path: Path, t0: float, z
             plant.obs_path, plant.adapter)
 
 
-def margin_path(out: Path) -> tuple[Path, str]:
-    """S7b's frozen twin/m7_margin.json when it exists; otherwise a slice-local STUB margin (on stubs only)."""
+def stub_margin_refusal(world: int | None = None, freeze: bool = False) -> str | None:
+    """Why the 0.5 m STUB margin must not be used (None = allowed): a sealed run (INTERCYCLE_SEALED_RUN=1), a freeze
+    world (`freeze`: the world is built for FREEZE / the sealed test) or a test world seed (outside the dev seeds
+    0..DEV_SEED_MAX). The stub is a dev-slice placeholder; a freeze or sealed world needs the frozen twin/m7_margin.json."""
+    if os.environ.get(SEALED_ENV) == "1":
+        return f"{SEALED_ENV}=1"
+    if freeze:
+        return "a freeze world is being built (--freeze)"
+    if world is not None and not (0 <= int(world) <= DEV_SEED_MAX):
+        return f"world seed {world} is a test seed (dev seeds are 0..{DEV_SEED_MAX})"
+    return None
+
+
+def margin_path(out: Path, *, world: int | None = None, freeze: bool = False) -> tuple[Path, str]:
+    """S7b's frozen twin/m7_margin.json when it exists; otherwise a slice-local STUB margin (dev slices on stubs only:
+    refused in a sealed run and for a freeze or sealed world, `stub_margin_refusal`)."""
     frozen = C.TWIN / "m7_margin.json"
     if frozen.exists():
         return frozen, "twin/m7_margin.json (S7b, frozen)"
+    why = stub_margin_refusal(world, freeze)
+    if why:
+        raise SliceError(f"twin/m7_margin.json is missing and the 0.5 m STUB margin is refused ({why}): "
+                         "write the frozen margin (scripts/write_fixed_margin.py) first")
     mg = Margin(**STUB_MARGIN)
     p = out / "m7_margin.json"
     p.write_text(json.dumps(dict(schema=MARGIN_SCHEMA, frozen=True, status="ok", inflation=inflation_spec(mg),
@@ -334,8 +355,11 @@ def margin_path(out: Path) -> tuple[Path, str]:
     return p, "slice stub (0.5 m on 0.25 m cells; S7b's frozen margin not merged)"
 
 
-def observer_spec(site: Site, compiled: dict[str, C.CompiledZone], adapter: PL.ObsAdapter) -> dict:
-    """The site-wide observer spec in the plant adapter's order (machines = press danger rects, cameras = zones)."""
+def observer_spec(site: Site, compiled: dict[str, C.CompiledZone], adapter: PL.ObsAdapter,
+                  margin_m: float = 0.0) -> dict:
+    """The site-wide observer spec in the plant adapter's order (machines = press danger rects, cameras = zones).
+    The L1 grid margin is max(L1_GRID_MARGIN_M, margin_m) so ObserverLive (which refuses margin_m > spec["margin"])
+    accepts the frozen margin; for margin_m <= 1.0 m the grid is the unchanged 1.0 m one."""
     zones = {z.id: z for z in site.zones}
     floors = [np.asarray(zones[z].floor_polygon.value, float) for z in adapter.zone_ids]
     allp = np.vstack(floors)
@@ -343,15 +367,25 @@ def observer_spec(site: Site, compiled: dict[str, C.CompiledZone], adapter: PL.O
     machines = [dict(id=pid, kind="press", rect=tuple(r)) for pid, r in zip(adapter.press_ids, adapter.rects)]
     cams = [(float(f[:, 0].mean()), float(f[:, 1].mean())) for f in floors]
     scn = next(iter(compiled.values())).scenario
-    return OL.twin_spec(machines, extent, cams, site_id=scn.site_id, key_id=scn.key_id)
+    return OL.twin_spec(machines, extent, cams, site_id=scn.site_id, key_id=scn.key_id,
+                        margin=max(L1_GRID_MARGIN_M, float(margin_m)))
+
+
+def _spec_step(out: Path, site: Site, ctx: dict, world: int, freeze: bool) -> tuple[dict, dict]:
+    """The observer spec with an L1 grid margin that fits the margin file in force (refuses the stub where it must)."""
+    mp, _ = margin_path(out, world=world, freeze=freeze)
+    margin_m = load_margin(mp).margin_m
+    spec = observer_spec(site, ctx["compiled"], ctx["adapter"], margin_m)
+    return {"margin_m": margin_m, "grid_margin_m": spec["margin"]}, spec
 
 
 def step_observer(out: Path, spec: dict, obs_path: Path, t_end: float,
-                  camera_model: str, stub_run: bool = False) -> tuple[dict, OL.ObserverLive]:
+                  camera_model: str, *, stub_run: bool = False, world: int | None = None,
+                  freeze: bool = False) -> tuple[dict, OL.ObserverLive]:
     """Step 5: the observer config follows the camera model that wrote the Observation (`OL.config_for_camera`,
     fail closed on any model other than stat_v1; the G0 stand-in camera_v0 only when the slice runs on the whole G0
-    v0 stub set, `stub_run`)."""
-    mp, msrc = margin_path(out)
+    v0 stub set, `stub_run`). The margin file follows `margin_path` (the stub margin is refused for a freeze world)."""
+    mp, msrc = margin_path(out, world=world, freeze=freeze)
     ob = OL.ObserverLive(spec, OL.config_for_camera(camera_model, str(mp), stub_run=stub_run), obs_path=obs_path)
     n = ob.advance(t_end + 10.0)
     if n < int(LEARN_S / TICK_S) - 1:
@@ -721,11 +755,11 @@ def check_modal_mission(rec: dict) -> dict:
 # ------------------------------------------------------------------------------------------------ main
 
 def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: str = "", cpu: float = 4.0,
-        max_rtf: float = 2.0, guard_tests: bool = True, stubs: bool = False) -> dict:
+        max_rtf: float = 2.0, guard_tests: bool = True, stubs: bool = False, freeze: bool = False) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     rep: dict = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "head": git_head(), "world": world, "day": day,
-                 "zone": zone, "stubs_requested": stubs, "steps": {}, "assertions": {}}
-    ctx: dict = {}
+                 "zone": zone, "stubs_requested": stubs, "freeze": freeze, "steps": {}, "assertions": {}}
+    ctx: dict = {"freeze": freeze}
 
     def do(name: str, fn: Callable[[], Any], kind: str = "steps") -> Any:
         t = time.time()
@@ -751,10 +785,13 @@ def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: st
         if r:
             ctx["learn_obs"], ctx["camera_model"], ctx["adapter"] = r[1], r[0]["camera_model"], r[2]
             site = load(Site, paths["site"])
-            spec = ctx["spec"] = observer_spec(site, ctx["compiled"], ctx["adapter"])
             stub_run = all(C.is_stub(k, paths[k]) for k in ("site", "dynamics", "tasks"))
-            r = do("5_observer", lambda: step_observer(out, spec, ctx["learn_obs"], t0 + LEARN_S, ctx["camera_model"],
-                                                       stub_run=stub_run))
+            r = do("5_observer_spec", lambda: _spec_step(out, site, ctx, world, freeze))
+            if r:
+                spec = ctx["spec"] = r[1]
+                r = do("5_observer", lambda: step_observer(out, spec, ctx["learn_obs"], t0 + LEARN_S,
+                                                           ctx["camera_model"], stub_run=stub_run, world=world,
+                                                           freeze=freeze))
             if r:
                 ctx["observer"], ctx["motion_thr"] = r[1], r[1].cfg.motion_thr
                 do("signatures", lambda: step_signatures(ctx["observer"], t0 + LEARN_S), "assertions")
@@ -798,7 +835,7 @@ def run_modal_steps(out: Path, rep: dict, do: Callable[..., Any], ctx: dict, pat
     planners = ("timing", "probe") if modal == "timing" else (modal,)
     tags = {pl: f"slice_{'wiring_' if pl == 'patrol' else ''}{pl}_{stamp}" for pl in planners}
     cfgs = [modal_cfg(tags[pl], paths, ctx["script_path"].name, cz, t0, zone, world, pl, max_rtf) for pl in planners]
-    mp, _ = margin_path(out)
+    mp, _ = margin_path(out, world=world, freeze=ctx.get("freeze", False))
     wb = world_bytes(out / "worlds" / zone, ctx["learn_obs"], ctx["spec"], [m.id for m in cz.scenario.machines], mp,
                      zone, ctx["camera_model"])
     pf = dict([PL.day_script_payload(ctx["script_path"])])
@@ -859,10 +896,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-rtf", type=float, default=2.0)
     ap.add_argument("--skip-guard-tests", action="store_true")
     ap.add_argument("--stubs", action="store_true", help="run on the whole G0 v0 stub set (default: the v1 artifacts)")
+    ap.add_argument("--freeze", action="store_true",
+                    help="build a freeze/sealed world: the 0.5 m stub margin is refused, twin/m7_margin.json is required")
     a = ap.parse_args(argv)
     out = Path(a.out) if a.out else REPO / "out" / "slice" / time.strftime("%m%d_%H%M%S")
     rep = run(out, world=a.world, day=a.day, zone=a.zone, modal=a.modal, cpu=a.cpu, max_rtf=a.max_rtf,
-              guard_tests=not a.skip_guard_tests, stubs=a.stubs)
+              guard_tests=not a.skip_guard_tests, stubs=a.stubs,
+              freeze=a.freeze)
     for k in ("steps", "assertions"):
         for name, v in rep[k].items():
             print(f"{'OK  ' if v['ok'] else 'FAIL'} {k[:-1]:<9} {name:<26} {v['wall_s']:>7}s {(v.get('error') or '')[:300]}")
