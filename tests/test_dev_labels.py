@@ -266,3 +266,19 @@ def test_load_scored_test_fails_closed():
     dev = blobs["labels/labels_windows.json"].replace(b'"split": "test"', b'"split": "dev"')
     with pytest.raises(ValueError):                                          # a dev set is refused
         DL.load_scored_test(dict(blobs, **{"labels/labels_windows.json": dev}), "labels/sample.json", sha)
+
+
+def test_load_scored_test_split_dev_on_the_real_dev_base_pair():
+    """RC-final (sealed_run dev-score): the test loader with split dev on the committed dev base pair (labels.json +
+    sample.json) gives the base part's scored frames and a subset of load_scored's scored windows."""
+    d = Path(__file__).resolve().parents[1] / "labels" / "dev"
+    blobs = {f"labels/{n}": (d / n).read_bytes() for n in ("labels.json", "sample.json")}
+    doc = json.loads((d / "scored.json").read_text(encoding="utf-8"))
+    sha_of = {r["clip_id"]: r["clip_sha256"] for r in doc["frames"] + doc["stroke_windows"]}
+    sd = DL.load_scored_test(blobs, "labels/sample.json", sha_of, split="dev")
+    ref = DL.load_scored(d)
+    base_frames = [r["sample_id"] for r in doc["frames"] if r["status"] == "scored" and r["label_set"] == "labels.json"]
+    assert [f.sample_id for f in sd.frames] == base_frames
+    assert {w.sample_id for w in sd.windows} <= {w.sample_id for w in ref.windows}
+    with pytest.raises(ValueError, match="test .* or dev"):
+        DL.load_scored_test(blobs, "labels/sample.json", sha_of, split="train")

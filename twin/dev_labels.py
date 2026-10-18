@@ -264,17 +264,21 @@ def load_scored(labels_dir: Path) -> ScoredDev:
                      ignore={r["sample_id"]: sorted(r["hidden"] + r["edge"]) for r in rows}, doc=doc)
 
 
-def load_scored_test(label_files: dict[str, bytes], samples_name: str, sha_of: dict[str, str]) -> ScoredDev:
+def load_scored_test(label_files: dict[str, bytes], samples_name: str, sha_of: dict[str, str],
+                     split: str = "test") -> ScoredDev:
     """The scored TEST frames and stroke windows (sealed scoring, scripts/sealed_run.py score). `label_files` maps
     each LABELS-hashed label file name to its bytes (the caller has checked them against sealed/LABELS.sha256), among
     them the sample list `samples_name`; `sha_of` maps clip_id -> sha256 (the MANIFEST). Each label file is a test
     LabelSet answering that sample list; together they label every sampled item exactly once (fail closed). Statuses:
-    build_scored(test=True), same rules as dev."""
+    build_scored(test=True), same rules as dev. split="dev" only for sealed_run's dev dry run (the same path on the
+    DEV labels: a dev LabelSet answering one dev sample list)."""
+    if split not in ("test", "dev"):
+        raise ValueError(f"split {split!r}: test (sealed score) or dev (dev dry run) only")
     samples = label_files[samples_name]
     names = sorted(n for n in label_files if n != samples_name)
     if not names:
         raise ValueError("no test label file besides the sample list")
-    parts = [Part(n, label_files[n], samples_name, samples, supplement=True, split="test") for n in names]
+    parts = [Part(n, label_files[n], samples_name, samples, supplement=True, split=split) for n in names]
     labelled = [f.sample_id for p in parts for f in p.labels.frames] +                [w.sample_id for p in parts for w in p.labels.stroke_windows]
     if len(labelled) != len(set(labelled)):
         raise ValueError("a test sample is labelled in more than one label file")
@@ -308,5 +312,5 @@ def _test_parts_in_list_order(parts: list[Part]) -> list[Part]:
             if getattr(p.labels, k) != getattr(parts[0].labels, k):
                 raise ValueError(f"test label files disagree on {k}")
     merged = Part("+".join(p.labels_name for p in parts), json.dumps(base).encode("utf-8"), parts[0].samples_name,
-                  parts[0].samples_bytes, supplement=False, split="test")
+                  parts[0].samples_bytes, supplement=False, split=parts[0].split)
     return [merged]
