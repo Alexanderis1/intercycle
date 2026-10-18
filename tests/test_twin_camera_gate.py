@@ -94,3 +94,34 @@ def test_latency_includes_the_frame_difference_window():
     assert g.ready(CG.LATENCY_S - 0.01) == []
     assert len(g.ready(CG.LATENCY_S + 1e-6)) == 1
     assert math.isclose(CG.LATENCY_S, RC.LATENCY_S + CG.N_DIFF / CG.FRAME_HZ)
+
+
+class _Always:
+    """Detection always succeeds, no sway (isolates the stale-frame rule)."""
+
+    def normal(self, *a, **k):
+        return 0.0
+
+    def random(self):
+        return 0.0
+
+
+def test_no_recent_previous_frame_is_unknown_not_still():
+    """Fail closed (R-W3): first sight of a press, or a previous frame older than STALE_DT (out of range, back in),
+    gives visible = False, never visible with motion_seen = False for a ram that may be moving."""
+    g = CG.Gate(np.random.default_rng(0))
+    g.rng = _Always()                                   # type: ignore[assignment]
+    cam, aim = np.array((0.0, 0.0, 0.8)), np.array((3.0, 0.0, 1.55))
+
+    def obs(t: float, z: float) -> dict:
+        g.observe(t, cam, [("P", _ram(3.0, z), aim)], _Open(), None)
+        return g.ready(t + 1.0)[-1]["targets"][0]
+
+    assert obs(0.0, 1.6)["visible"] is False                      # first sight
+    second = obs(RC.GATE_DT, 1.6)
+    assert second["visible"] is True and second["motion_seen"] is False
+    # a cycling ram that is back at the same height after a long gap: averaged speed ~ 0 -> must be unknown
+    late = obs(RC.GATE_DT + 5.0, 1.6)
+    assert late["visible"] is False and late["motion_seen"] is False
+    assert obs(2 * RC.GATE_DT + 5.0, 1.6)["visible"] is True
+    assert CG.STALE_DT == 1.5 * RC.GATE_DT

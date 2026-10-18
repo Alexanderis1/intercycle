@@ -16,6 +16,9 @@ Model, per GATE_DT and per press in range (all constants ASSUMED priors, disclos
 * Detection probability (range / occlusion dependent): visible iff the unoccluded in-frame share of the parts is
   >= VIS_FRAC, and a Bernoulli p = P_MAX * share * min(1, size_px / SIZE_FULL_PX), size_px = the ram's apparent size
   (RAM_SIZE_M * f / R). Not visible = no motion claim either way (the robot treats it as unknown).
+* Fail closed: a press with no previous observation, or one older than STALE_DT = 1.5 * GATE_DT (first sight, or
+  back in range after a gap), has no frame difference: it is reported visible = False (unknown), never
+  visible with no motion.
 * Latency: LATENCY_S (pipeline) + dt_d (the frame-difference window), the observation is published that much later.
 Not done (listed): Isaac body rates instead of the sway prior; validation on R4 renders.
 """
@@ -40,6 +43,7 @@ P_MAX = 0.95
 SIZE_FULL_PX = 40.0
 RAM_SIZE_M = 0.8                 # 2 * plant RAM_HALF_M
 LATENCY_S = RC.LATENCY_S + DT_DIFF
+STALE_DT = 1.5 * RC.GATE_DT          # previous observation older than this: no frame difference, visible = False
 GATE_SOURCE = ("twin gate v1 (R-W3 pixel-motion model: frame difference 3 @ 30 Hz, K 2 px, sway + ego residual false "
                "motion, range/occlusion detection p, latency 0.25 s; constants ASSUMED priors)")
 
@@ -93,7 +97,9 @@ class Gate:
             pitch += self.rng.normal(0.0, RC.AIM_SIGMA)
             prev = self.prev.get(mid)
             vel = np.zeros_like(parts)
-            if prev is not None and prev[1].shape == parts.shape and t - prev[0] > 1e-6:
+            # a frame difference needs a recent previous frame: none, or older than STALE_DT, is "unknown" (fail closed)
+            fresh = prev is not None and prev[1].shape == parts.shape and 1e-6 < t - prev[0] <= STALE_DT
+            if fresh and prev is not None:
                 vel = (parts - prev[1]) / (t - prev[0])
             self.prev[mid] = (t, parts.copy())
             u, v, zf = RC.project(cam, yaw, pitch, parts, RC.GATE_FX, RC.GATE_FY)
@@ -107,7 +113,7 @@ class Gate:
             rngs = np.linalg.norm(los, axis=1)
             ulos = los / np.maximum(rngs, 1e-9)[:, None]
             rng_m = float(rngs[vis].mean()) if vis.any() else float(rngs.mean()) if len(rngs) else math.inf
-            det = bool(self.rng.random() < p_detect(share, rng_m))
+            det = bool(self.rng.random() < p_detect(share, rng_m)) and fresh
             v_perp = vel - (np.sum(vel * ulos, axis=1))[:, None] * ulos
             d_px = pixel_shift(np.linalg.norm(v_perp, axis=1), rngs)
             vc_perp = v_cam[None, :] - (ulos @ v_cam)[:, None] * ulos

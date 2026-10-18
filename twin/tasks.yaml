@@ -6,37 +6,42 @@ site_id: esk_press_v1
 inspection:
   defect_rate: 0.25
   zoom_max: 20.0
-  detectability: 'A capture passes Inspect iff ALL of: (1) in_image: the target point is inside the zoomed frame after the
-    PTZ aim (aim error N(0, 2.5 deg) per axis, re-centred by the PTZ before the shot); (2) unoccluded: the 3-D line of sight
-    from the camera to the target is not cut by the static mesh or a mover; (3) incidence theta < 60 deg (theta = angle between
-    the reversed line of sight and the target normal); (4) blur b < 1 px with b = (|v_perp| / R + |omega|) * f0 * Z * t_exp,
-    t_exp = 4 ms; (5) DORI Inspect: px_per_m = f0 * Z / R * cos(theta) >= 1000 px/m (1 px per mm, Amendment 1), with f0 =
-    1371.0 px (1920 px, 70 deg HFOV at Z = 1), Z = the checkpoint''s optical zoom (1..20), R = camera-target range (m). A
-    thermal checkpoint also needs the thermal capture to pass (thermal_model). Defects: each (checkpoint, mission) carries
-    a defect with probability defect_rate = 0.25 (keyed draw world/day/checkpoint, CRN across conditions); a capture that
-    passes Inspect resolves it (present or absent, no false call: 1 mm class defects need >= 1 px/mm); a capture that fails,
-    a declined or an unattempted checkpoint resolves nothing and scores 0. No partial credit.'
+  detectability: 'A capture passes Inspect iff ALL of: (1) in_image: the PTZ aims at the target with an aim error N(0, 2.5
+    deg) per axis and the target must be inside the Z = 1 frame (1920 x 1080 px, HFOV 70 deg, VFOV 45 deg) at that aim; the
+    PTZ then re-centres on the target before zooming, so the zoomed frame is centred on it (residual aim error after re-centring
+    ASSUMED 0; robot_camera.capture implements exactly this rule); (2) unoccluded: the 3-D line of sight from the camera to
+    the target is not cut by the static mesh or a mover; (3) incidence theta < 60 deg (theta = angle between the reversed
+    line of sight and the target normal); (4) blur b < 1 px with b = (|v_perp| / R + |omega|) * f0 * Z * t_exp, t_exp = 4
+    ms; (5) DORI Inspect: px_per_m = f0 * Z / R * cos(theta) >= 1000 px/m (1 px per mm, Amendment 1), with f0 = 1371.0 px
+    (1920 px, 70 deg HFOV at Z = 1), Z = the checkpoint''s optical zoom (1..20), R = camera-target range (m). A thermal checkpoint
+    also needs the thermal capture to pass (thermal_model; twin/inspect_model.thermal_capture). Defects: each (checkpoint,
+    mission) carries a defect with probability defect_rate = 0.25 (twin/inspect_model.defect_draw(world_seed, day, checkpoint,
+    mission), keyed, CRN across conditions);a capture that passes Inspect resolves it (present or absent, no false call: 1
+    mm class defects need >= 1 px/mm); a capture that fails, a declined or an unattempted checkpoint resolves nothing and
+    scores 0. No partial credit.'
   capture_model: 'Same 20x optical zoom PTZ head in every condition (E-W3): 1920 x 1080 px, HFOV 70 deg / Z (Z = 1..20, f
     = f0 * Z, f0 = 1371.0 px), mounted at (0.45, 0, 0.35) m on the body; the shot is taken after the body has been still for
     1.0 s (|v| < 0.05 m/s, |omega| < 0.05 rad/s), else at dwell_end (settled = false). A boundary capture fails only on line
     of sight, incidence or blur, never on range at Z = 20 inside the zone (R <= 13.7 m keeps 2000 px/m at theta = 0).'
   thermal_model: 'Radiometric LWIR core on the same head, 640 x 512 px, HFOV 24 deg, no zoom: f_th = 320 / tan(12 deg) = 1505.5
-    px. Thermal pass iff in_image (frame 640 x 512 at the same aim), unoccluded, theta < 60 deg, b_th = (|v_perp| / R + |omega|)
-    * f_th * 10 ms < 1 px, and px_per_m_th = f_th / R * cos(theta) >= 100 px/m (a 10 cm hot spot spans >= 10 px). ASSUMED
-    (no plant thermal data): the hot-spot contrast is always above NETD.'
+    px (twin/inspect_model.thermal_capture). Thermal pass iff in_image (frame 640 x 512 at the PTZ aim, aim error N(0, 2.5
+    deg) per axis), unoccluded, theta < 60 deg, b_th = (|v_perp| / R + |omega|) * f_th * 10 ms < 1 px, and px_per_m_th = f_th
+    / R * cos(theta) >= 100 px/m (a 10 cm hot spot spans >= 10 px). ASSUMED (no plant thermal data): the hot-spot contrast
+    is always above NETD.'
   window:
     kinds: [press_stop, stroke_gap]
     margin_s: 1.0
     definition: 'An inside_danger checkpoint may be entered only inside a press inspection window: (a) a press stop (the press
       is idle, not running a stroke, for the whole stay), or (b) a gap between strokes of length >= inside_s + margin_s, where
       inside_s = entry_m / v + dwell_s + entry_m / v (entry from the wait pose, dwell, exit; entry_m from compile.py, v =
-      robot speed) and margin_s = 1.0 s (= compile.SAFETY_MARGIN_S). The window must be open from the moment the robot crosses
-      into the dilated danger rect until it has left it; a stroke starting with the robot inside is a robot-caused hold or
-      trip.'
+      robot speed) and margin_s = 1.0 s (= compile.SAFETY_MARGIN_S). This is intercycle.scenario.Inspection.inside_s and intercycle_nav.timing
+      need_s = enter + dwell + exit + margin (tests/test_twin_tasks.py pins both). The window must be open from the moment
+      the robot crosses into the dilated danger rect until it has left it; a stroke starting with the robot inside is a robot-caused
+      hold or trip.'
 zones:
 - zone: z9
   dock: {x: 0.6, z: -2.0, yaw: 0.0}
-  mission_order: [cp_P9b_ram, cp_P9a_panel, cp_P9a_die, cp_P9a_ram, cp_P9a_clutch]
+  mission_order: [cp_P9a_ram2, cp_P9a_panel, cp_P9a_die, cp_P9a_ram, cp_P9a_clutch]
 - zone: z14
   dock: {x: 23.0, z: 1.1, yaw: 0.0}
   mission_order: [cp_P14b_ram, cp_P14c_ram, cp_P14d_die]
@@ -45,18 +50,18 @@ checkpoints:
   zone: z9
   press: P9a
   target_kind: press
-  target_xzh: [4.915, 3.912, 2.15]
-  normal_xz: [-0.978, -0.2084]
+  target_xzh: [4.748, 3.64, 2.15]
+  normal_xz: [-1.0, 0.0]
   candidate_poses:
-  - pose: {x: 1.345, z: 3.151, yaw: 1.3609}
+  - pose: {x: 1.35, z: 3.041, yaw: 1.3963}
     source: generated
-    standoff_m: 3.65
-  - pose: {x: 1.392, z: 2.487, yaw: 1.1863}
+    standoff_m: 3.45
+  - pose: {x: 1.365, z: 2.409, yaw: 1.2217}
     source: generated
-    standoff_m: 3.8
-  - pose: {x: 1.354, z: 1.685, yaw: 1.0118}
+    standoff_m: 3.6
+  - pose: {x: 1.371, z: 1.69, yaw: 1.0472}
     source: generated
-    standoff_m: 4.2
+    standoff_m: 3.9
   inside_danger: false
   dwell_s: 4.0
   zoom: 20.0
@@ -70,18 +75,18 @@ checkpoints:
   zone: z9
   press: P9a
   target_kind: press
-  target_xzh: [4.915, 3.912, 1.0]
-  normal_xz: [-0.978, -0.2084]
+  target_xzh: [4.748, 3.64, 1.0]
+  normal_xz: [-1.0, 0.0]
   candidate_poses:
-  - pose: {x: 4.181, z: 3.756, yaw: 1.3609}
+  - pose: {x: 3.812, z: 3.475, yaw: 1.3963}
     source: generated
-    standoff_m: 0.75
-  - pose: {x: 4.173, z: 3.612, yaw: 1.1863}
+    standoff_m: 0.95
+  - pose: {x: 3.808, z: 3.298, yaw: 1.2217}
     source: generated
-    standoff_m: 0.8
-  - pose: {x: 4.194, z: 3.461, yaw: 1.0118}
+    standoff_m: 1.0
+  - pose: {x: 3.839, z: 3.115, yaw: 1.0472}
     source: generated
-    standoff_m: 0.85
+    standoff_m: 1.05
   inside_danger: true
   dwell_s: 4.0
   zoom: 4.0
@@ -95,18 +100,18 @@ checkpoints:
   zone: z9
   press: P9a
   target_kind: press
-  target_xzh: [4.915, 3.912, 3.2]
-  normal_xz: [-0.978, -0.2084]
+  target_xzh: [4.748, 3.64, 3.2]
+  normal_xz: [-1.0, 0.0]
   candidate_poses:
-  - pose: {x: 1.345, z: 3.151, yaw: 1.3609}
+  - pose: {x: 1.35, z: 3.041, yaw: 1.3963}
     source: generated
-    standoff_m: 3.65
-  - pose: {x: 1.392, z: 2.487, yaw: 1.1863}
+    standoff_m: 3.45
+  - pose: {x: 1.365, z: 2.409, yaw: 1.2217}
     source: generated
-    standoff_m: 3.8
-  - pose: {x: 1.354, z: 1.685, yaw: 1.0118}
+    standoff_m: 3.6
+  - pose: {x: 1.371, z: 1.69, yaw: 1.0472}
     source: generated
-    standoff_m: 4.2
+    standoff_m: 3.9
   inside_danger: false
   dwell_s: 4.0
   zoom: 12.0
@@ -120,12 +125,18 @@ checkpoints:
   zone: z9
   press: P9a
   target_kind: panel
-  target_xzh: [4.75, 4.684, 1.4]
-  normal_xz: [-0.938, -0.3465]
+  target_xzh: [4.77, 3.138, 1.4]
+  normal_xz: [0.0, -1.0]
   candidate_poses:
-  - pose: {x: 1.373, z: 3.437, yaw: 1.217}
+  - pose: {x: 3.539, z: -0.245, yaw: 0.3491}
     source: generated
     standoff_m: 3.6
+  - pose: {x: 2.82, z: -0.239, yaw: 0.5236}
+    source: generated
+    standoff_m: 3.9
+  - pose: {x: 1.942, z: -0.233, yaw: 0.6981}
+    source: generated
+    standoff_m: 4.4
   inside_danger: false
   dwell_s: 4.0
   zoom: 8.0
@@ -135,44 +146,47 @@ checkpoints:
     1_tr61, 1_tr63, 2_te6, 2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69, 2_tr7,
     2_tr71, 2_tr72, 2_tr76, 2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10, 4_tr3,
     4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8, 5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17, 6_tr18]
-- id: cp_P9b_ram
+- id: cp_P9a_ram2
   zone: z9
-  press: P9b
+  press: P9a
   target_kind: press
-  target_xzh: [11.424, -4.713, 2.15]
+  target_xzh: [4.748, 3.16, 2.15]
   normal_xz: [-1.0, 0.0]
   candidate_poses:
-  - pose: {x: 3.124, z: -4.713, yaw: 1.5708}
+  - pose: {x: 1.348, z: 3.16, yaw: 1.5708}
     source: generated
-    standoff_m: 8.3
-  - pose: {x: 3.299, z: -3.28, yaw: 1.7453}
+    standoff_m: 3.4
+  - pose: {x: 1.35, z: 2.561, yaw: 1.3963}
     source: generated
-    standoff_m: 8.25
-  - pose: {x: 2.511, z: -6.285, yaw: 1.3963}
+    standoff_m: 3.45
+  - pose: {x: 1.365, z: 1.929, yaw: 1.2217}
     source: generated
-    standoff_m: 9.05
+    standoff_m: 3.6
   inside_danger: false
   dwell_s: 4.0
   zoom: 20.0
   thermal: true
-  source: assumed
-  clips: []
+  source: traced_v1
+  clips: [0_te22, 0_tr124, 0_tr126, 0_tr127, 0_tr132, 0_tr138, 0_tr141, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54, 1_tr59,
+    1_tr61, 1_tr63, 2_te6, 2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69, 2_tr7,
+    2_tr71, 2_tr72, 2_tr76, 2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10, 4_tr3,
+    4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8, 5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17, 6_tr18]
 - id: cp_P14d_die
   zone: z14
   press: P14d
   target_kind: press
-  target_xzh: [17.79, 6.602, 1.0]
-  normal_xz: [0.9848, -0.1736]
+  target_xzh: [17.792, 6.28, 1.0]
+  normal_xz: [1.0, 0.0]
   candidate_poses:
-  - pose: {x: 18.529, z: 6.472, yaw: -1.3963}
+  - pose: {x: 18.728, z: 6.115, yaw: -1.3963}
     source: generated
-    standoff_m: 0.75
-  - pose: {x: 18.495, z: 6.345, yaw: -1.2217}
+    standoff_m: 0.95
+  - pose: {x: 18.732, z: 5.938, yaw: -1.2217}
     source: generated
-    standoff_m: 0.75
-  - pose: {x: 18.396, z: 6.252, yaw: -1.0472}
+    standoff_m: 1.0
+  - pose: {x: 18.701, z: 5.755, yaw: -1.0472}
     source: generated
-    standoff_m: 0.7
+    standoff_m: 1.05
   inside_danger: true
   dwell_s: 4.0
   zoom: 4.0
@@ -186,18 +200,18 @@ checkpoints:
   zone: z14
   press: P14c
   target_kind: press
-  target_xzh: [17.257, 3.328, 2.15]
+  target_xzh: [17.259, 3.193, 2.15]
   normal_xz: [1.0, 0.0]
   candidate_poses:
-  - pose: {x: 22.407, z: 3.328, yaw: -1.5708}
+  - pose: {x: 22.409, z: 3.193, yaw: -1.5708}
     source: generated
     standoff_m: 5.15
-  - pose: {x: 22.378, z: 2.425, yaw: -1.3963}
+  - pose: {x: 22.38, z: 2.29, yaw: -1.3963}
     source: generated
     standoff_m: 5.2
-  - pose: {x: 22.378, z: 4.231, yaw: -1.7453}
+  - pose: {x: 21.535, z: 1.637, yaw: -1.2217}
     source: generated
-    standoff_m: 5.2
+    standoff_m: 4.55
   inside_danger: false
   dwell_s: 4.0
   zoom: 20.0
@@ -211,18 +225,18 @@ checkpoints:
   zone: z14
   press: P14b
   target_kind: press
-  target_xzh: [16.72, -0.521, 2.15]
+  target_xzh: [16.722, -0.293, 2.15]
   normal_xz: [1.0, 0.0]
   candidate_poses:
-  - pose: {x: 21.87, z: -0.521, yaw: -1.5708}
+  - pose: {x: 21.872, z: -0.293, yaw: -1.5708}
     source: generated
     standoff_m: 5.15
-  - pose: {x: 21.841, z: -1.424, yaw: -1.3963}
+  - pose: {x: 21.449, z: 0.541, yaw: -1.7453}
     source: generated
-    standoff_m: 5.2
-  - pose: {x: 21.743, z: 0.365, yaw: -1.7453}
+    standoff_m: 4.8
+  - pose: {x: 21.326, z: 1.383, yaw: -1.9199}
     source: generated
-    standoff_m: 5.1
+    standoff_m: 4.9
   inside_danger: false
   dwell_s: 4.0
   zoom: 20.0
