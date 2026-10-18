@@ -16,7 +16,8 @@ Estimator, per machine (`MachineTrack`):
   * an UNSEEN gap longer than `max_gap_s` ends the run as right-censored at the last visible sample, state UNKNOWN;
   * every finished STILL run is kept as (duration, censored); a run whose start was not seen (the robot arrived while
     the machine was already still) is a lower bound, so it is kept as censored;
-  * robot presence (audit fix 2): while the robot is inside (or within 0.5 m of) ANY hazard zone, the plant may hold the
+  * robot presence (audit fix 2; pad fixed in fix round 2): while the robot's estimated centre is inside or within
+    PRESENCE_PAD_M = 0.81 m (body reach 0.66 m + 0.15 m localisation margin) of ANY hazard zone, the plant may hold the
     machine (or a trip may freeze its line), so what the camera then sees is not natural. On entry every machine's open
     run is right-censored at the entry time (the last tick the robot was known outside: natural only up to there), and
     the machine is "tainted" until its next accepted MOVING with the robot outside: runs that start while tainted are
@@ -54,6 +55,14 @@ STATE_SCHEMA = "intercycle.reactive_state.v2"
 MOVING, STILL, UNKNOWN = "MOVING", "STILL", "UNKNOWN"
 FRESH_S = 1.0                 # = CameraGate.fresh_s (timing.py): an observation older than this is not "now"
 MAX_RUNS = 400                # STILL runs kept per machine (most recent)
+# Robot presence pad (audit fix round 2): the plant decides holds and trips with the robot's BODY circles
+# (intercycle_eval.plant.FOOT: forward offsets +-0.34 m, r 0.32 m), so the body reaches max|o| + r = 0.66 m from the
+# centre. Presence uses that reach plus a localisation margin for the AMCL error, so every pose at which the plant can
+# hold or trip counts as "present" (fail closed). FIXED, not tunable; part of space_json, so PREREG v1 freezes it. The
+# held-zone mask rule keeps its own 0.5 m pad (masks.snapshot held_pad_m).
+BODY_REACH_M = 0.66           # = max(|o|) + r over intercycle_eval.plant.FOOT (asserted in test_reactive.py)
+LOC_MARGIN_M = 0.15           # ASSUMED AMCL position error allowance
+PRESENCE_PAD_M = BODY_REACH_M + LOC_MARGIN_M     # 0.81 m
 
 
 @dataclass(frozen=True)
@@ -108,6 +117,7 @@ def validate(cfg: ReactiveConfig) -> None:
 def space_json() -> str:
     return json.dumps({"schema": SCHEMA, "space": {k: list(v) for k, v in PARAM_SPACE.items()},
                        "fresh_s": FRESH_S, "max_runs": MAX_RUNS, "candidate_seed": CANDIDATE_SEED,
+                       "presence_pad_m": PRESENCE_PAD_M, "body_reach_m": BODY_REACH_M, "loc_margin_m": LOC_MARGIN_M,
                        "n_candidates": N_CANDIDATES, "default": json.loads(ReactiveConfig().to_json()),
                        "candidates": [c.sha256() for c in candidate_configs()]},
                       sort_keys=True, separators=(",", ":"))
@@ -285,8 +295,9 @@ class OwnCameraEstimator:
             self.sources[source] = self.sources.get(source, 0) + 1
 
     def presence(self, t: float, inside: bool) -> None:
-        """Robot presence tick (observer_bridge, from the localisation estimate): inside = in or within 0.5 m of any
-        hazard zone (or pose unknown). Entry time = the last tick the robot was known outside (fail closed)."""
+        """Robot presence tick (observer_bridge, from the localisation estimate): inside = robot_present(...), i.e. in
+        or within PRESENCE_PAD_M of any hazard zone (or pose lost). Entry time = the last tick the robot was known
+        outside (fail closed)."""
         t, inside = float(t), bool(inside)
         if inside and not self._inside:
             t_entry = self._last_out_t if self._last_out_t is not None else t
@@ -416,6 +427,15 @@ def save_state(path: str, est: OwnCameraEstimator) -> None:
 
 
 # ------------------------------------------------------------------------------------------------ masks
+def robot_present(site, xy, had_pose: bool) -> bool:
+    """The estimator's presence input (observer_bridge): the localisation estimate xy is in or within PRESENCE_PAD_M
+    of any hazard zone (axis-aligned pad, which over-covers the plant's Euclidean body test at the corners), or the
+    pose is lost after the first fix (fail closed; before the first fix the robot is at its dock, outside every zone)."""
+    if xy is None:
+        return bool(had_pose)
+    return site.zone_of(float(xy[0]), float(xy[1]), pad=PRESENCE_PAD_M) is not None
+
+
 def zone_open(windows, t: float, horizon_s: float) -> bool:
     """The learned rule (masks.idle_through) on the reactive windows: one window covers all of [t, t + H]."""
     return any(a <= t and b >= t + horizon_s for a, b in windows or [])

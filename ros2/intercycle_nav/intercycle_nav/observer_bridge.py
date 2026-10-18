@@ -23,7 +23,7 @@ condition reactive (E-W4 baseline, reactive.py): no feed and no map; windows fro
 (/intercycle/camera/observations). Needs reactive_config (JSON, frozen space), world_id, mission_tag and
 reactive_state_out (default $IC_OUT/reactive_state.json); reactive_state = the world's state file from its previous
 mission, EMPTY only on the world's first mission (a named file that is missing is a startup error). Robot presence in
-or at any hazard zone (AMCL pose, pad 0.5 m; pose lost after the first fix counts as present) is passed to the
+or at any hazard zone (AMCL pose, pad reactive.PRESENCE_PAD_M = 0.81 m; pose lost after the first fix counts as present) is passed to the
 estimator, which censors the runs the robot may have caused (reactive.py). A failed final save writes
 <reactive_state_out>.save_failed and exits non-zero; the snapshot carries the loaded state's sha256 (parent_sha256) and
 mission count for the EVAL runner's chain check (reactive.verify_chain).
@@ -231,10 +231,10 @@ class ObserverBridge(Node):
         """Reactive arm: the learned light-curtain zone rule on its own-camera windows; no map, no speed mask."""
         assert self.reactive is not None
         held = self.site.zone_of(*xy, pad=0.5) if xy is not None else None      # same held_pad_m as masks.snapshot
-        # robot presence for the estimator (audit fix 2): in / at any zone, or the pose lost after the first fix (fail
-        # closed; before the first fix the robot is at its dock, outside every zone)
+        # robot presence for the estimator (audit fix 2): within R.PRESENCE_PAD_M (body reach + localisation margin,
+        # wider than the 0.5 m held pad) of any zone, or the pose lost after the first fix (fail closed)
         self._had_pose = self._had_pose or xy is not None
-        self.reactive.presence(t, held is not None or (xy is None and self._had_pose))
+        self.reactive.presence(t, R.robot_present(self.site, xy, self._had_pose))
         kg, floor, kinfo = R.reactive_masks(self.grid, self.site, self.reactive.windows(t), t, self.p.horizon_s, held)
         sg, sinfo = self.grid.zeros(), {"speed_cells": 0}
         clear = xy if self._robot_in_keepout(xy) else None

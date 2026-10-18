@@ -71,7 +71,7 @@ def test_candidate_set_is_fixed_distinct_and_in_space():
 def test_space_hash_pinned():
     """PREREG v1 freezes PARAM_SPACE (PLAN_TWIN §5). Changing the space, the default or the candidate seed changes this
     hash; after PREREG v1 that needs an amendment, never a silent edit."""
-    assert R.space_sha256() == "9ef8b7f5bd8a9a820368b2615d9dcb86847ff4aedf9bb6c28534f424fb054594"
+    assert R.space_sha256() == "c4053aaa6b33af1fc49c2fee1022920b2a3941e00df8b00c597d0abaeccdc18a"
 
 
 # ------------------------------------------------------------------------------------------------ estimator
@@ -272,6 +272,44 @@ def test_robot_held_stretch_is_censored_at_entry_and_not_learned():
         t = round(t + DT, 3)
     assert est.tracks["P1"].still_runs[-1] == (pytest.approx(100 * DT, abs=1e-6), False)
     assert est.tracks["P1"].still_runs[-1][0] == pytest.approx(round(t0 + 100 * DT, 3) - t0, abs=1e-6)
+
+
+def _plant_foot():
+    sys.path.insert(0, str(REPO / "ros2" / "intercycle_eval"))
+    sys.path.insert(0, str(REPO / "ros2" / "intercycle_sim"))
+    from intercycle_eval import plant as P
+
+    return P
+
+
+def test_presence_pad_covers_the_plant_body_reach():
+    """Fix round 2: the plant holds / trips with the body circles (plant.FOOT), which reach 0.66 m ahead of the centre.
+    Presence must cover every such pose; the old 0.5 m pad missed a 0.5-0.66 m band (fail open)."""
+    P = _plant_foot()
+    reach = max(abs(o) + r for o, r in P.FOOT)
+    assert R.BODY_REACH_M >= reach - 1e-9
+    assert R.PRESENCE_PAD_M >= reach + R.LOC_MARGIN_M - 1e-9 and R.LOC_MARGIN_M >= 0.15
+    js = json.loads(R.space_json())
+    assert js["presence_pad_m"] == R.PRESENCE_PAD_M                    # frozen with the space (PREREG v1)
+    zone = (10.0, 10.0, 14.0, 13.0)
+    site = K.Site(["P1"], {"P1": zone}, [], 1, 1, (0.0, 0.0, 30.0, 30.0))
+    for d in (0.55, 0.60, 0.62, 0.65):                    # the audit's probe: centre d outside the -x face, facing it
+        x, y, psi = zone[0] - d, 11.5, 0.0
+        fc = [(x + o * np.cos(psi), y + o * np.sin(psi), r) for o, r in P.FOOT]
+        assert P.circles_in_rect(fc, zone)                                 # the plant would hold / trip here
+        assert site.zone_of(x, y, pad=0.5) is None                         # the old presence test said "outside"
+        assert R.robot_present(site, (x, y), had_pose=True)                # the fixed one says present
+    # sweep: wherever the plant's body test fires (any heading), presence is True, even with 0.15 m pose error
+    rng = np.random.default_rng(0)
+    for _ in range(4000):
+        x, y = rng.uniform(zone[0] - 1.2, zone[2] + 1.2), rng.uniform(zone[1] - 1.2, zone[3] + 1.2)
+        psi = rng.uniform(-np.pi, np.pi)
+        fc = [(x + o * np.cos(psi), y + o * np.sin(psi), r) for o, r in P.FOOT]
+        if P.circles_in_rect(fc, zone):
+            ex, ey = rng.uniform(-R.LOC_MARGIN_M, R.LOC_MARGIN_M, 2)
+            assert R.robot_present(site, (x + ex, y + ey), had_pose=True)
+    assert not R.robot_present(site, (zone[0] - R.PRESENCE_PAD_M - 0.05, 11.5), had_pose=True)
+    assert R.robot_present(site, None, had_pose=True) and not R.robot_present(site, None, had_pose=False)
 
 
 def test_long_held_runs_do_not_grow_the_reactive_windows():
