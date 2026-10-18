@@ -232,6 +232,7 @@ SNAPSHOT_VOL_DIR = "double"                 # <VOL>/double/<batch id>/w<W>/snap_
 REACTIVE_IN = "reactive_state_in.json"      # the reactive arm's input state in its world dir
 REACTIVE_OUT = "reactive_state.json"        # observer_bridge's default reactive_state_out ($IC_OUT/reactive_state.json)
 REACTIVE_CFG = "reactive_config.json"
+PULL_WORKERS = 8                            # parallel `modal volume get` of a round's episode dirs
 
 
 def _remote(ctx: dict, k: str) -> str:
@@ -383,13 +384,19 @@ class ModalRunner:
             res.setdefault("tag", m.run_id)
             res["cfg"] = cfg
             res["client_wall_s"] = round(time.time() - t0, 1)
-            pulled = pull_episode(m.run_id, batch) if "phases" in res else None
-            res["pulled"] = str(pulled) if pulled else None
+            recs.append((m, res))
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=PULL_WORKERS) as ex:     # the pulls are I/O: in parallel, not per mission
+            pulled = list(ex.map(lambda mr: pull_episode(mr[0].run_id, batch) if "phases" in mr[1] else None, recs))
+        out = []
+        for (m, res), p in zip(recs, pulled):
+            res["pulled"] = str(p) if p else None
             TB.write_json(batch / f"{m.run_id}.json", res)
             wall = float((res.get("phases") or {}).get("total_wall_s") or res.get("total_wall_s") or 0.0)
-            recs.append({"run_id": m.run_id, "wall_s": wall, "container_usd": TB.container_usd(wall, self.cpu),
-                         "error": res.get("error"), "pulled": res["pulled"]})
-        return recs
+            out.append({"run_id": m.run_id, "wall_s": wall, "container_usd": TB.container_usd(wall, self.cpu),
+                        "error": res.get("error"), "pulled": res["pulled"]})
+        return out
 
 
 def modal_batch(ctx: dict, out: Path, worlds: list[TB.World], missions: list[TB.Mission], rnds, scripts, objs_days,
