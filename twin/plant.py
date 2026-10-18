@@ -94,6 +94,7 @@ from typing import Any, Callable, get_args
 import numpy as np
 
 from intercycle.observer import mapping as OM
+from twin import camera_gate as CG
 from twin import robot_camera as RC
 from twin.camera_v0 import CameraV0, Detections
 from twin.engine import Engine, RealisedWriter, load_day_script
@@ -361,8 +362,8 @@ def make_camera(site: Site, world_seed: int, day: int):
 
 
 def make_gate(world_seed: int, day: int, key: str):
-    """The robot's no-motion gate. R-W3 hook: lane S2's camera-gate module replaces this default here."""
-    return RC.Gate(keyed_rng(world_seed, day, "robot_gate", key))
+    """The robot's no-motion gate: the R-W3 pixel-motion gate of lane S2 (twin/camera_gate.py)."""
+    return CG.Gate(keyed_rng(world_seed, day, "robot_gate", key))
 
 
 class ObsAdapter:

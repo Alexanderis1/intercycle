@@ -183,6 +183,41 @@
           "minLength": 1,
           "title": "Detectability",
           "type": "string"
+        },
+        "capture_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Model"
+        },
+        "thermal_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thermal Model"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InspectionWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -191,6 +226,41 @@
         "detectability"
       ],
       "title": "Inspection",
+      "type": "object"
+    },
+    "InspectionWindow": {
+      "additionalProperties": false,
+      "description": "When an inside_danger checkpoint may be entered (S2 TASKS): a press stop, or a gap between strokes of at least\ninside_s + margin_s (inside_s = the time the robot spends inside the danger rect: entry, dwell, exit).",
+      "properties": {
+        "kinds": {
+          "items": {
+            "enum": [
+              "press_stop",
+              "stroke_gap"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Kinds",
+          "type": "array"
+        },
+        "margin_s": {
+          "minimum": 0,
+          "title": "Margin S",
+          "type": "number"
+        },
+        "definition": {
+          "minLength": 1,
+          "title": "Definition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kinds",
+        "margin_s",
+        "definition"
+      ],
+      "title": "InspectionWindow",
       "type": "object"
     },
     "Pose": {

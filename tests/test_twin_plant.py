@@ -634,7 +634,7 @@ def test_plant_output_reaches_the_observer_side_only_through_files(tmp_path):
     assert obs and all(set(o) == {"stamp", "source", "targets"} for o in obs)
     assert all(set(tg) <= {"id", "visible", "motion_seen", "vis_frac"} for o in obs for tg in o["targets"])
     assert any(tg["motion_seen"] for o in obs for tg in o["targets"])        # the press-ram mover moves
-    assert obs[0]["source"] == RC.GATE_SOURCE
+    assert obs[0]["source"] == PL.CG.GATE_SOURCE
     # the observer side's only input: obs_v2.jsonl, Observation v2 lines, the robot as class OTHER (never PERSON)
     lines = (pl.run_dir / "obs_v2.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 80
