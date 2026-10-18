@@ -83,7 +83,7 @@ def check_unseen_is_wall(d: Path, floor: list[list[float]], feet: list[tuple[flo
 @pytest.fixture(scope="module")
 def built_v0(tmp_path_factory):
     out = tmp_path_factory.mktemp("worlds")
-    return B.build(V0["site"], V0["dynamics"], V0["tasks"], out, split=TRAIN0), out
+    return B.build(V0["site"], V0["dynamics"], V0["tasks"], out, _split_for_tests=TRAIN0), out
 
 
 def _site_feet(site: dict, zone: str) -> list[tuple[float, float, float, float]]:
@@ -98,7 +98,7 @@ def _site_feet(site: dict, zone: str) -> list[tuple[float, float, float, float]]
 def test_build_writes_every_file(built_v0):
     written, _ = built_v0
     assert set(written) == {"z9", "z14"}
-    zones = C.compile_paths(V0["site"], V0["dynamics"], V0["tasks"], split=TRAIN0)
+    zones = C.compile_paths(V0["site"], V0["dynamics"], V0["tasks"], _split_for_tests=TRAIN0)
     for zid, d in written.items():
         assert sorted(p.name for p in d.iterdir()) == sorted(B.FILES)
         meta = json.loads((d / "world.json").read_text(encoding="utf-8"))
@@ -107,8 +107,56 @@ def test_build_writes_every_file(built_v0):
         inputs = json.loads((d / "inputs.json").read_text(encoding="utf-8"))
         assert inputs["site"]["path"] == "twin/site_v0.yaml"
         assert inputs["tasks"]["sha256"] == B.text_sha256(V0["tasks"])
+        assert all(v["stub"] for v in inputs.values())                    # built on the v0 stubs: flagged
         boxes = json.loads((d / "boxes.json").read_text(encoding="utf-8"))
         assert {b["cls"] for b in boxes} == {"press", "wall"}
+        cams = json.loads((d / "cameras.json").read_text(encoding="utf-8"))
+        assert [c["framing"] for c in cams] == list(zones[zid].cameras)
+        assert [tuple(c["xz"]) for c in cams] == [tuple(x) for x in zones[zid].scenario.cameras]
+        assert all(c["f_source"] == "affine" and c["f_px"] is None for c in cams)   # site_v0 placeholder H
+
+
+# ------------------------------------------------------------------------------------------------ CLI fails closed
+
+
+def _use_split_root(monkeypatch, root: Path) -> None:
+    from twin.schemas import prereg as P
+    real = P.active_split_path
+    monkeypatch.setattr(P, "active_split_path", lambda repo=None: real(root))
+
+
+def test_cli_refuses_missing_inputs_and_stubs_without_the_flag(tmp_path):
+    assert not (TWIN / "site.yaml").exists() or not (TWIN / "tasks.yaml").exists() or \
+        not (TWIN / "dynamics.json").exists(), "contract files exist now: use a tmp twin dir"
+    with pytest.raises(C.CompileError, match="stubs are not allowed"):
+        B.main(["--out", str(tmp_path)])
+    with pytest.raises(C.CompileError, match="is the G0 v0 stub; pass --allow-stubs"):
+        B.main(["--site", str(V0["site"]), "--dynamics", str(V0["dynamics"]), "--tasks", str(V0["tasks"]),
+                "--out", str(tmp_path)])
+    assert not any(tmp_path.iterdir())
+
+
+def test_cli_without_an_active_split_fails_closed(tmp_path, monkeypatch):
+    _use_split_root(monkeypatch, tmp_path / "norepo")
+    with pytest.raises(FileNotFoundError, match="active split .* does not exist"):
+        B.main(["--allow-stubs", "--out", str(tmp_path / "out")])
+    assert not (tmp_path / "out").exists()
+
+
+def test_cli_with_a_dev_source_in_the_active_split_fails_closed(tmp_path, monkeypatch):
+    from twin.provenance import ProvenanceError
+    site = yaml.safe_load(V0["site"].read_text(encoding="utf-8"))
+    site["cal_sources"] = ["0_trS"]
+    p = tmp_path / "site.yaml"
+    p.write_text(yaml.safe_dump(site), encoding="utf-8")
+    root = tmp_path / "repo"
+    (root / "prereg").mkdir(parents=True)
+    (root / "prereg" / "split.csv").write_text("clip_id,group_id,split,sha256\n0_trS,g,dev," + "0" * 64 + "\n",
+                                               encoding="utf-8")
+    _use_split_root(monkeypatch, root)
+    with pytest.raises(ProvenanceError, match="0_trS"):
+        B.main(["--allow-stubs", "--site", str(p), "--out", str(tmp_path / "out")])
+    assert not (tmp_path / "out").exists()
 
 
 def test_unseen_floor_is_a_wall_in_both_v0(built_v0):
@@ -129,7 +177,7 @@ def test_unseen_floor_is_a_wall_in_both_l_shaped(tmp_path):
     for cp in tasks["checkpoints"]:                      # every z9 capture pose stays on the L's visible floor
         assert cp["zone"] != "z9" or point_in_polygon(cp["candidate_poses"][0]["pose"]["x"],
                                                       cp["candidate_poses"][0]["pose"]["z"], [(q[0], q[1]) for q in L_FLOOR])
-    written = B.build(p, V0["dynamics"], V0["tasks"], tmp_path / "out", split=TRAIN0)
+    written = B.build(p, V0["dynamics"], V0["tasks"], tmp_path / "out", _split_for_tests=TRAIN0)
     n = check_unseen_is_wall(written["z9"], L_FLOOR, _site_feet(site, "z9"))
     assert n >= 3.5 * 6 / 0.01 - 1                       # the 3.5 x 6 m notch is wall (plus the ring)
 
@@ -148,8 +196,9 @@ def test_committed_world_matches_a_fresh_build_and_walls_unseen_floor(d, tmp_pat
     paths = {k: REPO / v["path"] for k, v in inputs.items()}
     for k, p in paths.items():
         assert B.text_sha256(p) == inputs[k]["sha256"], f"{d.name}: {p} changed since the build; re-run the build"
-    fresh = B.build(paths["site"], paths["dynamics"], paths["tasks"], tmp_path, split=TRAIN0)[d.name]
-    for name in ("scenario.yaml", "boxes.json", "static.usda", "map.yaml", "world.json", "inputs.json", "map.pgm"):
+    fresh = B.build(paths["site"], paths["dynamics"], paths["tasks"], tmp_path, _split_for_tests=TRAIN0)[d.name]
+    for name in ("scenario.yaml", "boxes.json", "static.usda", "map.yaml", "world.json", "inputs.json", "cameras.json",
+                 "map.pgm"):
         a, b = (d / name).read_bytes(), (fresh / name).read_bytes()
         if name != "map.pgm":
             a, b = a.replace(b"\r\n", b"\n"), b.replace(b"\r\n", b"\n")

@@ -35,7 +35,9 @@ world-file build (scipy via StaticMap) lives in twin/build_worlds.py.
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,7 +47,7 @@ import yaml
 
 from intercycle.robot.sitegraph import Target
 from intercycle.scenario import Ble, Inspection, Line, Machine, Scenario, Zone
-from twin.provenance import assert_train_only, source_clips
+from twin.provenance import ProvenanceError, assert_train_only, source_clips
 from twin.schemas import load
 from twin.schemas.common import Point
 from twin.schemas.dynamics import Dynamics
@@ -57,6 +59,7 @@ from twin.schemas.tasks import Checkpoint, Tasks
 
 REPO = Path(__file__).resolve().parents[1]
 TWIN = REPO / "twin"
+log = logging.getLogger(__name__)
 
 GRID_RES = 0.1                  # must equal intercycle.sim.geometry.RES (tests/test_twin_compile.py pins it)
 EXTENT_MARGIN_CELLS = 2         # StaticMap's closing ring is 2 cells: keep it on unseen floor
@@ -79,13 +82,35 @@ class CompileError(ValueError):
 # ------------------------------------------------------------------------------------------------ inputs
 
 
-def default_inputs(twin_dir: Path = TWIN) -> dict[str, Path]:
-    """The contract files in force: site.yaml / dynamics.json / tasks.yaml, else their G0 v0 stubs."""
-    def pick(name: str, stub: str) -> Path:
+INPUT_FILES = {"site": ("site.yaml", "site_v0.yaml"), "dynamics": ("dynamics.json", "dynamics_v0.json"),
+               "tasks": ("tasks.yaml", "tasks_v0.yaml")}       # contract -> (file in force, its G0 v0 stub)
+
+
+def is_stub(kind: str, path: str | Path) -> bool:
+    """True if `path` is the G0 v0 stub (prior placeholder) of contract `kind`."""
+    return Path(path).name == INPUT_FILES[kind][1]
+
+
+def default_inputs(twin_dir: Path = TWIN, *, allow_stubs: bool = False) -> dict[str, Path]:
+    """The contract files in force: site.yaml / dynamics.json / tasks.yaml.
+
+    A missing one falls back to its G0 v0 stub only when `allow_stubs` is set (pre-G2 builds, the slice on stubs,
+    tests); otherwise it raises CompileError, so a build or run after G2 never runs on placeholder geometry or priors
+    unnoticed (e.g. twin/ not mounted). Every choice is logged; a stub choice at WARNING."""
+    out: dict[str, Path] = {}
+    for kind, (name, stub) in INPUT_FILES.items():
         p = twin_dir / name
-        return p if p.exists() else twin_dir / stub
-    return {"site": pick("site.yaml", "site_v0.yaml"), "dynamics": pick("dynamics.json", "dynamics_v0.json"),
-            "tasks": pick("tasks.yaml", "tasks_v0.yaml")}
+        if p.exists():
+            log.info("twin input %s: %s", kind, p)
+            out[kind] = p
+        elif allow_stubs:
+            log.warning("twin input %s: %s does not exist; using the G0 v0 STUB %s (allow_stubs)", kind, p,
+                        twin_dir / stub)
+            out[kind] = twin_dir / stub
+        else:
+            raise CompileError(f"twin input {kind}: {p} does not exist and stubs are not allowed "
+                               f"(pass allow_stubs / --allow-stubs to build on the G0 v0 stub {stub})")
+    return out
 
 
 # ------------------------------------------------------------------------------------------------ geometry helpers
@@ -558,10 +583,26 @@ def _check_refs(site: Site, dyn: Dynamics, tasks: Tasks) -> None:
             raise CompileError(f"checkpoint {c.id}: press {c.press} is not a press of zone {c.zone}")
 
 
-def compile_site(site: Site, dynamics: Dynamics, tasks: Tasks, *, split: Mapping[str, SplitRow] | None = None,
-                 safety: Safety | None = None) -> dict[str, CompiledZone]:
-    """Compile every zone. Provenance first: all source clip ids must be TRAIN ids of the active split (or `split`)."""
-    assert_train_only(source_clips(site=site, dynamics=dynamics, tasks=tasks, safety=safety), split)
+def _test_split(split: Mapping[str, SplitRow] | None) -> Mapping[str, SplitRow] | None:
+    """A substitute split is for tests only: refused (ProvenanceError) in a sealed run or outside pytest."""
+    if split is None:
+        return None
+    if os.environ.get("INTERCYCLE_SEALED_RUN") == "1":
+        raise ProvenanceError("a substitute split is refused in a sealed run (INTERCYCLE_SEALED_RUN=1): "
+                              "compile checks against the active split only")
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        raise ProvenanceError("_split_for_tests is for tests only (no PYTEST_CURRENT_TEST): compile checks against "
+                              "the active split")
+    return split
+
+
+def compile_site(site: Site, dynamics: Dynamics, tasks: Tasks, *, safety: Safety | None = None,
+                 _split_for_tests: Mapping[str, SplitRow] | None = None) -> dict[str, CompiledZone]:
+    """Compile every zone. Provenance first: all source clip ids must be TRAIN ids of the active split
+    (prereg/ACTIVE_SPLIT, else prereg/split.csv; fails closed without one). `_split_for_tests` substitutes the split
+    under pytest only (`_test_split`)."""
+    assert_train_only(source_clips(site=site, dynamics=dynamics, tasks=tasks, safety=safety),
+                      _test_split(_split_for_tests))
     _check_refs(site, dynamics, tasks)
     out: dict[str, CompiledZone] = {}
     for zone in site.zones:
@@ -583,5 +624,6 @@ def compile_site(site: Site, dynamics: Dynamics, tasks: Tasks, *, split: Mapping
 
 
 def compile_paths(site: str | Path, dynamics: str | Path, tasks: str | Path, *,
-                  split: Mapping[str, SplitRow] | None = None) -> dict[str, CompiledZone]:
-    return compile_site(load(Site, site), load(Dynamics, dynamics), load(Tasks, tasks), split=split)
+                  _split_for_tests: Mapping[str, SplitRow] | None = None) -> dict[str, CompiledZone]:
+    return compile_site(load(Site, site), load(Dynamics, dynamics), load(Tasks, tasks),
+                        _split_for_tests=_split_for_tests)

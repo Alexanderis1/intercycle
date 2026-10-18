@@ -47,7 +47,7 @@ TRAIN0 = split_of(**{"0_tr0": "train"})
 
 def compiled(site: dict | None = None, dyn: dict | None = None, tasks: dict | None = None, split=None):
     return C.compile_site(Site.model_validate(site or SITE0), Dynamics.model_validate(dyn or DYN0),
-                          Tasks.model_validate(tasks or TASKS0), split=TRAIN0 if split is None else split)
+                          Tasks.model_validate(tasks or TASKS0), _split_for_tests=TRAIN0 if split is None else split)
 
 
 @pytest.fixture(scope="module")
@@ -62,11 +62,70 @@ def test_grid_matches_geometry():
     assert C.GRID_RES == G.RES
 
 
-def test_default_inputs_fall_back_to_v0_stubs(tmp_path):
-    d = C.default_inputs(tmp_path)
+def test_default_inputs_fall_back_to_v0_stubs_only_when_allowed(tmp_path, caplog):
+    with pytest.raises(C.CompileError, match="site.yaml does not exist and stubs are not allowed"):
+        C.default_inputs(tmp_path)
+    with caplog.at_level("INFO", logger="twin.compile"):
+        d = C.default_inputs(tmp_path, allow_stubs=True)
     assert (d["site"].name, d["dynamics"].name, d["tasks"].name) == ("site_v0.yaml", "dynamics_v0.json", "tasks_v0.yaml")
-    (tmp_path / "tasks.yaml").write_text("x", encoding="utf-8")
-    assert C.default_inputs(tmp_path)["tasks"].name == "tasks.yaml"
+    assert sum("STUB" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records) == 3
+    for name in ("site.yaml", "dynamics.json", "tasks.yaml"):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    caplog.clear()
+    with caplog.at_level("INFO", logger="twin.compile"):
+        d = C.default_inputs(tmp_path)
+    assert [p.name for p in d.values()] == ["site.yaml", "dynamics.json", "tasks.yaml"]
+    assert len([r for r in caplog.records if r.levelname == "INFO" and "twin input" in r.getMessage()]) == 3
+    assert C.is_stub("site", "twin/site_v0.yaml") and not C.is_stub("site", tmp_path / "site.yaml")
+
+
+# ------------------------------------------------------------------------------------------------ active split
+
+
+def _split_csv(root: Path, rows: dict[str, str]) -> None:
+    (root / "prereg").mkdir(parents=True, exist_ok=True)
+    lines = ["clip_id,group_id,split,sha256"] + [f"{c},g_{c},{s},{SHA}" for c, s in rows.items()]
+    (root / "prereg" / "split.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _use_split_root(monkeypatch, root: Path) -> None:
+    from twin.schemas import prereg as P
+    real = P.active_split_path
+    monkeypatch.setattr(P, "active_split_path", lambda repo=None: real(root))
+
+
+def test_compile_without_an_active_split_fails_closed(tmp_path, monkeypatch):
+    _use_split_root(monkeypatch, tmp_path)                                     # no prereg/split.csv there
+    with pytest.raises(FileNotFoundError, match="active split .* does not exist"):
+        C.compile_site(Site.model_validate(SITE0), Dynamics.model_validate(DYN0), Tasks.model_validate(TASKS0))
+
+
+def test_compile_against_an_active_split_with_a_dev_source_fails_closed(tmp_path, monkeypatch):
+    s, d, t = _with_clips()
+    _split_csv(tmp_path, {"0_trS": "train", "1_trD": "dev", "2_trT": "train"})
+    _use_split_root(monkeypatch, tmp_path)
+    with pytest.raises(ProvenanceError, match="1_trD"):
+        C.compile_site(Site.model_validate(s), Dynamics.model_validate(d), Tasks.model_validate(t))
+    _split_csv(tmp_path, {"0_trS": "train", "1_trD": "train", "2_trT": "train"})
+    assert set(C.compile_site(Site.model_validate(s), Dynamics.model_validate(d), Tasks.model_validate(t))) == \
+        {"z9", "z14"}                                                          # the same check passes on train ids
+
+
+def test_substitute_split_is_refused_outside_tests(monkeypatch):
+    args = (Site.model_validate(SITE0), Dynamics.model_validate(DYN0), Tasks.model_validate(TASKS0))
+    monkeypatch.setenv("INTERCYCLE_SEALED_RUN", "1")
+    with pytest.raises(ProvenanceError, match="sealed run"):
+        C.compile_site(*args, _split_for_tests=TRAIN0)
+    monkeypatch.delenv("INTERCYCLE_SEALED_RUN")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST")
+    with pytest.raises(ProvenanceError, match="for tests only"):
+        C.compile_site(*args, _split_for_tests=TRAIN0)
+
+
+def test_compile_site_has_no_public_split_override():
+    import inspect
+    for f in (C.compile_site, C.compile_paths):
+        assert "split" not in inspect.signature(f).parameters
 
 
 # ------------------------------------------------------------------------------------------------ scenario

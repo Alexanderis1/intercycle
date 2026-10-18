@@ -1,0 +1,13 @@
+[
+  {
+    "framing": "cam9_f0",
+    "xz": [
+      7.0,
+      5.0
+    ],
+    "height_m": null,
+    "f_px": null,
+    "f_source": "affine",
+    "residual": 0.0
+  }
+]
