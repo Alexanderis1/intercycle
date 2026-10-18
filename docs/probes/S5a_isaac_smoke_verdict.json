@@ -1,0 +1,78 @@
+{
+ "walked": true,
+ "checks": {
+  "no_episode_error": true,
+  "sim_summary": true,
+  "no_fall": true,
+  "nav2_legs_succeeded": true,
+  "truth_log": true,
+  "reached_checkpoint": true,
+  "back_at_dock": true,
+  "path_length": true
+ },
+ "tol_m": 0.6,
+ "min_dist_to_checkpoint_m": 0.264,
+ "end_dist_to_dock_m": 0.382,
+ "path_length_m": 20.576,
+ "straight_dock_cp_dock_m": 20.621,
+ "min_z_m": 0.556,
+ "sim_s": 48.5,
+ "rtf": 0.74,
+ "n_contact_steps": 0,
+ "legs": [
+  {
+   "result": "SUCCEEDED",
+   "time_to_goal_s": 20.8,
+   "timeout": false
+  },
+  {
+   "result": "SUCCEEDED",
+   "time_to_goal_s": 19.8,
+   "timeout": false
+  }
+ ],
+ "tag": "twin_smoke_z9_g1",
+ "zone": "z9",
+ "checkpoint": "cp_P9a_side",
+ "goal": [
+  [
+   9.2,
+   7.25,
+   3.141592653589793
+  ],
+  [
+   1.0,
+   1.0,
+   1.5707963267948966
+  ]
+ ],
+ "boot_wall_s": 27.0,
+ "episode_wall_s": 95.1,
+ "client_wall_s": 114.4,
+ "usd_upper_bound": 0.044,
+ "safety_scanner": {
+  "field": {
+   "k_mps": 2.361577310586391,
+   "t_s": 0.6077182070575938,
+   "c_m": 1.08,
+   "h_plane_m": 0.3,
+   "half_len": 0.5,
+   "half_wid": 0.32,
+   "release_s": 1.0,
+   "s_m": 2.5152,
+   "formula": "S = K*T + C (ISO 13855); K = 1.6 + v_robot_max, T = t_scan + t_ctrl + t_stop, C = 1200 - 0.4 H",
+   "sources": {
+    "K_person": "ISO 13855",
+    "C": "ISO 13855 (H assumed)",
+    "v_robot_max": "nav2.yaml",
+    "t_scan": "ASSUMED",
+    "t_ctrl": "ASSUMED",
+    "t_stop": "ASSUMED",
+    "release_s": "ASSUMED"
+   }
+  },
+  "n_protective_stops": 0,
+  "stopped_s": 0.0,
+  "events": []
+ }
+}
