@@ -81,6 +81,10 @@ def test_sealed_batch_and_cli_refuse_without_the_sealed_flag(monkeypatch, tmp_pa
         RD.dev_worlds([4])
     with pytest.raises(RD.DoubleError, match="not wired"):
         RD.run_batch(tmp_path, RD.dev_worlds([0]), backend="modal")
+    monkeypatch.setenv("INTERCYCLE_SEALED_RUN", "1")
+    for be in ("local", "modal"):                                       # never the wiring double; modal not ready
+        with pytest.raises(RD.DoubleError, match="sealed batch runs only"):
+            RD.run_sealed(tmp_path, [1000 + i for i in range(16)], backend=be)
 
 
 def test_local_batch_end_to_end_into_twin_eval(tmp_path, monkeypatch):
@@ -133,3 +137,17 @@ def test_rounds_refuse_an_overlapping_chain():
           for c in ("static", "learned", "reactive")]
     with pytest.raises(TB.BatchError, match="overlap"):
         TB.rounds(ms)
+
+
+def test_the_sealed_plan_matches_twin_eval_s_sealed_test_design():
+    """The launcher's 192 test-split run ids are exactly the cells of twin_eval's sealed design (fixed, K = 16)."""
+    from intercycle.eval import twin_design as D
+
+    ms = TB.plan(WORLDS, ["z9", "z14"])
+    des = D.make_design([], {}, split="test", engine="double", worlds=list(range(16)))
+    assert des.fixed and des.conditions == ("static", "learned", "reactive") and des.worlds == tuple(range(16))
+    cells = {D.parse_run_id(m.run_id) for m in ms}
+    want = {((w, d, z, c), 0) for w in des.worlds for d in des.days for z in ("z9", "z14") for c in des.conditions}
+    assert len(want) == 192 and cells == want
+    with pytest.raises(D.EvalError, match="K = 16"):
+        D.make_design([], {}, split="test", engine="double", worlds=list(range(15)))

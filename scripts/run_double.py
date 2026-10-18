@@ -62,6 +62,8 @@ from twin.schemas.site import Site  # noqa: E402
 import slice as SL  # noqa: E402  (scripts/slice.py: inputs, observer spec, margin, Driver, Modal cfg pieces)
 
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
+SEALED_BACKEND = "modal"                # the sealed batch runs the real policies on Modal CPU, never the wiring double
+SEALED_BACKEND_READY = False            # the Modal backend is NOT wired in this build: sealed_run refuses up front
 SNAPSHOT = "observer_snapshot.pkl"      # the pickled observer state at a mission start (one per (world, day, zone))
 SCORED_DAYS = (9, 10)
 
@@ -304,6 +306,9 @@ def run_sealed(out: Path, seed_ints: list[int], *, backend: str = "modal") -> di
         raise DoubleError("the sealed double runs only through sealed_run.py after the robot FREEZE (no sealed flag)")
     if len(seed_ints) != 16:
         raise DoubleError(f"the sealed design has 16 test worlds, got {len(seed_ints)} seeds")
+    if backend != SEALED_BACKEND or not SEALED_BACKEND_READY:
+        raise DoubleError(f"the sealed batch runs only on the {SEALED_BACKEND} backend (ready: {SEALED_BACKEND_READY}); "
+                          f"{backend!r} refused (the local backend is a wiring double, not the policies)")
     return run_batch(out, [TB.World(i, s, "test") for i, s in enumerate(seed_ints)], backend=backend)
 
 

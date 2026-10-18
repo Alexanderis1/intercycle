@@ -858,6 +858,11 @@ def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str],
         raise Refusal(f"stages {stages} mix the real-clip stage (FREEZE_REALCLIP) and robot stages (FREEZE): run them "
                       "separately")
     robot_mod = _robot_module() if robot else None
+    if robot_mod is not None and double_runner is None:
+        try:                                         # BEFORE preflight / drand / the RUNLOG started record
+            robot_mod.ready(robot)
+        except robot_mod.StageRefusal as e:
+            raise Refusal(str(e)) from None
     rec = preflight(repo, sealed_root, fetch) if robot else preflight_clips(repo, sealed_root)
     known = rec.pop("runlog")
     jobs = rec.pop("jobs")

@@ -31,6 +31,27 @@ class StageRefusal(RuntimeError):
     """A robot stage refuses to start."""
 
 
+def _run_double_module():
+    scripts = str(REPO / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    return importlib.import_module("run_double")   # scripts/run_double.py (an orchestrator)
+
+
+def ready(stages: list[str]) -> None:
+    """Refused (sealed_run.run calls this BEFORE preflight, the drand fetch and the RUNLOG `started` record, so no
+    attempt number is used up) unless every requested stage can really run: for `double`, run_double's sealed backend
+    is wired (run_double.SEALED_BACKEND_READY; lane double-launcher fix1)."""
+    for st in stages:
+        if st not in WIRED:
+            raise StageRefusal(f"robot stage {st!r} is not wired in scripts/sealed_robot.py (wired: {list(WIRED)})")
+    if "double" in stages:
+        rd = _run_double_module()
+        if not getattr(rd, "SEALED_BACKEND_READY", False):
+            raise StageRefusal(f"the double stage's sealed backend ({getattr(rd, 'SEALED_BACKEND', '?')}) is not wired "
+                               "in scripts/run_double.py: refusing before any RUNLOG record (no attempt used)")
+
+
 def run_double_stage(repo: Path, attempt: int, seed_ints: list[int],
                      double_runner: Callable[[Path, list[int]], dict] | None = None) -> dict:
     """The sealed CPU-double stage: a fresh runs root per attempt, then run_double.run_sealed (16 test seeds)."""
@@ -41,10 +62,7 @@ def run_double_stage(repo: Path, attempt: int, seed_ints: list[int],
         raise StageRefusal("the double stage runs only after every refusal passed (sealed flag not set)")
     runner = double_runner
     if runner is None:
-        scripts = str(REPO / "scripts")
-        if scripts not in sys.path:
-            sys.path.insert(0, scripts)
-        runner = importlib.import_module("run_double").run_sealed   # scripts/run_double.py (an orchestrator)
+        runner = _run_double_module().run_sealed
     rec = runner(out, list(seed_ints))
     return {"out": str(out), "runs_root": rec.get("runs_root"), "invalid": rec.get("invalid"),
             "n_missions": rec.get("n_missions"), "usd": rec.get("usd"), "wall_s": rec.get("wall_s")}
