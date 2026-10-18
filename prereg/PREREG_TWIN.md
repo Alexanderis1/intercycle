@@ -20,10 +20,16 @@ README.
 | Design, cells, re-runs | `intercycle/eval/twin_design.py`: `make_design`, `index_cells`, `find_runs`, `load_classified`, `CONDITIONS`, `K_TEST`, `TEST_DAYS` |
 | Constants | `twin_eval.ALPHA = 0.05`, `NI_DELTA_S_PER_H = 30.0`, `ALPHA_TARGET = 0.05`, `H3_SLACK = 0.01`, `MIN_GROUPS = 5`, `BOOT_B = 10000`, `BOOT_SEED = 20261018`, `H3_CONDITION = "learned"`; `twin.schemas.common.MISSION_T_S = 720.0` |
 | M-W7 margin (S7b) | `intercycle/eval/conformal_margin.py`: `calibrate`, `calibrate_files`, `stream_units`, `per_world_miss_share`, `write_margin_file`; frozen output `twin/m7_margin.json` |
-| Exclusion list | `scripts/classify_invalid.py` (lane/S1a-slice-fix1, not yet on main at 4afd810) |
-| Sealed run | `scripts/sealed_run.py` (lane/S1a-slice-fix1, not yet on main at 4afd810) |
+| Exclusion list | `scripts/classify_invalid.py`, git blob `b9c293f970fc52c486c388c714c54657f7a46ecb` (lane/S1a-slice-fix1 at 5943c5933bcfab25c0761693dc7fb269a54c98ce) |
+| Sealed run | `scripts/sealed_run.py`, git blob `6d87cefce09ad39e3fed7e3b80448bd1fd3b34aa` (same commit) |
 | r0 | `scripts/prereg_r0.py` -> `prereg/r0_v1.json` (this lane) |
 | Dev worlds | `scripts/gen_dev_worlds.py` (this lane) |
+
+**Condition on the commit of this file** [lead]: lane/S1a-slice-fix1 is merged into main BEFORE this file is
+committed there, and at that commit `git rev-parse HEAD:scripts/classify_invalid.py` and
+`HEAD:scripts/sealed_run.py` give the two blobs above. If either differs, the blob in this table is updated to the
+merged one in the same commit (and the change listed in prereg/AMENDMENTS.md) before any dev-world run; the rules
+quoted in §2 (seed derivation) and §6 (exclusion) must still read as written here.
 | Reactive baseline space | `ros2/intercycle_nav/intercycle_nav/reactive.py`: `PARAM_SPACE`, `ReactiveConfig`, `candidate_configs`, `space_json`, `space_sha256` |
 
 If the code and this text disagree on a not-amendable item, this text holds and the code is a bug to fix before FREEZE.
@@ -33,11 +39,11 @@ If the code and this text disagree on a not-amendable item, this text holds and 
 | Item | Value | Source |
 |---|---|---|
 | Test worlds | K = 16; `K_TEST = 16` | [PLAN §5 Design], [STATUS G0: user, K = 16], [code: twin_design.K_TEST] |
-| Test seeds | Derived at FREEZE by the custodian: seed_i = sha256(R ‖ i), i = 0..15, R = randomness of the first drand round published after the FREEZE commit time; fallback `secrets.token_hex(16)`, said in the README; TEST_SEED_COMMIT = sha256(salt ‖ seeds) committed by the custodian. A test seed whose integer value falls in 0..999 is refused. | [PLAN §4 FREEZE], [code: sealed_run.derive_seeds, seed_int, seed_commit] |
+| Test seeds | Derived at FREEZE by the custodian: seed_i = sha256(R ‖ i), i = 0..15, R = randomness of the first drand round published after the FREEZE commit time; fallback `secrets.token_hex(16)`, said in the README; TEST_SEED_COMMIT = sha256(salt ‖ seeds) committed by the custodian. **Encoding**: R = the bytes of the drand `randomness` hex string (`bytes.fromhex`); i = 4-byte unsigned big-endian (`int(i).to_bytes(4, "big")`); seed_i = the 32-byte digest, written as hex; the integer world seed = the first 8 bytes of seed_i read big-endian (`int(seed_hex[:16], 16)`); a value ≤ `DEV_SEED_MAX` = 999 (the dev range 0..999) is refused; TEST_SEED_COMMIT = sha256 hex of (salt bytes ‖ seed_0 bytes ‖ … ‖ seed_15 bytes). | [PLAN §4 FREEZE], [code: sealed_run.seed_digest, derive_seeds, seed_int, seed_commit, N_SEEDS = 16; twin/rng.py DEV_SEED_MAX] |
 | Dev worlds (robot development and tuning) | world seeds 0, 1, 2, 3; robot development and tuning use days 2-8 only | [PLAN §5 Design] |
 | Dev worlds (S7b calibration only) | world seeds 100-131 (32 worlds) from the dev namespace (0..999), CPU engine only (observer, no robot). The M-W7 margin is certified on twin worlds, not on real footage. | [lead] |
 | Other dev seeds | 900-963 are DYN validation seeds (`twin.daygen.VALIDATION_SEEDS`), not dev worlds of this design | [code: twin/daygen.py] |
-| Dev-world generator | `scripts/gen_dev_worlds.py` accepts only the two sets above and refuses any other seed and any run with `INTERCYCLE_SEALED_RUN` set; `twin.rng.check_world_seed` refuses seeds outside 0..999 unless the sealed flag is set | this lane; [code: twin/rng.py] |
+| Dev-world generator | `scripts/gen_dev_worlds.py` needs `--set robot` or `--set calib` on every run (`--seeds` only as a subset of that set), refuses any other seed and any run with `INTERCYCLE_SEALED_RUN` set, and (`prereg_gate`) refuses unless the working tree is clean, this file is tracked and unmodified at HEAD, the commit that added it is on main, and HEAD's copy equals main's; `dev_worlds.json` records the set, HEAD, the main commit, that commit, this file's git blob and sha256. `twin.rng.check_world_seed` refuses seeds outside 0..999 unless the sealed flag is set | this lane; [code: twin/rng.py] |
 | Days | every world (dev and test): days 1-8 observer only on the CPU engine (numpy, no Nav2); test worlds: robot off on days 1-8; days 9-10 scored | [PLAN §5 Design], [code: twin_design.TEST_DAYS = (9, 10)] |
 | Visit-count check | the slice asserts that mean visit counts per slice at day 9 match between dev and test worlds within 10 % | [PLAN §5 Design] |
 | Time slices | 48 (`--slices 0-47`): the M-W7 calibration must cover every slice the robot can run in | [PLAN §4 S7b], [WEAKNESSES M-W7], [code: conformal_margin CLI `--slices`] |
@@ -73,7 +79,7 @@ evaluate]
 | H1 | Primary (§3) | `signflip_p(d_w, "greater") <= ALPHA` |
 | H2 | Non-inferiority on press time: L_w(c) = robot-caused press time lost (stops + holds incl. reset time, plus the remaining T of errored missions) per mission-hour [s/h]; learned − static ≤ δ, **δ = 30 s/h** [U14], [PLAN §5] | e_w = L_w(learned) − L_w(static) − 30; `signflip_p(e_w, "less") <= ALPHA` (H1: mean e < 0) [code: per_world(..., "lost"), NI_DELTA_S_PER_H] |
 | H3 | Map unsafe-free share on test days. **α_target = 0.05** (S7b's conformal α, §7). H0: mean miss share ≥ α_target + 0.01 = **0.06** | per world: the unweighted mean over its test-day units of the unit miss share at the frozen M-W7 margin (`stream_units` + `per_world_miss_share`, the calibration's estimand), from the learned runs EVAL scored; e_w = share_w − 0.06; `signflip_p(e_w, "less") <= ALPHA`. A world missing a stream of any of its (day, zone) cells makes H3 not evaluable (fail closed). Robot safety events are descriptive only. [code: h3_world_shares, check_h3_provenance, ALPHA_TARGET, H3_SLACK] |
-| H4 | Blind test person recall ≥ r0 (r0 in §4.1) | `h4_recall`: if any camera has fewer than `MIN_GROUPS = 5` test groups (the small-group rule; camera 9 has 4 [A1+]) it rejects only if the lowest per-group recall AND the pooled recall are both ≥ r0, with the frame-level Clopper-Pearson 95 % interval reported as "ignores clustering (only k groups)"; otherwise the one-sided 95 % group-bootstrap lower bound of the pooled recall must be ≥ r0 |
+| H4 | Blind test person recall ≥ r0 (r0 in §4.1) | `h4_recall`: if any camera has fewer than `MIN_GROUPS = 5` test groups (the small-group rule; camera 9 has 4 [A1+]) it rejects only if the lowest per-group recall AND the pooled recall are both ≥ r0, with the frame-level Clopper-Pearson 95 % interval reported as "ignores clustering (only k groups)"; otherwise the one-sided 95 % group-bootstrap lower bound of the pooled recall must be ≥ r0. **Scope, as `h4_recall` implements it**: a group is (camera, test group); the minimum runs over EVERY test group of BOTH cameras that has at least one labelled person (n_gt > 0), so camera 14's 12 single-clip groups are included (one of them with recall 0 fails H4); the pooled recall is over all labelled frames of both cameras; groups with n_gt = 0 are left out of both. |
 
 ### 4.1 Recall threshold r0 (not amendable)
 
@@ -95,6 +101,12 @@ evaluate]
 - **Value now** (`python scripts/prereg_r0.py`, inputs on disk at this branch): 54 of 87 labelled persons matched on
   the 19 scored frames, recall 0.621, **r0 = 0.5272**. (All 20 frames: 57 / 93 = 0.613, bound 0.523; reported, not
   used.) The exact counts, hashes and per-frame rows are in `prereg/r0_v1.json`.
+- **Detector inputs** (they live outside the repo): `prereg/r0_v1.json` records the sha256 of each of the 15 boxes
+  files read (`boxes_sha256`); `scripts/prereg_r0.py` refuses a file whose sha256 differs from its line in the
+  committed list `docs/perc_sha256.txt`. It also records the ingest code: commit
+  225f18d6b25d64913e5ab64c8037bbad705bfa5a (the last change to the ingest code and the hash list) and the git blobs
+  of `intercycle/perception/esk_ingest.py`, `intercycle/perception/detector.py` and `cloud/modal_perc.py`; detector
+  RF-DETR-M (rfdetr 1.11.1 RFDETRMedium, COCO-pretrained weights, fp32, raw threshold 0.1).
 - Disclosed: the 20 blind frames are all camera 9 [docs/LABEL_AGREEMENT.md Limits], so r0 is a camera-9 value applied
   to both cameras; 9 of the 20 label PTS are one native frame (0.04 s) from the nearest 12 fps detector frame.
 
@@ -157,7 +169,11 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
     their sha256 (first 16 hex): 8e9dbfee6379f212, 14e374e8a03891cc, 73282d8103ac4f1d, 56c0454c09b73870,
     5cc956572ebf4acb, 8f87313279e1a366, 826fc6418108226c, 8ae54cfbbc50c556.
 - **Equal tuning budget per arm** [PLAN §5]: 8 configs × 4 dev worlds (0-3, one fixed dev day each) = 32 runs, run as
-  2 parallel rounds of 4 configs; the config is chosen by its mean over world-days. Each arm also gets at most 20 dev
+  2 parallel rounds of 4 configs; the config is chosen by its mean over world-days.
+- **Tuning day per dev world, fixed now** (before any dev-world run) [lead, rule: day = 2 + world seed, inside the
+  robot dev days 2-8]: world 0 → day 2, world 1 → day 3, world 2 → day 4, world 3 → day 5. Both arms (InterCycle
+  and the reactive baseline) tune on exactly these four world-days; no other day may replace one after results are
+  seen. Each arm also gets at most 20 dev
   runs, and InterCycle's debug runs count there.
 - A separate agent tunes the baseline and never sees InterCycle's dev results. InterCycle lanes do not read
   `results/tuning/baseline` before FREEZE. Both tuning curves and the chosen configs' per-world-day scores are published
@@ -172,7 +188,8 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
   [PLAN §5]
 - Intervals: bootstrap-by-group CIs only if a camera has ≥ 5 test groups. Otherwise per-group recall with n, plus a
   frame-level Clopper-Pearson interval labelled "ignores clustering (only k groups)"; gate H4 then passes only if the
-  lowest per-group recall and the pooled estimate are both ≥ r0. **Camera 9 has 4 test groups** (114 clips, 18.2 min),
+  lowest per-group recall and the pooled estimate are both ≥ r0, the minimum taken over every test group of both
+  cameras with n_gt > 0 and the pooled value over all labelled frames (§4 H4 "Scope"). **Camera 9 has 4 test groups** (114 clips, 18.2 min),
   so the small-group rule applies; camera 14 has 12 test groups of one clip each (12 clips, 1.2 min). [A1+], [code:
   h4_recall]
 - A test framing with no matching train framing gets no fitted H; its clips are scored for P/R and strokes only and

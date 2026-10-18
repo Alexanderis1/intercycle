@@ -1,5 +1,5 @@
 {
- "contract": "intercycle.prereg_r0/1",
+ "contract": "intercycle.prereg_r0/2",
  "rule": "(frozen in PREREG v1; nothing here reads test data):\n* reference = labeller B's blind set `labels/dev/labels_blind_B.json` (the 20 blind dev frames, U14 rule 1), on the\n  frames that `labels/dev/scored.json` marks `scored` (19: dev-f-c9-14 is a byte-and-PTS duplicate of dev-f-c9-03);\n  every `person` box counts (occluded and truncated included), as on the test labels;\n* detections = the dev PERC ingest's stored detector boxes `$INTERCYCLE_DATA/boxes/<clip>.parquet`\n  (`intercycle.perception.esk_ingest`, the same per-clip code the sealed run uses), class `person`, not `suppressed`,\n  conf >= DET_CONF = 0.4 (= `TrackerConfig.activation`, the confidence at which a detection starts a track), on the\n  sampled frame nearest to the label's PTS; if that frame is more than MAX_DT_S away, the frame has no detection\n  (fail closed: all its labelled people are misses);\n* matching = `scripts/label_agreement.match`: greedy one-to-one by IoU, highest first, IoU >= 0.5 (PLAN_TWIN \u00a75);\n* recall = matched / labelled person boxes (pooled over the frames);\n* r0 = the one-sided 95 % Clopper-Pearson lower bound of that recall = Beta.ppf(0.05, k, n - k + 1).",
  "det_conf": 0.4,
  "max_dt_s": 0.05,
@@ -21,6 +21,34 @@
   "cp_lower_one_sided_95": 0.5226015540896907
  },
  "r0": 0.5272,
+ "boxes_sha256": {
+  "0_te11": "2bacf7811137186bdec1be5bd52711203dca9c661f40d91c9df029e08ead9dbb",
+  "0_tr130": "aeacc7451da97261b9fa5c7d124276e1600bca1cf11f70a0da5101b56976dddb",
+  "0_tr14": "87974846d3533c6f66e0bd821992de0b47920ac30cd1afa628f09169c37966e4",
+  "0_tr2": "283259cd53da5edb8c35f415f81d9641d9bce0713bbfceb85df0148f4023f5c6",
+  "0_tr47": "11dfbef0a98fbd41dd5ca63892bd405301b18ad0b7b8f373474edf3a194d05e3",
+  "1_tr48": "cf84722f924b73d23e961e257aab85f0fb244873658fbfedc06e1bacec007465",
+  "1_tr89": "618fa50e57cec2e73b0548dc2b35157a706e0a01638bc1d676b292712540e2b8",
+  "1_tr90": "372f707557b483c7b143996ebf7d8b139a423bfea7bc17dafa844a764408f7a6",
+  "2_te11": "fc72d626fa2821f8aa68991847c2d88b7201d8e625b1fede8cd8602b4e1a7f3e",
+  "2_tr22": "382efc150ec2bff146a9d10498305d9a498240ac39a69132af737431ad7583ee",
+  "4_tr11": "2383712868db034ec82cdf0a67b4c3b275a8163567fefaff7078b906c8859b74",
+  "4_tr26": "a1a6ea56bbdc0047f28747484bbee5949b8cd4da8cd84422e9172970e521d9b8",
+  "4_tr37": "8df5606a26a9ab3fccf110054b7ec3c02f4e62a8a16f449b9b6db3746cc6bae1",
+  "4_tr47": "d3c90e94dbfafc3546491ac259a12061fcab290722579dbf5e8e3eec9139dd0c",
+  "4_tr48": "0433e5ab82fc013b54abe8f48e5cb407f2475bdb4bc366f7ec30b5620f87f466"
+ },
+ "ingest": {
+  "commit": "225f18d6b25d64913e5ab64c8037bbad705bfa5a",
+  "detector": "RF-DETR-M: rfdetr==1.11.1 RFDETRMedium, COCO-pretrained weights, fp32, raw threshold 0.1, keep person/truck (cloud/modal_perc.py Perc.load)",
+  "perc_sha256_list": "docs/perc_sha256.txt",
+  "perc_sha256_list_git_blob": "b41c1717f5553271525bd8daeffa77c299c0cb34",
+  "code_git_blobs": {
+   "intercycle/perception/esk_ingest.py": "ecc4dea0d318d99d9f1d9e1bec5b0d3d1fecea38",
+   "intercycle/perception/detector.py": "63100e09f6299926070e07b68ba73c4db2c1a555",
+   "cloud/modal_perc.py": "a241d71479efa55bc91e22fb307ae21a45443b50"
+  }
+ },
  "per_frame": [
   {
    "sample_id": "dev-f-c9-01",

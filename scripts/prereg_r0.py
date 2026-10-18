@@ -38,7 +38,53 @@ DEV = ROOT / "labels" / "dev"
 DET_CONF = 0.4
 MAX_DT_S = 0.05
 LEVEL = 0.95
-CONTRACT = "intercycle.prereg_r0/1"
+CONTRACT = "intercycle.prereg_r0/2"
+# Provenance of the detector inputs (the boxes live outside the repo): every boxes file used must match its line in
+# the committed PERC hash list, and the ingest code that produced them is recorded by commit and git blob.
+PERC_SHA_LIST = "docs/perc_sha256.txt"
+INGEST_PATHS = ("intercycle/perception/esk_ingest.py", "intercycle/perception/detector.py", "cloud/modal_perc.py")
+DETECTOR = ("RF-DETR-M: rfdetr==1.11.1 RFDETRMedium, COCO-pretrained weights, fp32, raw threshold 0.1, keep "
+            "person/truck (cloud/modal_perc.py Perc.load)")
+
+
+def _git_out(*args: str) -> str:
+    import subprocess
+
+    r = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {r.stderr.strip()[:200]}")
+    return r.stdout.strip()
+
+
+def perc_sha_list(root: Path = ROOT) -> dict[str, str]:
+    """{relative path: sha256} from the committed PERC hash list (`sha256  boxes/<clip>.parquet` per line)."""
+    out: dict[str, str] = {}
+    for line in (root / PERC_SHA_LIST).read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            out[parts[1]] = parts[0]
+    return out
+
+
+def boxes_provenance(boxes_dir: Path, clip_ids: list[str]) -> dict[str, str]:
+    """sha256 of each boxes file used; refuses (fail closed) a file that does not match the committed list."""
+    ref = perc_sha_list()
+    out: dict[str, str] = {}
+    for c in sorted(set(clip_ids)):
+        h = hashlib.sha256((boxes_dir / f"{c}.parquet").read_bytes()).hexdigest()
+        want = ref.get(f"boxes/{c}.parquet")
+        if want != h:
+            raise ValueError(f"boxes/{c}.parquet sha256 {h[:12]} does not match {PERC_SHA_LIST} ({want})")
+        out[c] = h
+    return out
+
+
+def ingest_provenance() -> dict:
+    """The last commit that changed the ingest code or the PERC hash list, and the code's git blobs at HEAD."""
+    commit = _git_out("log", "-1", "--format=%H", "HEAD", "--", *INGEST_PATHS, PERC_SHA_LIST)
+    return dict(commit=commit, detector=DETECTOR, perc_sha256_list=PERC_SHA_LIST,
+                perc_sha256_list_git_blob=_git_out("rev-parse", f"HEAD:{PERC_SHA_LIST}"),
+                code_git_blobs={p: _git_out("rev-parse", f"HEAD:{p}") for p in INGEST_PATHS})
 
 
 @dataclass(frozen=True)
@@ -107,7 +153,8 @@ def run(boxes_dir: Path, dev: Path = DEV) -> dict:
                             recall=k_s / n_s, r0_cp_lower_one_sided_95=r0),
                 all_20=dict(frames=len(per), tp=k_all, n_gt=n_all, recall=k_all / n_all,
                             cp_lower_one_sided_95=cp_lower_one_sided(k_all, n_all)),
-                r0=round(r0, 4), per_frame=per)
+                r0=round(r0, 4), boxes_sha256=boxes_provenance(boxes_dir, [p["clip_id"] for p in per]),
+                ingest=ingest_provenance(), per_frame=per)
 
 
 def main(argv: list[str] | None = None) -> int:
