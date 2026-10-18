@@ -4,7 +4,9 @@
   with no on-line machine (the twin) is always RUNNING;
 * mapping.MapView.predicted_bins(on_line=False): a stopped / unknown phase never gets the STOP bin from a line state;
 * masks.machine_bins: the twin presses (Site.own_stop) get their STOP-bin envelope only from their OWN confident STOPPED
-  (inside its TTL); UNKNOWN / missing / low confidence -> the union of all bins (fail closed); body shop unchanged.
+  while it stays inside its TTL over the whole keep-out horizon; UNKNOWN / missing / low confidence / a stop expiring
+  inside the horizon -> the union of all bins (fail closed); body shop unchanged (its ANDON vote: see
+  test_body_shop_andon_vote_on_its_own_site).
 
     .venv/Scripts/python.exe -m pytest -q ros2/intercycle_nav/test/test_twin_presses.py
 """
@@ -98,6 +100,27 @@ def test_body_shop_line_still_goes_to_andon_on_confident_stops_of_its_on_line_st
     assert st.snapshot(T0 + 0.1).prod == M.RUNNING                   # STOPPED below confidence 4 never votes
 
 
+def test_body_shop_andon_vote_on_its_own_site():
+    """Audit S6-optB fix 3: pins the S6 #4 vote change on the body shop's real site (a DELIBERATE effect of the lead's
+    patch, disclosed): ANDON needs a confident (>= 4) STOPPED from at least half of the 8 on-line stations (4), where it
+    needed a STOPPED of any confidence from half of all 10 machines (5) before. Off-line cells and stops below
+    confidence 4 never vote."""
+    site = K.Site.from_scenario()
+    line = [i for i, m in enumerate(site.ids) if site.on_line[m]]
+    off = [i for i, m in enumerate(site.ids) if not site.on_line[m]]
+    assert (len(line), len(off)) == (8, 2)
+
+    def prod(stopped: list[int], conf: int = 8) -> int:
+        nows = [(State.STOPPED, conf) if i in stopped else (State.ACTIVE, 8) for i in range(len(site.ids))]
+        return _state(site, nows).snapshot(T0 + 0.1).prod
+
+    assert prod(line[:4]) == M.ANDON                                  # 4 of 8 on-line (was RUNNING: 4 of 10 < 5)
+    assert prod(line[:3]) == M.RUNNING
+    assert prod(line[:3] + off) == M.RUNNING                          # 5 of 10 stopped (was ANDON): off-line cells do not vote
+    assert prod(line[:4], conf=3) == M.RUNNING                        # low-confidence stops never vote (was: they counted)
+    assert prod(line) == M.ANDON
+
+
 def test_site_without_on_line_ids_keeps_the_body_shop_default():
     site = K.Site(["S1", "S2"], {"S1": (0, 0, 1, 1), "S2": (2, 0, 3, 1)}, [], 1, SEED, (0, 0, 4, 2))
     st = _state(site, [(State.STOPPED, 8), (State.ACTIVE, 8)])
@@ -134,6 +157,27 @@ def test_twin_press_gets_its_stop_bin_only_from_its_own_confident_stop(now, mode
         assert M.STOP_BIN not in bins or bins == M.ALL_BINS
         if now[0] != State.ACTIVE:
             assert bins == M.ALL_BINS
+
+
+def test_stop_expiring_inside_the_horizon_never_gives_the_stop_bin():
+    """Audit S6-optB fix 1: the STOP bin only while the own stop entry stays valid over the WHOLE keep-out horizon
+    [t, t + H] (the andon_valid_s pattern); a stop that expires inside it may restart there: the union of all bins."""
+    site = _site(["A"], [False], [True])
+    p = K.MaskParams()
+    assert p.horizon_s == 6.0
+    st = _state(site, [(State.STOPPED, 8)], ttl_s=2.0)
+    for dt in (0.1, 1.0, 1.9):                                        # stop valid at t, expires at issue + 2 s < t + 6 s
+        mv = st.snapshot(T0 + dt).machines[0]
+        assert mv.stop_ok and mv.stop_left_s == pytest.approx(2.0 - dt, abs=1e-5)
+        assert K.machine_bins(_View(1), 0, mv, M.RUNNING, p, False, True) == M.ALL_BINS
+    st = _state(site, [(State.STOPPED, 8)], ttl_s=10.0)
+    assert K.machine_bins(_View(1), 0, st.snapshot(T0 + 1.0).machines[0], M.RUNNING, p, False, True) == (M.STOP_BIN,)
+    assert K.machine_bins(_View(1), 0, st.snapshot(T0 + 3.9).machines[0], M.RUNNING, p, False, True) == (M.STOP_BIN,)
+    assert K.machine_bins(_View(1), 0, st.snapshot(T0 + 4.1).machines[0], M.RUNNING, p, False, True) == M.ALL_BINS
+    short = K.MaskParams(horizon_s=1.5)                              # the same rule on a shorter horizon
+    st = _state(site, [(State.STOPPED, 8)], ttl_s=2.0)
+    assert K.machine_bins(_View(1), 0, st.snapshot(T0 + 0.1).machines[0], M.RUNNING, short, False, True) == (M.STOP_BIN,)
+    assert K.machine_bins(_View(1), 0, st.snapshot(T0 + 1.0).machines[0], M.RUNNING, short, False, True) == M.ALL_BINS
 
 
 def test_expired_stop_falls_back_to_all_bins():

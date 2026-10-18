@@ -251,8 +251,11 @@ class MachineView:
     phase: float | None           # fraction of the map's cycle now (None = unknown -> whole envelope)
     windows: list | None          # predicted idle windows (plant time); None = cannot be trusted
     held: bool = False
-    # the fast entry says STOPPED with confidence >= 4 (and a slow model with confidence >= 4), inside its TTL
+    # the fast entry says STOPPED with confidence >= 4 (and a slow model with confidence >= 4), inside its TTL at t
     stop_ok: bool = False
+    # seconds after the snapshot time that STOPPED entry stays inside its TTL (issue + ttl_s - t; 0 unless stop_ok):
+    # machine_bins gives the STOP bin only while the stop is valid over the whole keep-out horizon
+    stop_left_s: float = 0.0
 
 
 @dataclass
@@ -379,14 +382,15 @@ class ObserverState:
             st = "UNKNOWN" if now is None else State(now.state).name
             # a STOPPED votes for a line stop only at confidence >= 4 and only for an on-line machine
             n_stopped += st == "STOPPED" and now is not None and now.confidence >= 4 and self.site.on_line.get(mid, True)
+            stop_left = (fast.issue_time - DAY0_UNIX + now.ttl_s - t) if (now is not None and fast is not None) else -1.0
             stop_ok = (st == "STOPPED" and now is not None and mod is not None and fast is not None
-                       and now.confidence >= 4 and mod.confidence >= 4
-                       and t <= fast.issue_time - DAY0_UNIX + now.ttl_s)
+                       and now.confidence >= 4 and mod.confidence >= 4 and stop_left >= 0.0)
             ph = own_phase(mod, now, fast.issue_time if fast else None, t)
             if ph is not None:
                 ph = ph % 1.0                          # map phase convention: 0 = start of motion in the zone (see README)
             wins = idle_windows(mod, now, fast.issue_time, t, horizon_s, k_sigma) if (mod and now and fast) else None
-            out.append(MachineView(mid, i, st, ph, wins, held=(mid == held_id), stop_ok=stop_ok))
+            out.append(MachineView(mid, i, st, ph, wins, held=(mid == held_id), stop_ok=stop_ok,
+                                   stop_left_s=float(stop_left) if stop_ok else 0.0))
         # production state from the broadcast only: the fast layer carries per-machine states; a line where at least half
         # the on-line machines report a confident STOPPED is in a line stop (ANDON slice). Break / shift change are not
         # separable from the fast layer, so they fall into the same stopped slice. No fast layer -> RUNNING (busiest
@@ -436,15 +440,22 @@ def idle_through(windows, t0: float, t1: float) -> bool:
 def machine_bins(view: M.MapView, i: int, mv: MachineView, prod: int, p: MaskParams, on_line: bool = True,
                  own_stop: bool = False) -> tuple:
     """Phase bins whose envelopes are keep-out for machine i over [now, now + H]. Held -> STOP bin. An off-line machine
-    with `own_stop` (Site.own_stop: the twin presses) whose own fast entry is a confident STOPPED inside its TTL
-    (MachineView.stop_ok) -> STOP bin; anything else about it (UNKNOWN, missing, low confidence, expired) falls through
-    to predicted_bins, which gives an off-line machine without a cycling phase the union of all bins (fail closed)."""
+    with `own_stop` (Site.own_stop: the twin presses) whose own fast entry is a confident STOPPED (MachineView.stop_ok)
+    -> the STOP bin at every step dt while that entry is still inside its TTL (dt <= MachineView.stop_left_s), the union
+    of all bins at any step past it (the andon_valid_s pattern: the press may restart once its stop forecast expires), so
+    the STOP bin alone only when the stop holds over the whole horizon. Anything else about it (UNKNOWN, missing, low
+    confidence, expired) falls through to predicted_bins, which gives an off-line machine without a cycling phase the
+    union of all bins (fail closed)."""
     if mv.held:
         return (M.STOP_BIN,)
-    if own_stop and not on_line and mv.stop_ok:
-        return (M.STOP_BIN,)
+    own = own_stop and not on_line and mv.stop_ok
     bins: set[int] = set()
     for dt in np.arange(0.0, p.horizon_s + 1e-9, p.step_s):
+        if own:
+            if dt > mv.stop_left_s:
+                return M.ALL_BINS
+            bins.add(M.STOP_BIN)
+            continue
         b = view.predicted_bins(i, mv.phase, prod, float(dt), p.k_sigma, andon_valid_s=p.andon_valid_s, on_line=on_line)
         if b == M.ALL_BINS:
             return M.ALL_BINS
