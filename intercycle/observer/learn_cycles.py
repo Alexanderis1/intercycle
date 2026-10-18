@@ -12,10 +12,14 @@ Conventions: y=1 ACTIVE (motion), y=0 IDLE. "fall" = ACTIVE->IDLE (idle window s
 "rise" = IDLE->ACTIVE (next cycle starts). Edge times are corrected for the camera latency.
 
 MISSING samples (T-W6). y may hold NaN = MISSING (occluded zone, invalid camera: Observation v2 zone_motion). MISSING is
-never "no motion": `_prep` keeps NaN instead of thresholding it to 0; the Schmitt trigger holds its state through
-MISSING samples; an edge next to a MISSING sample is not timed (its row is NaN, so period / jitter / busy statistics
-use only edges seen on both sides); Lomb-Scargle uses the observed samples only and the autocorrelation masks MISSING
-samples out; `forecast` / `nowcast` report UNKNOWN (confidence 0) while the newest sample is MISSING.
+never "no motion": `_prep` keeps NaN instead of thresholding it to 0, and when it resamples an irregular stream the
+slots of a time gap (ticks absent from the stream) are MISSING too, never the previous value held; the Schmitt trigger
+holds its state through MISSING samples; an edge next to a MISSING sample is not timed (its row is NaN, so period /
+jitter / busy statistics use only edges seen on both sides); Lomb-Scargle uses the observed samples only and the
+autocorrelation masks MISSING samples out. `forecast` / `nowcast` never count time spent MISSING as observed idle time:
+UNKNOWN (confidence 0) while the newest sample is MISSING; STOPPED only after no motion has been OBSERVED, without a gap,
+for longer than idle + 3 sigma; IDLE only while the last timed fall was observed through to now; a rise that touches a
+gap is untimed (confidence below MIN_CONF). See `forecast`.
 
 Constants per machine kind (`CycleConsts`, lane S6). BODY_SHOP holds the module constants below (the body-shop cells
 and line, unchanged). PRESS_PLACEHOLDER is the press-shop kind: Schmitt w=1 and FLIP_S 0.25 s are the plan's values
@@ -165,10 +169,18 @@ def _prep(t, y, window=None) -> tuple[np.ndarray, np.ndarray, float]:
     if len(t) < 3:
         return t, _bin(y), 0.5
     dt = float(np.median(np.diff(t)))
-    if np.abs(np.diff(t) - dt).max() > 0.05 * dt:  # irregular: zero-order hold onto a uniform grid (NaN held as NaN)
-        g = t[0] + dt * np.arange(int((t[-1] - t[0]) / dt) + 1)
-        y = y[np.clip(np.searchsorted(t, g, side="right") - 1, 0, len(t) - 1)]
-        t = g
+    d = np.diff(t)
+    if np.abs(d - dt).max() > 0.05 * dt:  # irregular: resample onto a uniform grid
+        # every sample gets its own grid slot: a step of k sample intervals (round(step / dt), at least 1) advances k
+        # slots, so capture jitter keeps one sample per slot and a time gap (dropped ticks) leaves its slots MISSING. A
+        # value is never held across a gap (a held 0 would be fabricated "no motion", a held 1 fabricated motion; T-W6,
+        # audit S6 #2). The grid step is the mean slot length, so the grid does not drift from the samples.
+        k = np.maximum(np.rint(d / dt), 1).astype(int)
+        slot = np.r_[0, np.cumsum(k)]
+        dt = float((t[-1] - t[0]) / slot[-1])
+        yy = np.full(int(slot[-1]) + 1, np.nan)
+        yy[slot] = y
+        t, y = t[0] + dt * np.arange(len(yy)), yy
     return t, _bin(y), dt
 
 
@@ -277,14 +289,38 @@ def _clean(y: np.ndarray, dt: float, debounce_s: float = DEBOUNCE_S, c: CycleCon
                      max(int(round(c.flip_s / dt)), c.min_run))
 
 
-def _tail(y: np.ndarray, c: CycleConsts = BODY_SHOP) -> tuple[int, int]:
-    """Raw state at the end of the signal: (value, number of trailing OBSERVED samples), isolated flips suppressed."""
-    y = y[np.isfinite(y)]
-    if len(y) == 0:
-        return 0, 0
-    z = _schmitt(y[-40:], c.schmitt_w)
-    st, en, v = _runs(z)
-    return int(v[-1]), int(en[-1] - st[-1])
+def _tail(t: np.ndarray, y: np.ndarray, c: CycleConsts = BODY_SHOP) -> tuple[int, int, float, float]:
+    """Raw state at the end of the signal over the OBSERVED samples only (MISSING skipped), isolated flips suppressed:
+    (value, number of trailing observed samples in that state, time of the run's first observed sample, time of the
+    observed sample just before the run, -inf if the run reaches back to the first one). The run may span MISSING
+    samples: the caller checks for gaps (`_last_gap`). The times are returned explicitly because the count is over
+    observed samples, so it cannot index the unfiltered array (audit S6 #1)."""
+    ok = np.isfinite(y)
+    to, yo = t[ok], y[ok]
+    if len(yo) == 0:
+        return 0, 0, float("nan"), -np.inf
+    w = 40
+    while True:                                          # widen the window until the trailing run starts inside it
+        w = min(w, len(yo))
+        st, en, v = _runs(_schmitt(yo[-w:], c.schmitt_w))
+        if len(st) > 1 or w == len(yo):
+            break
+        w *= 4
+    s = len(yo) - w + int(st[-1])
+    return int(v[-1]), len(yo) - s, float(to[s]), float(to[s - 1]) if s > 0 else -np.inf
+
+
+def _last_gap(t: np.ndarray, y: np.ndarray, dt: float) -> float:
+    """Time of the newest unobserved instant: the newest MISSING sample, or the last slot of the newest time-stamp gap
+    (> 1.5 dt between ticks: dropped lines); -inf if the signal has no gap."""
+    g = -np.inf
+    miss = np.flatnonzero(~np.isfinite(y))
+    if len(miss):
+        g = float(t[miss[-1]])
+    d = np.flatnonzero(np.diff(t) > 1.5 * dt)
+    if len(d):
+        g = max(g, float(t[d[-1] + 1] - dt))
+    return g
 
 
 def _uncertain(starts: np.ndarray, miss: np.ndarray | None, w: int) -> np.ndarray:
@@ -642,8 +678,16 @@ def ttl_s(period_s: float, jitter: float, stops_per_h: float, tol_frac: float = 
 
 def forecast(model: MachineModel, t, y, t_now: float, last_transitions: Edges | None = None,
              latency_s: float = LATENCY_S, consts: CycleConsts | None = None) -> Forecast:
-    """Where the machine is in its cycle at t_now, using only samples with t <= t_now. NaN = MISSING: while the newest
-    sample is MISSING the state is UNKNOWN with confidence 0 (T-W6: an occluded press is never reported idle)."""
+    """Where the machine is in its cycle at t_now, using only samples with t <= t_now. NaN = MISSING (T-W6: MISSING is
+    never "no motion", and time spent MISSING never counts as observed idle time):
+      * the newest sample MISSING -> UNKNOWN, confidence 0;
+      * STOPPED only on OBSERVED evidence: no motion observed, without a gap, for longer than the idle + 3 sigma (the
+        trailing no-motion samples after the newest MISSING sample or time-stamp gap, x dt);
+      * IDLE only while the last timed fall was observed through to t_now: a gap (MISSING sample or dropped ticks) after
+        it -- the real last fall may lie inside the gap -- or a fall older than an idle window without the observed
+        evidence for STOPPED gives UNKNOWN, confidence 0;
+      * ACTIVE from the last timed rise only while no gap follows it; else from a run of observed motion, whose start is
+        the rise estimate; a run that touches a gap has an untimed rise and stays below MIN_CONF (audit S6 #1)."""
     c = consts or BODY_SHOP
     t, y = np.asarray(t, float), np.asarray(y, float)
     m = t <= t_now
@@ -653,11 +697,12 @@ def forecast(model: MachineModel, t, y, t_now: float, last_transitions: Edges | 
     sig = max(1.4 * model.jitter * P, 0.5)
     dt = float(np.median(np.diff(t))) if len(t) > 2 else 0.5
     ttl = ttl_s(P, model.jitter, model.stops_per_h)
+    unknown = Forecast(State.UNKNOWN, t_now, 0.0, 0.0, max(P, 1.0), 0.0, 0)
     if len(t) < 20 or P <= 0:
-        return Forecast(State.UNKNOWN, t_now, 0.0, 0.0, max(P, 1.0), 0.0, 0)
+        return unknown
     if not np.isfinite(y[-1]):                           # MISSING now: fail closed
-        return Forecast(State.UNKNOWN, t_now, 0.0, 0.0, max(P, 1.0), 0.0, 0)
-    tv, tn = _tail(y, c)
+        return unknown
+    tv, tn, t_run, t_before = _tail(t, y, c)
     if model.confidence < MIN_CONF:                      # no usable cycle model: report the instantaneous state only
         st = State.ACTIVE if (tv == 1 and tn >= 2) else State.IDLE
         return Forecast(st, t_now, 0.0, 0.0, max(P, 1.0), min(ttl, 2.0), min(model.confidence, 3))
@@ -669,14 +714,21 @@ def forecast(model: MachineModel, t, y, t_now: float, last_transitions: Edges | 
     rise = last_transitions.rise[last_transitions.rise <= t_now]
     rL = rise[-1] if len(rise) else -np.inf
     fL = fall[-1] if len(fall) else -np.inf
-    if not (np.isfinite(rL) or np.isfinite(fL)):
+    t_gap = _last_gap(t, y, dt)                          # newest unobserved instant (-inf: none)
+    gap_after = lambda e: t_gap > e + latency_s          # an edge time is latency-corrected, sample times are not
+    to = t[np.isfinite(y)]
+    quiet = float(np.sum(to[len(to) - tn:] > t_gap)) * dt if tv == 0 else 0.0   # observed no motion, gap-free
+    stop_after = idle + 3 * max(sig, 0.5)
+    pen, untimed = 0, False
+    if not (np.isfinite(rL) or np.isfinite(fL)) and not quiet > stop_after:      # no edge (e.g. after a long gap)
         return Forecast(State.UNKNOWN, t_now, 0.0, 0.0, P, 0.0, 0)
-    pen = 0
-    if rL > fL or (tv == 1 and tn >= 2):                 # ACTIVE: confirmed rise, or motion for >= 2 samples
-        if rL > fL:
+    if (rL > fL and not gap_after(rL)) or (tv == 1 and tn >= 2):
+        # ACTIVE: a confirmed rise observed through to now, or motion for >= 2 observed samples
+        if rL > fL and not gap_after(rL):
             r_est = rL
-        else:                                            # rise in progress, not yet debounced
-            r_est = t[-tn] - 0.5 * dt - latency_s
+        else:                                            # rise in progress (not yet debounced), or seen after a gap
+            r_est = t_run - 0.5 * dt - latency_s
+            untimed = t_gap > t_before                   # a gap inside the run or just before it: rise time unknown
             pen += 3 if t_now - fL < idle - 3 * sig else 0
         F = r_est + act
         if tv == 0 and tn * dt < c.debounce_s:           # no motion for a moment: dropout, or the fall is under way
@@ -686,16 +738,21 @@ def forecast(model: MachineModel, t, y, t_now: float, last_transitions: Edges | 
             F = t_now
         state, left, nxt = State.ACTIVE, 0.0, F
         ilen = idle
-    else:                                                # IDLE since fL
+    elif quiet > stop_after:                             # no motion OBSERVED for longer than an idle window
+        state, left, nxt, ilen = State.STOPPED, 0.0, t_now, 0.0
+    elif rL > fL or gap_after(fL) or t_now - fL > stop_after:
+        # the last timed edge is followed by a gap (the real last fall / rise may lie inside it), or the timed fall is
+        # older than an idle window while the observed evidence does not show a stop: the cycle position is unknown
+        return unknown
+    else:                                                # IDLE since fL, observed throughout
         age = t_now - fL
-        if age > idle + 3 * max(sig, 0.5):
-            state, left, nxt, ilen = State.STOPPED, 0.0, t_now, 0.0
-        else:
-            state, left, nxt = State.IDLE, max(idle - age, 0.0), fL + P
-            ilen = left
-            if tv == 1 and tn >= 1:                       # a lone motion sample: possible rise, ambiguous
-                pen += 2
+        state, left, nxt = State.IDLE, max(idle - age, 0.0), fL + P
+        ilen = left
+        if tv == 1 and tn >= 1:                           # a lone motion sample: possible rise, ambiguous
+            pen += 2
     conf = max(model.confidence - pen, 0)
+    if untimed:
+        conf = min(conf, MIN_CONF - 1)
     if state == State.STOPPED:
         conf = min(conf, 8)
     if pen:

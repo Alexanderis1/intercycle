@@ -151,6 +151,52 @@ def test_fast_layer_states_and_staleness(run):
     assert all(m.state == State.UNKNOWN and m.confidence == 0 for m in stale.machines)
 
 
+def test_running_presses_are_never_read_stopped_through_nan_bursts(tmp_path):
+    """Audit S6 #1 (probe on this stream, seed 1: P1 STOPPED with conf >= 4 on 23 ticks, 8 while the ram moved). Fast
+    layer at every tick after the first model, 2 running presses, 10 % NaN bursts: no STOPPED with conf >= MIN_CONF,
+    no IDLE / STOPPED while the ram moves (beyond one tick of quantisation), and the map never conditions on STOP_BIN."""
+    obs = stream(minutes=12.0, seed=1)
+    ob = OL.ObserverLive(SPEC, OL.ObserverLiveConfig(margin_path=margin_file(tmp_path)))
+    bad, useful, n = [], 0, 0
+    for j, o in enumerate(obs):
+        c = ob.ingest(o)
+        assert (c.phase_bin != M.STOP_BIN).all(), (o.t_cap - T0, c.phase_bin)
+        if o.t_cap < T0 + 360.0:
+            continue
+        f = ob.fast(o.t_cap)
+        for i, mn in enumerate(f.machines):
+            n += 1
+            ok = mn.confidence >= LC.MIN_CONF
+            useful += ok and mn.state in (State.ACTIVE, State.IDLE)
+            moving = bool(obs[j].moving[i] and obs[j - 1].moving[i])
+            if ok and (mn.state == State.STOPPED or (mn.state == State.IDLE and moving)):
+                bad.append((round(o.t_cap - T0, 1), i, State(mn.state).name))
+    assert min(m.confidence for m in ob.models) >= LC.MIN_CONF
+    assert not bad, bad[:5]
+    assert useful >= 0.5 * n, useful / n
+
+
+def test_ticks_absent_from_the_stream_are_missing_not_held(tmp_path):
+    """Audit S6 #2: 30 s of ticks absent from obs_v2.jsonl (dropped lines) are a gap, not held 'no motion': no STOPPED
+    and no STOP_BIN right after the hole, and the learned model counts the hole as MISSING."""
+    obs = stream(minutes=15.5, nan_share=0.0, seed=2)
+    hole = (T0 + 700.0, T0 + 730.0)
+    obs = [o for o in obs if not hole[0] <= o.t_cap < hole[1]]
+    ob = OL.ObserverLive(SPEC, OL.ObserverLiveConfig(margin_path=margin_file(tmp_path)))
+    after = 0
+    for o in obs:
+        c = ob.ingest(o)
+        if hole[1] <= o.t_cap < hole[1] + 2.0:
+            assert min(m.confidence for m in ob.models) >= LC.MIN_CONF          # learned before the hole
+            assert (c.phase_bin != M.STOP_BIN).all()
+            f = ob.fast(o.t_cap)
+            assert all(m.state != State.STOPPED for m in f.machines)
+            after += 1
+    assert after >= 3
+    assert ob.t_last is not None and ob.t_last > T0 + 900.0                     # relearned on a window holding the hole
+    assert all(L is not None and L.diag["missing_share"] > 0.02 for L in ob.learned)
+
+
 def test_press_stop_reads_stopped_bin(run):
     ob, obs, _ = run
     sub = OL.ObserverLive(SPEC, ob.cfg)

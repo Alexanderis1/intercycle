@@ -20,8 +20,9 @@ threshold included (`PlaceholderConstantError`).
 
 Map layer (M-W4, M-W7): a `mapping.LayeredMap` on the twin spec (`twin_spec`) learns from the same observations. Its
 conditioning is computed here from the stream (`_cond`): per press, phase bin 0 while running, STOP_BIN once no
-motion has been OBSERVED for the learned idle + 3 sigma (MISSING ticks do not count towards a stop), -1 (unknown)
-while MISSING or without a confident model. A press period of 1.2-3 s is 2.4-6 ticks, so the body-shop's 16 phase
+motion has been OBSERVED, without a gap, for the learned idle + 3 sigma (a MISSING tick or ticks absent from the stream
+restart the count: a stroke may hide inside any gap; the same evidence `learn_cycles.forecast` needs for STOPPED), -1
+(unknown) while MISSING or without a confident model. A press period of 1.2-3 s is 2.4-6 ticks, so the body-shop's 16 phase
 bins carry no information: the twin uses bins (0, STOP_BIN) only. The M-W4 change detector is
 `change_detect_l1.L1ChangeDetector` (ChangeLayer per press grid; observed = floor_ok_of(obs) and zone_vis >= vis_min)
 with the LEAD DECISION: fail closed, i.e. every cell of a press grid not learned yet in bin 0 or STOP_BIN is UNKNOWN
@@ -184,7 +185,7 @@ class ObserverLive:
         self._y: list[np.ndarray] = []
         self.models = [MachineModel(i, 0.0, 0.0, 0.5, 0.0, 0.0, 0) for i in range(self.M)]
         self.learned: list[LC.Learned | None] = [None] * self.M
-        self._quiet = np.zeros(self.M)                  # observed seconds without motion since the last motion
+        self._quiet = np.zeros(self.M)                  # observed seconds without motion since the last motion or gap
         self.t_first: float | None = None
         self.t_last: float | None = None
         self._next_learn: float | None = None
@@ -224,7 +225,11 @@ class ObserverLive:
             raise ValueError(f"tick at {t} not after {self.t_last}: the stream must be in time order")
         y = self.motion(obs)
         dt = 1.0 / self.cfg.hz
-        self._quiet = np.where(y == 1.0, 0.0, np.where(y == 0.0, self._quiet + dt, self._quiet))
+        # observed seconds without motion since the last motion OR gap (MISSING tick, or ticks absent from the stream):
+        # the same gap-free evidence learn_cycles.forecast needs for STOPPED (a stroke may hide inside any gap)
+        gap = self.t_last is not None and t - self.t_last > 1.5 * dt
+        q = np.where(y == 0.0, self._quiet + dt, 0.0)
+        self._quiet = np.where(y == 0.0, dt, q) if gap else q
         self._t.append(t)
         self._y.append(y)
         keep = int(max(self.cfg.learn_window_s, 400.0) * self.cfg.hz) + 10
