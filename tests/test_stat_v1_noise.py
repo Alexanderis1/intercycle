@@ -603,15 +603,18 @@ def test_hold_is_per_camera():
 
 def test_plant_uses_stat_v1_and_its_hold():
     from twin import plant
-    cam = plant.make_camera(SITE, WORLD, 1)
+    cam = cast(CAM.CameraStatV1, plant.make_camera(SITE, WORLD, 1))
     assert isinstance(cam, CAM.CameraStatV1)
-    ad = plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press)
+    ad = plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press, roi_vis=cam.roi_vis, occlusion=cam.occlusion_rule)
     assert np.array_equal(ad.conv.hold_s, [cam.hold_s_by_press[p] for p in ad.press_ids])
-    assert plant.ObsAdapter(SITE, hold_s=cam.hold_s).conv.hold_s == cam.hold_s     # one hold for every press
+    one = plant.ObsAdapter(SITE, hold_s=cam.hold_s, roi_vis=cam.roi_vis, occlusion="roi")
+    assert one.conv.hold_s == cam.hold_s                                              # one hold for every press
     with pytest.raises(TypeError):
-        plant.ObsAdapter(SITE)                         # type: ignore[call-arg]  # no default hold (fail closed)
+        plant.ObsAdapter(SITE, occlusion="roi")       # type: ignore[call-arg]  # no default hold (fail closed)
+    with pytest.raises(TypeError):
+        plant.ObsAdapter(SITE, hold_s=cam.hold_s)     # type: ignore[call-arg]  # no default rule (explicit choice)
     with pytest.raises(ValueError, match="no hold for presses"):
-        plant.ObsAdapter(SITE, hold_s={"P9a": 1.0})
+        plant.ObsAdapter(SITE, hold_s={"P9a": 1.0}, roi_vis=cam.roi_vis, occlusion="roi")
 
 
 def test_hold_gate_per_channel():
@@ -743,3 +746,50 @@ def test_site_v1_plant_empty_floor_running_presses_give_finite_zone_motion(tmp_p
     assert np.array_equal(pl.adapter.conv.hold_s, [pl.camera.hold_s_by_press[p] for p in pl.adapter.press_ids])
     diag = json.loads((pl.run_dir / "plant_summary.json").read_text(encoding="utf-8"))
     assert diag["camera_provenance"] == summ.camera.model_dump(mode="json")
+
+
+def _dets(t, zone_motion, xs=(), zs=(), zone="z14"):
+    from twin.camera_v0 import Detections
+    n = len(xs)
+    return Detections(t=t + 0.1, t_cap=t, cls=np.array(["person"] * n, dtype=str), x=np.array(xs, float),
+                      z=np.array(zs, float), r=np.full(n, 0.3), heading=np.full(n, np.nan), moving=np.zeros(n, bool),
+                      zone=np.array([zone] * n, dtype=str), zone_motion=dict(zone_motion),
+                      cam_ok={z.camera: True for z in SITE.zones})
+
+
+def test_twin_observation_uses_the_roi_rule_not_the_floor_rule():
+    """User decision Sun ~08:25 "Same ROI rule in twin": with stat_v1 the plant's ObsAdapter applies NO floor rule. An
+    operator standing at the press (floor position inside the press zone) whose image box does not cover the ram ROI
+    leaves zone_motion measured; the camera's own image-space MISSING (ROI covered, held) is kept; a press without an
+    ROI is MISSING on every tick (fail closed). The floor rule ("floor", the G0 stand-in) still NaNs it."""
+    from twin import plant
+    cam = cast(CAM.CameraStatV1, plant.make_camera(SITE, WORLD, 1))
+    assert cam.occlusion_rule == "roi"
+    ok = [p for p in cam.roi_vis if min(cam.roi_vis[p].values()) >= 1.0]
+    pid = next(p for p in ok if p.startswith("P14"))
+    ad = plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press, roi_vis=cam.roi_vis, occlusion=cam.occlusion_rule)
+    fl = plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press, roi_vis=cam.roi_vis, occlusion="floor")
+    assert set(ad.rule_by_press.values()) == {"roi"} and not ad.conv.floor_rule.any()
+    assert fl.conv.floor_rule.all()
+    j = ad.press_ids.index(pid)
+    x0, z0, x1, z1 = ad.rects[j]
+    xc, zc = (x0 + x1) / 2, (z0 + z1) / 2                         # an operator in the middle of the press zone
+    zm = {p: 1.0 for p in ad.press_ids}
+    for k in range(4):
+        o_roi = ad(_dets(k / 2.0, zm, [xc], [zc]))
+        o_fl = fl(_dets(k / 2.0, zm, [xc], [zc]))
+        assert math.isfinite(np.asarray(o_roi.zone_motion)[j]) and np.asarray(o_roi.zone_vis)[j] == 1.0
+        assert math.isnan(np.asarray(o_fl.zone_motion)[j])
+    o = ad(_dets(2.5, {**zm, pid: math.nan}))                     # the camera's image-space MISSING is kept
+    assert math.isnan(np.asarray(o.zone_motion)[j])
+    with pytest.raises(ValueError, match="roi_vis"):               # fail closed: "roi" needs the camera's ROIs
+        plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press, occlusion="roi")
+    with pytest.raises(ValueError, match="occlusion must be"):
+        plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press, roi_vis=cam.roi_vis, occlusion="none")
+    part = {p: v for p, v in cam.roi_vis.items() if p != pid}      # a press without an ROI: MISSING on every tick
+    ad2 = plant.ObsAdapter(SITE, hold_s=cam.hold_s_by_press, roi_vis=part, occlusion="roi")
+    assert math.isnan(np.asarray(ad2(_dets(0.0, zm)).zone_motion)[j])
+    from intercycle.observer.occlusion import RoiOcclusion         # the camera's ROI rule is the shared one
+    for p, occ in cam.roi_occ.items():
+        assert isinstance(occ, RoiOcclusion) and occ.hold_s == cam.hold_s_by_press[p]
+    assert plant.StubCameraV0(SITE, WORLD, 1).occlusion_rule == "floor"   # the G0 stand-in keeps the floor rule

@@ -14,6 +14,10 @@ Floor space (observer adapter, camera models):
 Image space (per-clip ingest of the real clips, pixel adapter):
   * a person / vehicle box (u0, v0, u1, v1) grown by `pad_frac` of its width / height on every side (ROI_PAD_FRAC =
     0.15, P8's face-box padding) against the ram ROI polygon in the same framing's pixels.
+  The ONE implementation of this image rule is `box_hits_roi` + the track hold below: the real-clip ingest runs it
+  over a clip (`roi_missing_series`), the twin camera (twin/camera.py stat_v1) tick by tick (`RoiOcclusion`), so the
+  twin's zone_motion MISSING follows the real clips' rule (user decision Sun 18 Oct ~08:25 "Same ROI rule in twin";
+  the floor rule above stays for zones without an image ROI: the G0 stand-in camera, the body-shop shim).
 Tracks: a detector misses an occluder on some frames (MEASURED_SHIM: 32 % drops, 15 % gross errors). A hit is held
 for `hold_s` after the last frame that saw it, so a missed detection inside an occlusion never lets a "no motion"
 sample through. `hold_ticks(p_miss, eps)` sizes the hold for iid misses; a camera model with miss bursts (stat_v1)
@@ -266,9 +270,36 @@ def boxes_hit_roi(boxes, roi, pad_frac: float = ROI_PAD_FRAC) -> bool:
 def roi_missing_series(t, boxes_per_frame: Sequence, roi, hold_s: float, pad_frac: float = ROI_PAD_FRAC) -> np.ndarray:
     """(T,) bool MISSING flag for one press ROI over a clip: frame i is MISSING when a person / vehicle box of frame i
     (boxes_per_frame[i], (n_i, 4) pixels, same framing as the ROI) overlaps the ROI, held for hold_s seconds of
-    container-PTS time `t` (T,) after the last overlapping frame. Ingest sets flow / energy NaN and no stroke there."""
+    container-PTS time `t` (T,) after the last overlapping frame. Ingest sets flow / energy NaN and no stroke there.
+    The streaming form of the same rule is `RoiOcclusion` (equal output on the same input; tests/test_occlusion_missing)."""
     t = np.asarray(t, float)
     if len(boxes_per_frame) != len(t):
         raise ValueError(f"{len(boxes_per_frame)} box lists for {len(t)} frames")
     hit = np.array([boxes_hit_roi(b, roi, pad_frac) for b in boxes_per_frame], bool)
     return hold_series(t, hit, hold_s)
+
+
+class RoiOcclusion:
+    """The image-space ram-ROI rule of `roi_missing_series`, one tick at a time (the twin camera's per-press rule):
+    `hits(box)` = the box, padded `pad_frac`, overlaps the ROI (`box_hits_roi`); `step(t, hit)` = MISSING when a
+    detected occluder hit the ROI at some tick in [t - hold_s, t] (`HoldGate`). `step` must see non-decreasing t."""
+
+    def __init__(self, roi, hold_s: float, pad_frac: float = ROI_PAD_FRAC):
+        self.roi = _as_roi(roi)
+        self.pad_frac = float(pad_frac)
+        self.gate = HoldGate(1, float(hold_s))
+        self.hold_s = float(hold_s)
+
+    def reset(self) -> None:
+        self.gate.reset()
+
+    def hits(self, box) -> bool:
+        return box_hits_roi(box, self.roi, self.pad_frac)
+
+    def step(self, t: float, hit: bool) -> bool:
+        miss, _ = self.gate.step(t, np.array([bool(hit)]))
+        return bool(miss[0])
+
+    def step_boxes(self, t: float, boxes) -> bool:
+        """`step` on the (n, 4) detected person / vehicle boxes of this tick (the real ingest's per-frame input)."""
+        return self.step(t, boxes_hit_roi(boxes, self.roi, self.pad_frac))

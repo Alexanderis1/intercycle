@@ -374,6 +374,7 @@ class StubCameraV0(CameraV0):
         self.hold_s_by_camera = {int(z.camera): float(OM.OCC_HOLD_S) for z in site.zones}
         self.hold_s_by_press = {p.id: float(OM.OCC_HOLD_S) for p in site.presses}
         self.roi_vis: dict[str, dict[int, float]] | None = None
+        self.occlusion_rule = "floor"                    # no ROI: the G0 stand-in keeps the floor rule (ObsAdapter)
 
     def provenance(self) -> dict[str, Any]:
         canon = json.dumps(OM.MEASURED_SHIM, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -409,10 +410,26 @@ class ObsAdapter:
     visibility (lead decision, S3b fix1), so zone_vis = 1 while the ROI's camera is up and the ROI is in the image,
     and the walkable-floor share of rect + margin (0-0.40 on twin/site.yaml) no longer forces NaN. Presses without an
     ROI keep the floor share. The camera's own NaN (ROI occlusion in image space, T-W6) is kept. The robot is class
-    OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold): call it on every tick in time order."""
+    OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold): call it on every tick in time order.
+
+    `occlusion` (required, no default: the twin's choice is explicit) picks the T-W6 rule:
+      * "roi" (stat_v1; user decision Sun 18 Oct ~08:25 "Same ROI rule in twin"): the image-space ram-ROI rule of the
+        real clips, applied by the camera (`occlusion.RoiOcclusion`, the same code as the ingest's
+        `roi_missing_series`), is THE rule: the floor rule is off on every press (`ObsV2Converter(floor_rule=...)`),
+        the camera's NaN is kept, and a press without an ROI (`roi_vis`) is MISSING on every tick (fail closed). The
+        floor rule had marked zone_motion MISSING on P9a 100 %, P9b 99.9 %, P14a-d 74-80 % of the v1 learning ticks.
+      * "floor" (the G0 stand-in camera_v0, which has no ROI): the floor rule on every press, as before."""
+
+    OCCLUSION_RULES = ("roi", "floor")
 
     def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None,
-                 *, hold_s: float | dict[str, float], roi_vis: dict[str, dict[int, float]] | None = None):
+                 *, hold_s: float | dict[str, float], roi_vis: dict[str, dict[int, float]] | None = None,
+                 occlusion: str):
+        if occlusion not in self.OCCLUSION_RULES:
+            raise ValueError(f"occlusion must be one of {self.OCCLUSION_RULES}, got {occlusion!r}")
+        if occlusion == "roi" and not roi_vis:
+            raise ValueError("occlusion='roi' needs the camera's roi_vis (an image ram ROI per press)")
+        self.occlusion = occlusion
         # hold_s has no default: it is the camera model's own fitted hold, never a silent fallback. A dict is one hold
         # per press (stat_v1 `hold_s_by_press`: the hold of the camera that sees the press, S3b fix2); every press of
         # `press_ids` must have one (fail closed). A float is one hold for every press.
@@ -437,7 +454,11 @@ class ObsAdapter:
             hold = np.array([float(hold_s[p]) for p in self.press_ids], float)
         else:
             hold = float(hold_s)
-        self.conv = OM.ObsV2Converter(self.share, self.rects, hold_s=hold)
+        # per press: "roi" = occluded by the camera's image-space ROI rule only; "floor" = by the floor rule
+        self.rule_by_press = {pid: occlusion for pid in self.press_ids}
+        self.roi_less = np.array([occlusion == "roi" and not (roi_vis and pid in roi_vis) for pid in self.press_ids])
+        self.conv = OM.ObsV2Converter(self.share, self.rects, hold_s=hold,
+                                      floor_rule=np.array([occlusion == "floor"] * len(self.press_ids), bool))
 
     def __call__(self, d: Detections) -> OM.Observation:
         n = len(d)
@@ -452,6 +473,7 @@ class ObsAdapter:
         vis = np.where(vis > 1.0 - 1e-9, 1.0, vis)
         zm = np.array([d.zone_motion.get(p, math.nan) for p in self.press_ids], np.float64)
         zm[vis < OM.ZONE_VIS_MIN] = np.nan
+        zm[self.roi_less] = np.nan                       # "roi" rule, press without an ROI: never measured (fail closed)
         obs = OM.Observation(t=float(d.t), t_cap=float(d.t_cap), cls=np.array([OBS_CLS[c] for c in d.cls], np.int8),
                              x=np.asarray(d.x, np.float64), z=np.asarray(d.z, np.float64),
                              r=np.asarray(d.r, np.float64), heading=np.asarray(d.heading, np.float64),
@@ -542,7 +564,8 @@ class Plant:
         self.camera = make_camera(self.site, self.world_seed, self.day,
                                   stub_site=Path(p["site"]).name == STUB_SITE_FILE)
         self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"),
-                                  hold_s=dict(self.camera.hold_s_by_press), roi_vis=self.camera.roi_vis)
+                                  hold_s=dict(self.camera.hold_s_by_press), roi_vis=self.camera.roi_vis,
+                                  occlusion=self.camera.occlusion_rule)
         self.obs_path = self.run_dir / "obs_v2.jsonl"
         self._obs_f = open(self.obs_path, "w", encoding="utf-8", newline="\n")
         self._obs_buf: deque[OM.Observation] = deque()            # computed, not yet delivered (t > sim time)

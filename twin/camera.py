@@ -122,7 +122,7 @@ from typing import Any, cast
 import numpy as np
 
 from intercycle.observer.mapping import FRAME_HZ, LATENCY_S, MEASURED_SHIM
-from intercycle.observer.occlusion import OCC_EPS, ROI_PAD_FRAC
+from intercycle.observer.occlusion import OCC_EPS, ROI_PAD_FRAC, RoiOcclusion
 from twin.cam_geom import HEIGHT_M, IMG_H, IMG_W, CamGeom, _apply_h, _distort, _undistort  # noqa: F401
 from twin.cam_geom import PRESS_H_M, box_share_in_image, press_anchor, roi_box
 from twin.cam_geom import circle_prism as _circle_prism
@@ -296,6 +296,10 @@ class _Track:
 class CameraStatV1:
     """stat_v1: realised tick -> Detections (same container as camera_v0, so the plant's ObsAdapter is unchanged)."""
 
+    # the T-W6 rule the plant's ObsAdapter applies to this camera's Observation: the image-space ram-ROI rule only
+    # (applied here, `RoiOcclusion`), no floor rule (user decision Sun 18 Oct ~08:25 "Same ROI rule in twin")
+    occlusion_rule = "roi"
+
     def __init__(self, site: Site, world_seed: int, day: int = 1, params: dict | None = None,
                  hdraws: dict | None = None, trace: dict | None = None, h_mode: str = "joint",
                  latency_s: float = LATENCY_S, hz: float = FRAME_HZ, shim: dict[str, Any] | None = None):
@@ -408,6 +412,10 @@ class CameraStatV1:
             p.id: self.hold_s_by_camera[self.cam_of_framing[self.roi_framing[p.id]] if p.id in self.roi_framing
                                         else self.cam_of_zone[p.zone]] for p in site.presses}
         self.roi_last_hit: dict[str, int] = {}       # press -> last tick a DETECTED occluder covered its ROI (image)
+        # the image-space ROI rule = the real-clip ingest's rule, ONE implementation (`occlusion.RoiOcclusion`:
+        # `box_hits_roi` + the track hold; user decision Sun ~08:25 "Same ROI rule in twin"), held hold_s_by_press
+        self.roi_occ: dict[str, RoiOcclusion] = {pid: RoiOcclusion(box, self.hold_s_by_press[pid], ROI_PAD_FRAC)
+                                                 for pid, (_fid, box) in self.roi.items()}
         self.err_log: list[tuple[str, float, float]] | None = None   # tests: (mover, dx, dz) per true detection
         self.stats = {"ticks": 0, "true": 0, "seen": 0, "hidden": 0, "occluded": 0, "missed": 0, "gross": 0,
                       "fp": 0, "idsw": 0, "forklift_as_person_c9": 0, "roi_missing": 0, "roi_held": 0,
@@ -711,7 +719,8 @@ class CameraStatV1:
             if p.id not in self.roi:
                 out[p.id] = math.nan
                 continue
-            fid, (r0, s0, r1, s1) = self.roi[p.id]
+            fid = self.roi[p.id][0]
+            occ = self.roi_occ[p.id]
             dep_p = self._depth(fid, self.press_centre[p.id])
             u = float(self._rng(f"cam_motion:{p.id}", k).random())
             over, blockers = [], []                     # boxes over the ROI (any depth) / those in front of the press
@@ -724,21 +733,19 @@ class CameraStatV1:
                     if b is None:
                         continue
                     box, dep = b, self._depth(fid, (m.x, m.z))
-                x0, y0, x1, y1 = box
-                pu, pv = ROI_PAD_FRAC * (x1 - x0), ROI_PAD_FRAC * (y1 - y0)
-                if x0 - pu <= r1 and x1 + pu >= r0 and y0 - pv <= s1 and y1 + pv >= s0:
+                if occ.hits(box):                        # padded box over the ROI (occlusion.box_hits_roi)
                     over.append(m)
                     if dep < dep_p:
                         blockers.append(m)
             pool = self._pool(p)
-            if any(detected.get(m.id, False) for m in over):    # a detected box over the ROI, as the real ingest
-                out[p.id] = math.nan                              # T-W6: a detected occluder makes the ROI MISSING
-                self.roi_last_hit[p.id] = k
-                self.stats["roi_missing"] += 1
-                continue
-            if k - self.roi_last_hit.get(p.id, -10 ** 9) <= self.hold_ticks_by_camera[self.cam_of_framing[fid]]:
-                out[p.id] = math.nan                              # ... held hold_s after the last such tick (image
-                self.stats["roi_held"] += 1                       # space, as roi_missing_series in the real ingest)
+            hit = any(detected.get(m.id, False) for m in over)  # a detected box over the ROI, as the real ingest
+            if occ.step(k / self.hz, hit):                        # T-W6: MISSING, held hold_s after the last hit
+                out[p.id] = math.nan                              # (image space, as roi_missing_series)
+                if hit:
+                    self.roi_last_hit[p.id] = k
+                    self.stats["roi_missing"] += 1
+                else:
+                    self.stats["roi_held"] += 1
                 continue
             if blockers:
                 self.stats["roi_blocked_unseen"] += 1
