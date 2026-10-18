@@ -1,0 +1,673 @@
+# twin/site.yaml - CAL v1 site geometry (lane S2, contract twin.site/1, twin/schemas/site.py).
+# Written by scripts/cal_v1.py site; method, points and residuals in docs/CAL.md.
+# CAL points placed by a Claude agent from train keyframes (vision), not by a human.
+# Every source clip is an A1+ TRAIN id (twin/provenance.py checked 369 ids). Plan frame: x, z in metres; pixels in the native 1920x1080 RAW image.
+contract: twin.site/1
+site_id: esk_press_v1
+frame: plan_xz_m
+scale:
+  value: {lo: 0.5095, mid: 1.0, hi: 1.2955}
+  source: measured
+  clips: [0_te15, 0_te16, 0_te17, 0_te18, 0_te19, 0_te22, 0_te23, 0_te24, 0_te25, 0_te26, 0_te27, 0_te29, 0_te30, 0_te32,
+    0_tr104, 0_tr106, 0_tr107, 0_tr109, 0_tr110, 0_tr112, 0_tr113, 0_tr114, 0_tr116, 0_tr117, 0_tr118, 0_tr119, 0_tr120, 0_tr123,
+    0_tr124, 0_tr125, 0_tr126, 0_tr127, 0_tr128, 0_tr13, 0_tr132, 0_tr133, 0_tr135, 0_tr136, 0_tr138, 0_tr139, 0_tr140, 0_tr141,
+    0_tr142, 0_tr143, 0_tr145, 0_tr146, 0_tr147, 0_tr148, 0_tr149, 0_tr150, 0_tr151, 0_tr152, 0_tr153, 0_tr154, 0_tr155, 0_tr156,
+    0_tr157, 0_tr158, 0_tr160, 0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr166, 0_tr167, 0_tr169, 0_tr170, 0_tr171, 0_tr172,
+    0_tr173, 0_tr174, 0_tr175, 0_tr176, 0_tr177, 0_tr20, 0_tr21, 0_tr22, 0_tr23, 0_tr24, 0_tr25, 0_tr26, 0_tr27, 0_tr28, 0_tr29,
+    0_tr30, 0_tr31, 0_tr32, 0_tr33, 0_tr34, 0_tr35, 0_tr36, 0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr44, 0_tr76,
+    0_tr77, 0_tr78, 1_te10, 1_te5, 1_te7, 1_te8, 1_tr32, 1_tr33, 1_tr36, 1_tr38, 1_tr39, 1_tr40, 1_tr41, 1_tr42, 1_tr43, 1_tr44,
+    1_tr52, 1_tr53, 1_tr54, 1_tr55, 1_tr58, 1_tr59, 1_tr60, 1_tr61, 1_tr62, 1_tr63, 1_tr66, 1_tr67, 1_tr73, 1_tr76, 1_tr92,
+    2_te1, 2_te10, 2_te12, 2_te2, 2_te4, 2_te5, 2_te6, 2_te7, 2_te8, 2_te9, 2_tr1, 2_tr101, 2_tr102, 2_tr103, 2_tr105, 2_tr106,
+    2_tr107, 2_tr110, 2_tr111, 2_tr120, 2_tr121, 2_tr124, 2_tr127, 2_tr128, 2_tr129, 2_tr13, 2_tr14, 2_tr15, 2_tr16, 2_tr17,
+    2_tr18, 2_tr19, 2_tr2, 2_tr20, 2_tr21, 2_tr23, 2_tr24, 2_tr25, 2_tr27, 2_tr30, 2_tr31, 2_tr33, 2_tr34, 2_tr35, 2_tr36,
+    2_tr37, 2_tr39, 2_tr4, 2_tr40, 2_tr43, 2_tr44, 2_tr45, 2_tr46, 2_tr48, 2_tr49, 2_tr5, 2_tr50, 2_tr51, 2_tr52, 2_tr54,
+    2_tr55, 2_tr56, 2_tr57, 2_tr59, 2_tr6, 2_tr60, 2_tr64, 2_tr67, 2_tr68, 2_tr69, 2_tr7, 2_tr70, 2_tr71, 2_tr72, 2_tr73,
+    2_tr75, 2_tr76, 2_tr77, 2_tr78, 2_tr79, 2_tr8, 2_tr81, 2_tr82, 2_tr84, 2_tr86, 2_tr87, 2_tr88, 2_tr89, 2_tr9, 2_tr90,
+    2_tr91, 2_tr94, 2_tr95, 2_tr96, 2_tr97, 3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14,
+    3_tr16, 3_tr18, 3_tr2, 3_tr20, 3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32,
+    3_tr33, 3_tr35, 3_tr36, 3_tr4, 3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 4_te1, 4_te15, 4_te16, 4_te17,
+    4_te19, 4_te2, 4_te20, 4_te21, 4_te23, 4_te24, 4_te25, 4_te3, 4_te4, 4_te5, 4_te6, 4_te7, 4_te8, 4_te9, 4_tr1, 4_tr10,
+    4_tr12, 4_tr14, 4_tr2, 4_tr28, 4_tr29, 4_tr3, 4_tr30, 4_tr31, 4_tr32, 4_tr33, 4_tr34, 4_tr35, 4_tr39, 4_tr40, 4_tr41,
+    4_tr42, 4_tr43, 4_tr44, 4_tr45, 4_tr46, 4_tr49, 4_tr50, 5_te1, 5_te10, 5_te12, 5_te13, 5_te14, 5_te2, 5_te3, 5_te4, 5_te5,
+    5_te6, 5_te7, 5_te8, 5_tr1, 5_tr10, 5_tr11, 5_tr12, 5_tr17, 5_tr18, 5_tr19, 5_tr2, 5_tr20, 5_tr5, 5_tr6, 5_tr7, 5_tr8,
+    5_tr9, 6_te1, 6_te10, 6_te11, 6_te13, 6_te4, 6_te5, 6_te8, 6_te9, 6_tr1, 6_tr13, 6_tr14, 6_tr16, 6_tr17, 6_tr18, 6_tr19,
+    6_tr3, 6_tr4, 6_tr5, 6_tr6, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2, 7_tr20, 7_tr21, 7_tr22, 7_tr3,
+    7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+  note: 'factor on metric coordinates (H is built at the 4 m prior, mid = 1). Union of the per-camera intervals: camera 9
+    x1.0-1.266, camera 14 x0.5095-1.2955 (twin/cal/scale_v1.json); run the robot at both ends'
+cal_sources: [0_te15, 0_te16, 0_te17, 0_te18, 0_te19, 0_te22, 0_te23, 0_te24, 0_te25, 0_te26, 0_te27, 0_te29, 0_te30, 0_te32,
+  0_tr104, 0_tr106, 0_tr107, 0_tr109, 0_tr110, 0_tr112, 0_tr113, 0_tr114, 0_tr116, 0_tr117, 0_tr118, 0_tr119, 0_tr120, 0_tr123,
+  0_tr124, 0_tr125, 0_tr126, 0_tr127, 0_tr128, 0_tr13, 0_tr132, 0_tr133, 0_tr135, 0_tr136, 0_tr138, 0_tr139, 0_tr140, 0_tr141,
+  0_tr142, 0_tr143, 0_tr145, 0_tr146, 0_tr147, 0_tr148, 0_tr149, 0_tr150, 0_tr151, 0_tr152, 0_tr153, 0_tr154, 0_tr155, 0_tr156,
+  0_tr157, 0_tr158, 0_tr160, 0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr166, 0_tr167, 0_tr169, 0_tr170, 0_tr171, 0_tr172,
+  0_tr173, 0_tr174, 0_tr175, 0_tr176, 0_tr177, 0_tr20, 0_tr21, 0_tr22, 0_tr23, 0_tr24, 0_tr25, 0_tr26, 0_tr27, 0_tr28, 0_tr29,
+  0_tr30, 0_tr31, 0_tr32, 0_tr33, 0_tr34, 0_tr35, 0_tr36, 0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr44, 0_tr76,
+  0_tr77, 0_tr78, 1_te10, 1_te5, 1_te7, 1_te8, 1_tr32, 1_tr33, 1_tr36, 1_tr38, 1_tr39, 1_tr40, 1_tr41, 1_tr42, 1_tr43, 1_tr44,
+  1_tr52, 1_tr53, 1_tr54, 1_tr55, 1_tr58, 1_tr59, 1_tr60, 1_tr61, 1_tr62, 1_tr63, 1_tr66, 1_tr67, 1_tr73, 1_tr76, 1_tr92,
+  2_te1, 2_te10, 2_te12, 2_te2, 2_te4, 2_te5, 2_te6, 2_te7, 2_te8, 2_te9, 2_tr1, 2_tr101, 2_tr102, 2_tr103, 2_tr105, 2_tr106,
+  2_tr107, 2_tr110, 2_tr111, 2_tr120, 2_tr121, 2_tr124, 2_tr127, 2_tr128, 2_tr129, 2_tr13, 2_tr14, 2_tr15, 2_tr16, 2_tr17,
+  2_tr18, 2_tr19, 2_tr2, 2_tr20, 2_tr21, 2_tr23, 2_tr24, 2_tr25, 2_tr26, 2_tr27, 2_tr30, 2_tr31, 2_tr33, 2_tr34, 2_tr35, 2_tr36,
+  2_tr37, 2_tr39, 2_tr4, 2_tr40, 2_tr43, 2_tr44, 2_tr45, 2_tr46, 2_tr48, 2_tr49, 2_tr5, 2_tr50, 2_tr51, 2_tr52, 2_tr54, 2_tr55,
+  2_tr56, 2_tr57, 2_tr59, 2_tr6, 2_tr60, 2_tr64, 2_tr67, 2_tr68, 2_tr69, 2_tr7, 2_tr70, 2_tr71, 2_tr72, 2_tr73, 2_tr75, 2_tr76,
+  2_tr77, 2_tr78, 2_tr79, 2_tr8, 2_tr81, 2_tr82, 2_tr84, 2_tr86, 2_tr87, 2_tr88, 2_tr89, 2_tr9, 2_tr90, 2_tr91, 2_tr94, 2_tr95,
+  2_tr96, 2_tr97, 3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2,
+  3_tr20, 3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+  3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 4_te1, 4_te15, 4_te16, 4_te17, 4_te19, 4_te2, 4_te20, 4_te21,
+  4_te23, 4_te24, 4_te25, 4_te3, 4_te4, 4_te5, 4_te6, 4_te7, 4_te8, 4_te9, 4_tr1, 4_tr10, 4_tr12, 4_tr14, 4_tr2, 4_tr28, 4_tr29,
+  4_tr3, 4_tr30, 4_tr31, 4_tr32, 4_tr33, 4_tr34, 4_tr35, 4_tr39, 4_tr40, 4_tr41, 4_tr42, 4_tr43, 4_tr44, 4_tr45, 4_tr46, 4_tr49,
+  4_tr50, 5_te1, 5_te10, 5_te12, 5_te13, 5_te14, 5_te2, 5_te3, 5_te4, 5_te5, 5_te6, 5_te7, 5_te8, 5_tr1, 5_tr10, 5_tr11, 5_tr12,
+  5_tr17, 5_tr18, 5_tr19, 5_tr2, 5_tr20, 5_tr5, 5_tr6, 5_tr7, 5_tr8, 5_tr9, 6_te1, 6_te10, 6_te11, 6_te13, 6_te4, 6_te5, 6_te8,
+  6_te9, 6_tr1, 6_tr13, 6_tr14, 6_tr16, 6_tr17, 6_tr18, 6_tr19, 6_tr3, 6_tr4, 6_tr5, 6_tr6, 7_te7, 7_tr10, 7_tr15, 7_tr16,
+  7_tr17, 7_tr18, 7_tr19, 7_tr2, 7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+framings:
+- id: c9_f0
+  camera: 9
+  image_size_px:
+    value: [1920, 1080]
+    source: measured
+    clips: [0_te22, 0_tr124, 0_tr126, 0_tr127, 0_tr132, 0_tr138, 0_tr141, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54,
+      1_tr59, 1_tr61, 1_tr63, 2_te6, 2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69,
+      2_tr7, 2_tr71, 2_tr72, 2_tr76, 2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr3, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8, 5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17,
+      6_tr18]
+  K:
+    value:
+    - [1330.0, 0.0, 959.5]
+    - [0.0, 1330.0, 539.5]
+    - [0.0, 0.0, 1.0]
+    source: prior
+    note: f = 1330 px prior (vendor VFOV; range 1020-1430 not propagated), principal point = image centre (959.5, 539.5)
+  k1:
+    value: -1.6648941535462487e-07
+    source: cal_v1
+    clips: [0_te22, 0_tr124, 0_tr126, 0_tr127, 0_tr132, 0_tr138, 0_tr141, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54,
+      1_tr59, 1_tr61, 1_tr63, 2_te6, 2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69,
+      2_tr7, 2_tr71, 2_tr72, 2_tr76, 2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr3, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8, 5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17,
+      6_tr18]
+    note: division model, k1_norm -0.2945; twin/cal/k1_v1.json
+  H_img_to_floor:
+    value:
+    - [-0.0165247515, 0.0079951264, 24.5565643207]
+    - [-0.0028428938, 0.034738146, -13.1367043771]
+    - [0.000153937, 0.0036560781, 1.0]
+    source: cal_v1
+    clips: [0_te22, 0_tr124, 0_tr126, 0_tr127, 0_tr132, 0_tr138, 0_tr141, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54,
+      1_tr59, 1_tr61, 1_tr63, 2_te6, 2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69,
+      2_tr7, 2_tr71, 2_tr72, 2_tr76, 2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr3, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8, 5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17,
+      6_tr18]
+    note: undistorted px -> zone frame (x, z) m at h = 4.0 m; tilt 32.66 deg, roll 2.41 deg from agent-placed points (twin/cal/cal_points_v1.json),
+      CAL points placed by a Claude agent from train keyframes (vision), not by a human
+  mount_height_m: {value: 4.0, source: prior, note: P6 prior; camera-9 interval 4.0-5.064 m (scale_v1.json)}
+- id: c9_f1
+  camera: 9
+  image_size_px:
+    value: [1920, 1080]
+    source: measured
+    clips: [0_te15, 0_te18, 0_te26, 0_te27, 0_te32, 0_tr106, 0_tr109, 0_tr117, 0_tr118, 0_tr120, 0_tr13, 0_tr147, 0_tr148,
+      0_tr149, 0_tr153, 0_tr155, 0_tr156, 0_tr158, 0_tr160, 0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr167, 0_tr169,
+      0_tr170, 0_tr175, 0_tr176, 0_tr177, 0_tr24, 0_tr25, 0_tr27, 0_tr28, 0_tr29, 0_tr31, 0_tr32, 0_tr33, 0_tr35, 0_tr36,
+      0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr76, 0_tr78, 1_te7, 1_tr33, 1_tr36, 1_tr73, 1_tr76, 4_te15, 4_te16,
+      4_te19, 4_tr28, 4_tr30, 4_tr31, 4_tr33, 4_tr39]
+  K:
+    value:
+    - [1330.0, 0.0, 959.5]
+    - [0.0, 1330.0, 539.5]
+    - [0.0, 0.0, 1.0]
+    source: prior
+    note: f = 1330 px prior (vendor VFOV; range 1020-1430 not propagated), principal point = image centre (959.5, 539.5)
+  k1:
+    value: -1.552929248905152e-07
+    source: cal_v1
+    clips: [0_te15, 0_te18, 0_te26, 0_te27, 0_te32, 0_tr106, 0_tr109, 0_tr117, 0_tr118, 0_tr120, 0_tr13, 0_tr147, 0_tr148,
+      0_tr149, 0_tr153, 0_tr155, 0_tr156, 0_tr158, 0_tr160, 0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr167, 0_tr169,
+      0_tr170, 0_tr175, 0_tr176, 0_tr177, 0_tr24, 0_tr25, 0_tr27, 0_tr28, 0_tr29, 0_tr31, 0_tr32, 0_tr33, 0_tr35, 0_tr36,
+      0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr76, 0_tr78, 1_te7, 1_tr33, 1_tr36, 1_tr73, 1_tr76, 4_te15, 4_te16,
+      4_te19, 4_tr28, 4_tr30, 4_tr31, 4_tr33, 4_tr39]
+    note: division model, k1_norm -0.2747; twin/cal/k1_v1.json
+  H_img_to_floor:
+    value:
+    - [0.0271242857, -0.0132621849, -37.3267172978]
+    - [0.0100311123, -0.056178877, 36.3686026496]
+    - [5.69762e-05, -0.0068798686, 1.0]
+    source: cal_v1
+    clips: [0_te15, 0_te18, 0_te26, 0_te27, 0_te32, 0_tr106, 0_tr109, 0_tr117, 0_tr118, 0_tr120, 0_tr13, 0_tr147, 0_tr148,
+      0_tr149, 0_tr153, 0_tr155, 0_tr156, 0_tr158, 0_tr160, 0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr167, 0_tr169,
+      0_tr170, 0_tr175, 0_tr176, 0_tr177, 0_tr24, 0_tr25, 0_tr27, 0_tr28, 0_tr29, 0_tr31, 0_tr32, 0_tr33, 0_tr35, 0_tr36,
+      0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr76, 0_tr78, 1_te7, 1_tr33, 1_tr36, 1_tr73, 1_tr76, 4_te15, 4_te16,
+      4_te19, 4_tr28, 4_tr30, 4_tr31, 4_tr33, 4_tr39]
+    note: undistorted px -> zone frame (x, z) m at h = 4.0 m; tilt 16.19 deg, roll -0.47 deg from agent-placed points (twin/cal/cal_points_v1.json),
+      CAL points placed by a Claude agent from train keyframes (vision), not by a human
+  mount_height_m: {value: 4.0, source: prior, note: P6 prior; camera-9 interval 4.0-5.064 m (scale_v1.json)}
+- id: c14_f0
+  camera: 14
+  image_size_px:
+    value: [1920, 1080]
+    source: measured
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+  K:
+    value:
+    - [1330.0, 0.0, 959.5]
+    - [0.0, 1330.0, 539.5]
+    - [0.0, 0.0, 1.0]
+    source: prior
+    note: f = 1330 px prior (vendor VFOV; range 1020-1430 not propagated), principal point = image centre (959.5, 539.5)
+  k1:
+    value: -6.273541483006327e-08
+    source: cal_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: division model, k1_norm -0.1110; twin/cal/k1_v1.json
+  H_img_to_floor:
+    value:
+    - [-0.0316443278, 0.2627626696, 4.6125755053]
+    - [0.0309685254, 0.0943755912, -60.4847915477]
+    - [-0.0002003375, 0.009511083, 1.0]
+    source: cal_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: 'undistorted px -> zone frame (x, z) m at h = 4.0 m; tilt 25.14 deg, roll -1.21 deg from agent-placed points (twin/cal/cal_points_v1.json),
+      CAL points placed by a Claude agent from train keyframes (vision), not by a human; k1 is weak (one floor line + a short
+      column edge): the bootstrap draws k1 uniformly between this fit (k1_norm -0.111) and the c9_f0 fit (-0.295); with the
+      c9_f0 k1 the roll moves from -1.21 to -7.57 deg and the press footprint centroids move by 0.83-1.60 m (included in dilation_m)'
+  mount_height_m: {value: 4.0, source: prior, note: P6 prior; camera-14 interval 2.038-5.182 m (scale_v1.json)}
+zones:
+- id: z9
+  camera: 9
+  framings: [c9_f0, c9_f1]
+  floor_polygon:
+    value:
+    - [-0.529, -17.808]
+    - [-0.729, -14.758]
+    - [-0.579, -6.358]
+    - [0.021, -0.908]
+    - [-0.829, -0.808]
+    - [-0.529, 0.292]
+    - [-1.129, 0.242]
+    - [-1.279, 1.042]
+    - [-0.229, 3.942]
+    - [4.521, 4.592]
+    - [5.071, 3.242]
+    - [5.521, -0.308]
+    - [3.621, -0.958]
+    - [3.621, -1.808]
+    - [4.021, -4.208]
+    - [3.721, -4.458]
+    - [3.721, -4.958]
+    - [2.971, -6.708]
+    - [2.821, -17.958]
+    source: traced_v1
+    clips: [0_te15, 0_te18, 0_te22, 0_te26, 0_te27, 0_te32, 0_tr106, 0_tr109, 0_tr117, 0_tr118, 0_tr120, 0_tr124, 0_tr126,
+      0_tr127, 0_tr13, 0_tr132, 0_tr138, 0_tr141, 0_tr147, 0_tr148, 0_tr149, 0_tr153, 0_tr155, 0_tr156, 0_tr158, 0_tr160,
+      0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr167, 0_tr169, 0_tr170, 0_tr175, 0_tr176, 0_tr177, 0_tr24, 0_tr25, 0_tr27,
+      0_tr28, 0_tr29, 0_tr31, 0_tr32, 0_tr33, 0_tr35, 0_tr36, 0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr76, 0_tr78,
+      1_te7, 1_tr33, 1_tr36, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54, 1_tr59, 1_tr61, 1_tr63, 1_tr73, 1_tr76, 2_te6,
+      2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69, 2_tr7, 2_tr71, 2_tr72, 2_tr76,
+      2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te15, 4_te16, 4_te19, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr28, 4_tr3, 4_tr30, 4_tr31, 4_tr33, 4_tr39, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8,
+      5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17, 6_tr18]
+    note: union of the c9_f0 and c9_f1 visible floor (twin/cal/site_trace_v1.json), cut at 25 m from the camera nadir; origin
+      = corner of the yellow L by the walkway
+- id: z14
+  camera: 14
+  framings: [c14_f0]
+  floor_polygon:
+    value:
+    - [19.184, -11.826]
+    - [18.034, -9.776]
+    - [18.184, -5.626]
+    - [15.684, -4.176]
+    - [17.534, -1.676]
+    - [16.784, -0.826]
+    - [16.934, -0.526]
+    - [15.734, 0.624]
+    - [16.334, 2.474]
+    - [17.384, 3.374]
+    - [16.334, 4.474]
+    - [17.984, 6.624]
+    - [17.784, 7.924]
+    - [22.234, 7.774]
+    - [24.434, 5.174]
+    - [24.484, 3.724]
+    - [24.284, 2.974]
+    - [24.434, -0.826]
+    - [23.684, -3.376]
+    - [22.284, -2.326]
+    - [21.684, -3.626]
+    - [21.434, -6.126]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: c14_f0 visible floor, cut at 25 m from the camera nadir; shifted by x + 21 m so the two zones do not overlap (no
+      shared floor, P7)
+presses:
+- id: P9a
+  zone: z9
+  footprint:
+    value:
+    - [7.791, 3.885]
+    - [5.079, 3.14]
+    - [4.75, 4.684]
+    - [6.404, 5.238]
+    source: traced_v1
+    clips: [0_te22, 0_tr124, 0_tr126, 0_tr127, 0_tr132, 0_tr138, 0_tr141, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54,
+      1_tr59, 1_tr61, 1_tr63, 2_te6, 2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69,
+      2_tr7, 2_tr71, 2_tr72, 2_tr76, 2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr3, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8, 5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17,
+      6_tr18]
+    note: press OBSERVED; the 100 t eccentric press in the camera-9 foreground; floor contact traced on c9_f0 (left plinth,
+      right column foot); the front edge is cut by the frame bottom, so the footprint is a lower bound in depth (+-40 px)
+  ram_roi:
+    value:
+    - framing: c9_f0
+      polygon_px:
+      - [468.0, 612.0]
+      - [576.0, 612.0]
+      - [576.0, 720.0]
+      - [468.0, 720.0]
+    - framing: c9_f1
+      polygon_px:
+      - [576.0, 960.0]
+      - [720.0, 960.0]
+      - [720.0, 1078.0]
+      - [576.0, 1078.0]
+    source: measured
+    clips: [0_tr114, 2_tr18, 2_tr34, 2_tr37, 2_tr78, 4_te7, 4_tr33, 4_tr49, 6_te11, 6_tr17]
+    note: probe P4 ROIs (docs/probes/S3a-P4_rois.json), full-res RAW px, unchanged. clips = the 10 train clips probe P4 measured
+      this press on (P4 run, seed 20261017); P4 drew the ROIs on train keyframes and motion maps of 15-16 train clips per
+      framing whose ids it did not record
+  danger_polygon:
+    value:
+    - [3.75, 4.684]
+    - [3.826, 4.301]
+    - [4.155, 2.757]
+    - [4.372, 2.433]
+    - [4.697, 2.216]
+    - [5.079, 2.14]
+    - [5.462, 2.216]
+    - [8.174, 2.961]
+    - [8.498, 3.178]
+    - [8.715, 3.502]
+    - [8.791, 3.885]
+    - [8.715, 4.267]
+    - [8.498, 4.592]
+    - [7.111, 5.945]
+    - [6.787, 6.162]
+    - [6.404, 6.238]
+    - [6.022, 6.162]
+    - [4.368, 5.607]
+    - [4.043, 5.391]
+    - [3.826, 5.066]
+    source: traced_v1
+    clips: [0_te22, 0_tr124, 0_tr126, 0_tr127, 0_tr132, 0_tr138, 0_tr141, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54,
+      1_tr59, 1_tr61, 1_tr63, 2_te6, 2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69,
+      2_tr7, 2_tr71, 2_tr72, 2_tr76, 2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr3, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8, 5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17,
+      6_tr18]
+    note: footprint grown by 1 m ASSUMED clearance (no guard geometry observed); consumers grow it further by dilation_m (see
+      its note)
+  dilation_m:
+    value: 1.808
+    source: cal_v1
+    clips: [0_te15, 0_te18, 0_te22, 0_te26, 0_te27, 0_te32, 0_tr106, 0_tr109, 0_tr117, 0_tr118, 0_tr120, 0_tr124, 0_tr126,
+      0_tr127, 0_tr13, 0_tr132, 0_tr138, 0_tr141, 0_tr147, 0_tr148, 0_tr149, 0_tr153, 0_tr155, 0_tr156, 0_tr158, 0_tr160,
+      0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr167, 0_tr169, 0_tr170, 0_tr175, 0_tr176, 0_tr177, 0_tr24, 0_tr25, 0_tr27,
+      0_tr28, 0_tr29, 0_tr31, 0_tr32, 0_tr33, 0_tr35, 0_tr36, 0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr76, 0_tr78,
+      1_te7, 1_tr33, 1_tr36, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54, 1_tr59, 1_tr61, 1_tr63, 1_tr73, 1_tr76, 2_te6,
+      2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69, 2_tr7, 2_tr71, 2_tr72, 2_tr76,
+      2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te15, 4_te16, 4_te19, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr28, 4_tr3, 4_tr30, 4_tr31, 4_tr33, 4_tr39, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8,
+      5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17, 6_tr18]
+    note: 'p95 floor displacement of the danger-polygon vertices over 200 bootstrap draws of H (agent click sigma, traced-line
+      resampling, k1 draw for c14_f0, and the camera height drawn jointly with each draw''s tilt / roll), framings c9_f0,
+      c9_f1. CONSUMER NOTE: scale-inclusive. A consumer that applies the scale interval separately (robot run at both scale
+      ends) counts scale twice with this value; use dilation_fixed_scale_p95_m = 0.089 m instead (same draws at the 4 m prior;
+      twin/cal/cal_v1.json presses)'
+- id: P9b
+  zone: z9
+  footprint:
+    value:
+    - [11.424, -4.713]
+    - [12.824, -4.713]
+    - [12.824, -3.313]
+    - [11.424, -3.313]
+    source: assumed
+    note: 'press OBSERVED; the C-frame press behind P9a; its base is hidden behind P9a''s crown in both framings, so the footprint
+      is ASSUMED: a 1.4 m square centred on the floor point below its column in c9_f0 (pixel (340, 225), +-60 px)'
+  ram_roi:
+    value:
+    - framing: c9_f1
+      polygon_px:
+      - [396.0, 350.0]
+      - [470.0, 350.0]
+      - [470.0, 440.0]
+      - [396.0, 440.0]
+    source: measured
+    clips: [0_te25, 0_tr173, 0_tr177, 0_tr22, 0_tr33, 0_tr43, 0_tr44, 1_te7, 4_te17, 4_tr32]
+    note: probe P4 ROIs (docs/probes/S3a-P4_rois.json), full-res RAW px, unchanged. clips = the 10 train clips probe P4 measured
+      this press on (P4 run, seed 20261017); P4 drew the ROIs on train keyframes and motion maps of 15-16 train clips per
+      framing whose ids it did not record
+  danger_polygon:
+    value:
+    - [10.424, -4.713]
+    - [10.5, -5.096]
+    - [10.716, -5.42]
+    - [11.041, -5.637]
+    - [11.424, -5.713]
+    - [12.824, -5.713]
+    - [13.206, -5.637]
+    - [13.531, -5.42]
+    - [13.747, -5.096]
+    - [13.824, -4.713]
+    - [13.824, -3.313]
+    - [13.747, -2.931]
+    - [13.531, -2.606]
+    - [13.206, -2.389]
+    - [12.824, -2.313]
+    - [11.424, -2.313]
+    - [11.041, -2.389]
+    - [10.716, -2.606]
+    - [10.5, -2.931]
+    - [10.424, -3.313]
+    source: assumed
+    note: footprint grown by 1 m ASSUMED clearance (no guard geometry observed); consumers grow it further by dilation_m (see
+      its note)
+  dilation_m:
+    value: 5.443
+    source: cal_v1
+    clips: [0_te15, 0_te18, 0_te22, 0_te26, 0_te27, 0_te32, 0_tr106, 0_tr109, 0_tr117, 0_tr118, 0_tr120, 0_tr124, 0_tr126,
+      0_tr127, 0_tr13, 0_tr132, 0_tr138, 0_tr141, 0_tr147, 0_tr148, 0_tr149, 0_tr153, 0_tr155, 0_tr156, 0_tr158, 0_tr160,
+      0_tr161, 0_tr162, 0_tr163, 0_tr164, 0_tr165, 0_tr167, 0_tr169, 0_tr170, 0_tr175, 0_tr176, 0_tr177, 0_tr24, 0_tr25, 0_tr27,
+      0_tr28, 0_tr29, 0_tr31, 0_tr32, 0_tr33, 0_tr35, 0_tr36, 0_tr37, 0_tr38, 0_tr39, 0_tr40, 0_tr41, 0_tr43, 0_tr76, 0_tr78,
+      1_te7, 1_tr33, 1_tr36, 1_tr39, 1_tr41, 1_tr44, 1_tr52, 1_tr53, 1_tr54, 1_tr59, 1_tr61, 1_tr63, 1_tr73, 1_tr76, 2_te6,
+      2_tr102, 2_tr128, 2_tr25, 2_tr27, 2_tr31, 2_tr34, 2_tr36, 2_tr50, 2_tr52, 2_tr55, 2_tr69, 2_tr7, 2_tr71, 2_tr72, 2_tr76,
+      2_tr78, 2_tr81, 2_tr82, 2_tr90, 2_tr91, 2_tr94, 4_te1, 4_te15, 4_te16, 4_te19, 4_te24, 4_te4, 4_te5, 4_te7, 4_tr10,
+      4_tr28, 4_tr3, 4_tr30, 4_tr31, 4_tr33, 4_tr39, 4_tr41, 4_tr46, 5_te10, 5_te2, 5_te4, 5_te5, 5_tr11, 5_tr18, 5_tr5, 5_tr8,
+      5_tr9, 6_te9, 6_tr14, 6_tr16, 6_tr17, 6_tr18]
+    note: 'p95 floor displacement of the danger-polygon vertices over 200 bootstrap draws of H (agent click sigma, traced-line
+      resampling, k1 draw for c14_f0, and the camera height drawn jointly with each draw''s tilt / roll), plus the centre
+      placement sigma 60 px, framings c9_f0, c9_f1. CONSUMER NOTE: scale-inclusive. A consumer that applies the scale interval
+      separately (robot run at both scale ends) counts scale twice with this value; use dilation_fixed_scale_p95_m = 4.008
+      m instead (same draws at the 4 m prior; twin/cal/cal_v1.json presses)'
+- id: P14a
+  zone: z14
+  footprint:
+    value:
+    - [16.643, -5.465]
+    - [15.507, -4.632]
+    - [13.017, -8.074]
+    - [14.173, -8.821]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: press ASSUMED; front edge = base on the floor; back edge hidden (+-40 px)
+  ram_roi:
+    value:
+    - framing: c14_f0
+      polygon_px:
+      - [555.0, 130.0]
+      - [630.0, 130.0]
+      - [630.0, 215.0]
+      - [555.0, 215.0]
+    source: measured
+    clips: [3_te5, 3_tr31, 3_tr33, 3_tr40, 3_tr7, 7_te7, 7_tr15, 7_tr17, 7_tr20, 7_tr22]
+    note: probe P4 ROIs (docs/probes/S3a-P4_rois.json), full-res RAW px, unchanged. clips = the 10 train clips probe P4 measured
+      this press on (P4 run, seed 20261017); P4 drew the ROIs on train keyframes and motion maps of 15-16 train clips per
+      framing whose ids it did not record
+  danger_polygon:
+    value:
+    - [12.017, -8.074]
+    - [12.093, -8.457]
+    - [12.31, -8.781]
+    - [12.635, -8.998]
+    - [13.79, -9.745]
+    - [14.173, -9.821]
+    - [14.555, -9.745]
+    - [14.88, -9.528]
+    - [17.35, -6.172]
+    - [17.567, -5.848]
+    - [17.643, -5.465]
+    - [17.567, -5.082]
+    - [17.35, -4.758]
+    - [16.214, -3.925]
+    - [15.89, -3.708]
+    - [15.507, -3.632]
+    - [15.125, -3.708]
+    - [14.8, -3.925]
+    - [12.31, -7.367]
+    - [12.093, -7.692]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: footprint grown by 1 m ASSUMED clearance (no guard geometry observed); consumers grow it further by dilation_m (see
+      its note)
+  dilation_m:
+    value: 3.638
+    source: cal_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: 'p95 floor displacement of the danger-polygon vertices over 200 bootstrap draws of H (agent click sigma, traced-line
+      resampling, k1 draw for c14_f0, and the camera height drawn jointly with each draw''s tilt / roll), framings c14_f0.
+      CONSUMER NOTE: scale-inclusive. A consumer that applies the scale interval separately (robot run at both scale ends)
+      counts scale twice with this value; use dilation_fixed_scale_p95_m = 4.093 m instead (same draws at the 4 m prior; twin/cal/cal_v1.json
+      presses)'
+- id: P14b
+  zone: z14
+  footprint:
+    value:
+    - [16.72, -0.521]
+    - [15.573, 0.203]
+    - [13.421, -1.694]
+    - [14.543, -2.525]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: press ASSUMED; front edge = base on the floor; back edge hidden (+-40 px)
+  ram_roi:
+    value:
+    - framing: c14_f0
+      polygon_px:
+      - [860.0, 160.0]
+      - [950.0, 160.0]
+      - [950.0, 240.0]
+      - [860.0, 240.0]
+    source: measured
+    clips: [3_te5, 3_tr31, 3_tr33, 3_tr40, 3_tr7, 7_te7, 7_tr15, 7_tr17, 7_tr20, 7_tr22]
+    note: probe P4 ROIs (docs/probes/S3a-P4_rois.json), full-res RAW px, unchanged. clips = the 10 train clips probe P4 measured
+      this press on (P4 run, seed 20261017); P4 drew the ROIs on train keyframes and motion maps of 15-16 train clips per
+      framing whose ids it did not record
+  danger_polygon:
+    value:
+    - [12.421, -1.694]
+    - [12.497, -2.076]
+    - [12.714, -2.401]
+    - [13.836, -3.232]
+    - [14.161, -3.449]
+    - [14.543, -3.525]
+    - [14.926, -3.449]
+    - [15.25, -3.232]
+    - [17.427, -1.228]
+    - [17.644, -0.904]
+    - [17.72, -0.521]
+    - [17.644, -0.139]
+    - [17.427, 0.186]
+    - [17.103, 0.403]
+    - [15.956, 1.127]
+    - [15.573, 1.203]
+    - [15.191, 1.127]
+    - [14.866, 0.91]
+    - [12.714, -0.987]
+    - [12.497, -1.311]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: footprint grown by 1 m ASSUMED clearance (no guard geometry observed); consumers grow it further by dilation_m (see
+      its note)
+  dilation_m:
+    value: 2.678
+    source: cal_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: 'p95 floor displacement of the danger-polygon vertices over 200 bootstrap draws of H (agent click sigma, traced-line
+      resampling, k1 draw for c14_f0, and the camera height drawn jointly with each draw''s tilt / roll), framings c14_f0.
+      CONSUMER NOTE: scale-inclusive. A consumer that applies the scale interval separately (robot run at both scale ends)
+      counts scale twice with this value; use dilation_fixed_scale_p95_m = 3.658 m instead (same draws at the 4 m prior; twin/cal/cal_v1.json
+      presses)'
+- id: P14c
+  zone: z14
+  footprint:
+    value:
+    - [17.257, 3.328]
+    - [16.406, 4.096]
+    - [14.83, 3.227]
+    - [15.77, 2.441]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: press ASSUMED; front edge = base on the floor; back edge hidden (+-40 px)
+  ram_roi:
+    value:
+    - framing: c14_f0
+      polygon_px:
+      - [1145.0, 150.0]
+      - [1240.0, 150.0]
+      - [1240.0, 245.0]
+      - [1145.0, 245.0]
+    source: measured
+    clips: [3_te5, 3_tr31, 3_tr33, 3_tr40, 3_tr7, 7_te7, 7_tr15, 7_tr17, 7_tr20, 7_tr22]
+    note: probe P4 ROIs (docs/probes/S3a-P4_rois.json), full-res RAW px, unchanged. clips = the 10 train clips probe P4 measured
+      this press on (P4 run, seed 20261017); P4 drew the ROIs on train keyframes and motion maps of 15-16 train clips per
+      framing whose ids it did not record
+  danger_polygon:
+    value:
+    - [13.83, 3.227]
+    - [13.906, 2.844]
+    - [14.123, 2.52]
+    - [15.062, 1.734]
+    - [15.387, 1.517]
+    - [15.77, 1.441]
+    - [16.152, 1.517]
+    - [17.639, 2.404]
+    - [17.964, 2.621]
+    - [18.181, 2.946]
+    - [18.257, 3.328]
+    - [18.181, 3.711]
+    - [17.964, 4.035]
+    - [17.113, 4.803]
+    - [16.788, 5.02]
+    - [16.406, 5.096]
+    - [16.023, 5.02]
+    - [14.447, 4.151]
+    - [14.123, 3.934]
+    - [13.906, 3.61]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: footprint grown by 1 m ASSUMED clearance (no guard geometry observed); consumers grow it further by dilation_m (see
+      its note)
+  dilation_m:
+    value: 2.488
+    source: cal_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: 'p95 floor displacement of the danger-polygon vertices over 200 bootstrap draws of H (agent click sigma, traced-line
+      resampling, k1 draw for c14_f0, and the camera height drawn jointly with each draw''s tilt / roll), framings c14_f0.
+      CONSUMER NOTE: scale-inclusive. A consumer that applies the scale interval separately (robot run at both scale ends)
+      counts scale twice with this value; use dilation_fixed_scale_p95_m = 3.119 m instead (same draws at the 4 m prior; twin/cal/cal_v1.json
+      presses)'
+- id: P14d
+  zone: z14
+  footprint:
+    value:
+    - [17.79, 6.602]
+    - [16.956, 7.806]
+    - [15.51, 7.443]
+    - [16.459, 6.231]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: press ASSUMED; front edge = base on the floor behind the operator's seat; back edge hidden (+-40 px)
+  ram_roi:
+    value:
+    - framing: c14_f0
+      polygon_px:
+      - [1520.0, 110.0]
+      - [1690.0, 110.0]
+      - [1690.0, 260.0]
+      - [1520.0, 260.0]
+    source: measured
+    clips: [3_te5, 3_tr31, 3_tr33, 3_tr40, 3_tr7, 7_te7, 7_tr15, 7_tr17, 7_tr20, 7_tr22]
+    note: probe P4 ROIs (docs/probes/S3a-P4_rois.json), full-res RAW px, unchanged. clips = the 10 train clips probe P4 measured
+      this press on (P4 run, seed 20261017); P4 drew the ROIs on train keyframes and motion maps of 15-16 train clips per
+      framing whose ids it did not record
+  danger_polygon:
+    value:
+    - [14.51, 7.443]
+    - [14.587, 7.06]
+    - [14.803, 6.736]
+    - [15.752, 5.524]
+    - [16.076, 5.307]
+    - [16.459, 5.231]
+    - [16.842, 5.307]
+    - [18.173, 5.678]
+    - [18.497, 5.895]
+    - [18.714, 6.219]
+    - [18.79, 6.602]
+    - [18.714, 6.985]
+    - [18.497, 7.309]
+    - [17.663, 8.513]
+    - [17.339, 8.73]
+    - [16.956, 8.806]
+    - [16.574, 8.73]
+    - [15.128, 8.367]
+    - [14.803, 8.15]
+    - [14.587, 7.825]
+    source: traced_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: footprint grown by 1 m ASSUMED clearance (no guard geometry observed); consumers grow it further by dilation_m (see
+      its note)
+  dilation_m:
+    value: 3.029
+    source: cal_v1
+    clips: [3_te1, 3_te2, 3_te4, 3_te5, 3_te6, 3_te8, 3_tr1, 3_tr11, 3_tr12, 3_tr13, 3_tr14, 3_tr16, 3_tr18, 3_tr2, 3_tr20,
+      3_tr21, 3_tr23, 3_tr24, 3_tr25, 3_tr26, 3_tr27, 3_tr28, 3_tr3, 3_tr30, 3_tr31, 3_tr32, 3_tr33, 3_tr35, 3_tr36, 3_tr4,
+      3_tr40, 3_tr41, 3_tr44, 3_tr5, 3_tr6, 3_tr7, 3_tr8, 3_tr9, 7_te7, 7_tr10, 7_tr15, 7_tr16, 7_tr17, 7_tr18, 7_tr19, 7_tr2,
+      7_tr20, 7_tr21, 7_tr22, 7_tr3, 7_tr4, 7_tr5, 7_tr7, 7_tr8, 7_tr9]
+    note: 'p95 floor displacement of the danger-polygon vertices over 200 bootstrap draws of H (agent click sigma, traced-line
+      resampling, k1 draw for c14_f0, and the camera height drawn jointly with each draw''s tilt / roll), framings c14_f0.
+      CONSUMER NOTE: scale-inclusive. A consumer that applies the scale interval separately (robot run at both scale ends)
+      counts scale twice with this value; use dilation_fixed_scale_p95_m = 3.467 m instead (same draws at the 4 m prior; twin/cal/cal_v1.json
+      presses)'

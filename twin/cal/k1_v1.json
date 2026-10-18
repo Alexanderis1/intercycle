@@ -1,0 +1,382 @@
+{
+ "_doc": "CAL v1 lens distortion (lane S2), one division-model k1 per framing, refit on A1+ TRAIN clips only. x_u = c + (x_d - c) / (1 + k1 r_d^2), r_d in px of the 1920x1080 frame, c = image centre; k1_norm = k1 * 1330^2. Lines: twin/cal/k1_hints_v1.json traced on the per-framing median of one full-res frame from each of up to 61 seeded train clips (source_clip_ids). opencv: K and the rational dist vector for cv2.undistortPoints(P=K). Supersedes k1_v0.json (INVALID: fitted before A1+).",
+ "supersedes": "k1_v0.json",
+ "center": [
+  959.5,
+  539.5
+ ],
+ "f_norm": 1330.0,
+ "c9_f0": {
+  "lines": {
+   "A_center_yellow_stripe": {
+    "n_pts": 93,
+    "len_px": 780.1,
+    "rms_raw_px": 1.347
+   },
+   "B_green_walkway_left_yellow_line": {
+    "n_pts": 187,
+    "len_px": 1116.1,
+    "rms_raw_px": 9.002
+   },
+   "C_green_walkway_inner_yellow_line": {
+    "n_pts": 81,
+    "len_px": 480.5,
+    "rms_raw_px": 1.888
+   }
+  },
+  "k1": -1.6648941535462487e-07,
+  "k1_norm": -0.29450312682079594,
+  "at_bound": false,
+  "rms_after_px": {
+   "A_center_yellow_stripe": 1.004,
+   "B_green_walkway_left_yellow_line": 0.482,
+   "C_green_walkway_inner_yellow_line": 0.325
+  },
+  "single_line_k1_norm": {
+   "A_center_yellow_stripe": -0.2345,
+   "B_green_walkway_left_yellow_line": -0.2947,
+   "C_green_walkway_inner_yellow_line": -0.3105
+  },
+  "leave_one_out_k1_norm": {
+   "A_center_yellow_stripe": -0.2953,
+   "B_green_walkway_left_yellow_line": -0.2909,
+   "C_green_walkway_inner_yellow_line": -0.2939
+  },
+  "opencv": {
+   "K": [
+    [
+     1330.0,
+     0.0,
+     959.5
+    ],
+    [
+     0.0,
+     1330.0,
+     539.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "dist": [
+    1.2681917359580754,
+    0.3562981677469518,
+    0.0,
+    0.0,
+    0.012048423948951614,
+    1.5626946596645381,
+    0.6430573443279564,
+    0.05803079877428116
+   ],
+   "max_err_px": 7.59288618953331e-06
+  },
+  "source_clip_ids": [
+   "0_te22",
+   "0_tr124",
+   "0_tr126",
+   "0_tr127",
+   "0_tr132",
+   "0_tr138",
+   "0_tr141",
+   "1_tr39",
+   "1_tr41",
+   "1_tr44",
+   "1_tr52",
+   "1_tr53",
+   "1_tr54",
+   "1_tr59",
+   "1_tr61",
+   "1_tr63",
+   "2_te6",
+   "2_tr102",
+   "2_tr128",
+   "2_tr25",
+   "2_tr27",
+   "2_tr31",
+   "2_tr34",
+   "2_tr36",
+   "2_tr50",
+   "2_tr52",
+   "2_tr55",
+   "2_tr69",
+   "2_tr7",
+   "2_tr71",
+   "2_tr72",
+   "2_tr76",
+   "2_tr78",
+   "2_tr81",
+   "2_tr82",
+   "2_tr90",
+   "2_tr91",
+   "2_tr94",
+   "4_te1",
+   "4_te24",
+   "4_te4",
+   "4_te5",
+   "4_te7",
+   "4_tr10",
+   "4_tr3",
+   "4_tr41",
+   "4_tr46",
+   "5_te10",
+   "5_te2",
+   "5_te4",
+   "5_te5",
+   "5_tr11",
+   "5_tr18",
+   "5_tr5",
+   "5_tr8",
+   "5_tr9",
+   "6_te9",
+   "6_tr14",
+   "6_tr16",
+   "6_tr17",
+   "6_tr18"
+  ]
+ },
+ "c9_f1": {
+  "lines": {
+   "A_center_yellow_stripe": {
+    "n_pts": 43,
+    "len_px": 420.3,
+    "rms_raw_px": 1.319
+   },
+   "B_green_walkway_left_yellow_line": {
+    "n_pts": 105,
+    "len_px": 690.3,
+    "rms_raw_px": 3.086
+   },
+   "D_roof_beam_orange_pipe_lower_edge": {
+    "n_pts": 234,
+    "len_px": 1699.8,
+    "rms_raw_px": 14.392
+   }
+  },
+  "k1": -1.552929248905152e-07,
+  "k1_norm": -0.27469765483883235,
+  "at_bound": false,
+  "rms_after_px": {
+   "A_center_yellow_stripe": 1.192,
+   "B_green_walkway_left_yellow_line": 0.632,
+   "D_roof_beam_orange_pipe_lower_edge": 1.389
+  },
+  "single_line_k1_norm": {
+   "A_center_yellow_stripe": -0.226,
+   "B_green_walkway_left_yellow_line": -0.279,
+   "D_roof_beam_orange_pipe_lower_edge": -0.2746
+  },
+  "leave_one_out_k1_norm": {
+   "A_center_yellow_stripe": -0.2748,
+   "B_green_walkway_left_yellow_line": -0.2745,
+   "D_roof_beam_orange_pipe_lower_edge": -0.2765
+  },
+  "opencv": {
+   "K": [
+    [
+     1330.0,
+     0.0,
+     959.5
+    ],
+    [
+     0.0,
+     1330.0,
+     539.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "dist": [
+    1.196366699930489,
+    0.31912708442108195,
+    0.0,
+    0.0,
+    0.010352950129740218,
+    1.4710642341265427,
+    0.5723103201138977,
+    0.0491715807439593
+   ],
+   "max_err_px": 4.781355021504942e-06
+  },
+  "source_clip_ids": [
+   "0_te15",
+   "0_te18",
+   "0_te26",
+   "0_te27",
+   "0_te32",
+   "0_tr106",
+   "0_tr109",
+   "0_tr117",
+   "0_tr118",
+   "0_tr120",
+   "0_tr13",
+   "0_tr147",
+   "0_tr148",
+   "0_tr149",
+   "0_tr153",
+   "0_tr155",
+   "0_tr156",
+   "0_tr158",
+   "0_tr160",
+   "0_tr161",
+   "0_tr162",
+   "0_tr163",
+   "0_tr164",
+   "0_tr165",
+   "0_tr167",
+   "0_tr169",
+   "0_tr170",
+   "0_tr175",
+   "0_tr176",
+   "0_tr177",
+   "0_tr24",
+   "0_tr25",
+   "0_tr27",
+   "0_tr28",
+   "0_tr29",
+   "0_tr31",
+   "0_tr32",
+   "0_tr33",
+   "0_tr35",
+   "0_tr36",
+   "0_tr37",
+   "0_tr38",
+   "0_tr39",
+   "0_tr40",
+   "0_tr41",
+   "0_tr43",
+   "0_tr76",
+   "0_tr78",
+   "1_te7",
+   "1_tr33",
+   "1_tr36",
+   "1_tr73",
+   "1_tr76",
+   "4_te15",
+   "4_te16",
+   "4_te19",
+   "4_tr28",
+   "4_tr30",
+   "4_tr31",
+   "4_tr33",
+   "4_tr39"
+  ]
+ },
+ "c14_f0": {
+  "lines": {
+   "A_yellow_floor_line": {
+    "n_pts": 100,
+    "len_px": 768.0,
+    "rms_raw_px": 1.375
+   },
+   "C_white_column_left_edge_top": {
+    "n_pts": 18,
+    "len_px": 103.1,
+    "rms_raw_px": 0.354
+   }
+  },
+  "k1": -6.273541483006327e-08,
+  "k1_norm": -0.11097267529289892,
+  "at_bound": false,
+  "rms_after_px": {
+   "A_yellow_floor_line": 1.306,
+   "C_white_column_left_edge_top": 0.372
+  },
+  "single_line_k1_norm": {
+   "A_yellow_floor_line": -0.1154,
+   "C_white_column_left_edge_top": 0.4
+  },
+  "weak_fit_note": "only 2 lines (no leave-one-out): the CAL v1 bootstrap draws this framing's k1 uniformly between this fit and the c9_f0 fit (same lens model); the shift it causes is in twin/cal/cal_v1.json c14_f0_k1_alt_check",
+  "opencv": {
+   "K": [
+    [
+     1330.0,
+     0.0,
+     959.5
+    ],
+    [
+     0.0,
+     1330.0,
+     539.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "dist": [
+    0.5267683468745218,
+    0.06484547813405189,
+    0.0,
+    0.0,
+    0.0010533075825908678,
+    0.6377410220047464,
+    0.11098744052567787,
+    0.004495467939193497
+   ],
+   "max_err_px": 1.035431722172925e-08
+  },
+  "source_clip_ids": [
+   "3_te1",
+   "3_te2",
+   "3_te4",
+   "3_te5",
+   "3_te6",
+   "3_te8",
+   "3_tr1",
+   "3_tr11",
+   "3_tr12",
+   "3_tr13",
+   "3_tr14",
+   "3_tr16",
+   "3_tr18",
+   "3_tr2",
+   "3_tr20",
+   "3_tr21",
+   "3_tr23",
+   "3_tr24",
+   "3_tr25",
+   "3_tr26",
+   "3_tr27",
+   "3_tr28",
+   "3_tr3",
+   "3_tr30",
+   "3_tr31",
+   "3_tr32",
+   "3_tr33",
+   "3_tr35",
+   "3_tr36",
+   "3_tr4",
+   "3_tr40",
+   "3_tr41",
+   "3_tr44",
+   "3_tr5",
+   "3_tr6",
+   "3_tr7",
+   "3_tr8",
+   "3_tr9",
+   "7_te7",
+   "7_tr10",
+   "7_tr15",
+   "7_tr16",
+   "7_tr17",
+   "7_tr18",
+   "7_tr19",
+   "7_tr2",
+   "7_tr20",
+   "7_tr21",
+   "7_tr22",
+   "7_tr3",
+   "7_tr4",
+   "7_tr5",
+   "7_tr7",
+   "7_tr8",
+   "7_tr9"
+  ]
+ }
+}

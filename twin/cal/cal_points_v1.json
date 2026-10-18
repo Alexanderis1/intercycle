@@ -1,0 +1,62 @@
+{
+ "_doc": "CAL v1 floor points (lane S2). PLACED BY A CLAUDE AGENT FROM TRAIN KEYFRAMES (VISION), NOT BY A HUMAN (user decision U14 clause, Sun 18 Oct ~02:30: the user is asleep and delegated CAL to an agent). Each point was read by the agent on 2-3x zoomed crops, with a pixel grid, of the per-framing median background of A1+ TRAIN frames ($INTERCYCLE_DATA/cal/<framing>_bg.png, built by scripts/cal_v1.py gather; never committed) and checked against the people-masked click image out/cal_click/click_these/<framing>.jpg. uv = full-resolution pixel on the RAW (distorted) frame, at the centre line of the painted stripe; sigma_px = the agent's stated 1-sigma placement uncertainty (isotropic). No lengths are typed: none can be justified from the pictures. Floor relations (parallel / perp) refer to segments of two points, to traced lines of twin/cal/k1_hints_v1.json, or to the short stripe arms of 'line_hints' (hints placed by the agent, snapped to the sub-pixel stripe edge by intercycle.framing.trace_edge; a stripe arm's direction from its edge is far more precise than from two clicks). The zone frame: origin = 'origin' point, +z along 'axis' (in its pixel order), x = z turned 90 deg clockwise seen from above. c9_f0 and c9_f1 use the SAME physical origin (corner of the yellow L next to the green walkway) and the same axis (the walkway's left yellow line, top to bottom of the picture), so both framings map into one zone-9 frame; R2 (recess corner) is placed in both as a cross-check. NB: the click plan's c9_f1 points (cal_click_plan.json) were on a different physical L than its c9_f0 points (the recess beside the waste bins, ~400 px higher after the re-aim); this file fixes that. Rejected: vertical world edges (fence post, door frame, press columns) as roll constraints - their traces on the median background wandered (line RMS 3-5 px, one jumped edges), so they are not used.",
+ "_click_sheet_clips": {"c9_f0": "2_tr26", "c9_f1": "4_tr31", "c14_f0": "7_tr19"},
+ "c9_f0": {
+  "points": {
+   "q1": {"uv": [1672.0, 522.0], "sigma_px": 3.0, "what": "ORIGIN: corner of the yellow L (stripe centre where the L's short top arm meets its long side), right of the green walkway, just below the waste-bin recess"},
+   "q2": {"uv": [1765.0, 530.0], "sigma_px": 4.0, "what": "right end of the L's short top arm, at the wall (stripe centre of the cut end)"},
+   "q3": {"uv": [1830.7, 979.0], "sigma_px": 3.0, "what": "bottom corner of the same L (stripe centres of the long side and the bottom arm), lower right"},
+   "q4": {"uv": [1645.0, 454.0], "sigma_px": 3.0, "what": "R2: bottom corner of the waste-bin recess (stripe centres of the recess's long side and its bottom arm), check point only"}
+  },
+  "segments": {"long": ["q1", "q3"], "arm": ["q1", "q2"]},
+  "line_hints": {
+   "E_L_top_arm": [[1684, 520], [1758, 527], {"half_width": 7, "step": 2.0}],
+   "E_L_bottom_arm": [[1846, 980], [1912, 982], {"half_width": 7, "step": 2.0}],
+   "E_recess_bottom_arm": [[1655, 455], [1712, 460], {"half_width": 7, "step": 2.0}]
+  },
+  "relations": [["perp", "E_L_top_arm", "B_green_walkway_left_yellow_line"],
+                ["perp", "E_L_bottom_arm", "B_green_walkway_left_yellow_line"],
+                ["perp", "E_recess_bottom_arm", "B_green_walkway_left_yellow_line"],
+                ["parallel", "long", "B_green_walkway_left_yellow_line"],
+                ["parallel", "A_center_yellow_stripe", "B_green_walkway_left_yellow_line"]],
+  "origin": "q1",
+  "axis": "B_green_walkway_left_yellow_line",
+  "checks": {"R2": "q4"}
+ },
+ "c9_f1": {
+  "points": {
+   "q1": {"uv": [1747.5, 926.0], "sigma_px": 3.0, "what": "ORIGIN: corner of the yellow L (same physical corner as c9_f0 q1), lower right"},
+   "q2": {"uv": [1840.0, 929.0], "sigma_px": 5.0, "what": "right end of the L's short top arm at the wall"},
+   "q4": {"uv": [1720.0, 862.5], "sigma_px": 3.0, "what": "R2: bottom corner of the waste-bin recess (same physical corner as c9_f0 q4)"},
+   "q5": {"uv": [1660.0, 680.0], "sigma_px": 4.0, "what": "R1: top corner of the waste-bin recess (stripe centre where the recess's long side meets its top arm)"}
+  },
+  "segments": {"arm": ["q1", "q2"], "recess": ["q5", "q4"]},
+  "line_hints": {
+   "E_L_top_arm": [[1760, 926], [1832, 930], {"half_width": 7, "step": 2.0}],
+   "E_recess_bottom_arm": [[1732, 863], [1792, 867], {"half_width": 7, "step": 2.0}]
+  },
+  "relations": [["perp", "E_L_top_arm", "B_green_walkway_left_yellow_line"],
+                ["perp", "E_recess_bottom_arm", "B_green_walkway_left_yellow_line"],
+                ["parallel", "recess", "B_green_walkway_left_yellow_line"],
+                ["parallel", "A_center_yellow_stripe", "B_green_walkway_left_yellow_line"]],
+  "origin": "q1",
+  "axis": "B_green_walkway_left_yellow_line",
+  "checks": {"R2": "q4"}
+ },
+ "c14_f0": {
+  "points": {
+   "q1": {"uv": [505.0, 478.0], "sigma_px": 10.0, "what": "ORIGIN: estimated crossing of the faint dashed yellow line (far left) with the long yellow-and-green line; the corner itself is worn away, so it is the agent's straight-line extension of both (largest uncertainty)"},
+   "q2": {"uv": [180.0, 590.0], "sigma_px": 6.0, "what": "left end of the dashed yellow line (first visible dash, above the blue-edged plate)"},
+   "q3": {"uv": [505.0, 612.0], "sigma_px": 4.0, "what": "left end of the visible straight slab seam (light/dark slab boundary) below the long line"},
+   "q4": {"uv": [850.0, 800.0], "sigma_px": 5.0, "what": "a point further right on the same slab seam"}
+  },
+  "segments": {"dashed": ["q1", "q2"], "seam": ["q3", "q4"]},
+  "line_hints": {
+   "E_slab_seam": [[515, 617], [840, 795], {"half_width": 8, "step": 3.0}]
+  },
+  "relations": [["perp", "dashed", "A_yellow_floor_line"], ["parallel", "E_slab_seam", "A_yellow_floor_line"]],
+  "origin": "q1",
+  "axis": "A_yellow_floor_line",
+  "checks": {}
+ }
+}

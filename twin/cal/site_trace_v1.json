@@ -1,0 +1,39 @@
+{
+ "_doc": "Site tracing v1 (lane S2): polygons traced BY A CLAUDE AGENT (vision) on the per-framing median background of A1+ TRAIN frames ($INTERCYCLE_DATA/cal/<framing>_bg.png; same sources as k1_v1.json), in full-resolution RAW pixels. scripts/cal_v1.py site undistorts them with k1_v1, maps them through the CAL v1 H and writes twin/site.yaml. Polygon vertices are rough (+-20 px on clear floor edges, +-40-60 px where noted). floor = the floor the framing sees (machines, walls, stacked die plates and the far floor beyond the cut row excluded; small movable objects such as chairs, bins and stands are left in). footprint = the press base where it meets the floor. Ram ROIs come from docs/probes/S3a-P4_rois.json unchanged.",
+ "far_cut_m": 25.0,
+ "floor": {
+  "c9_f0": [[640, 1078], [1918, 1078], [1918, 640], [1850, 560], [1760, 560], [1760, 470], [1640, 452], [1600, 275], [1540, 160], [1240, 160], [1150, 210], [1100, 400], [800, 420], [720, 600], [650, 790]],
+  "c9_f1": [[880, 1078], [1850, 1078], [1840, 930], [1700, 880], [1690, 640], [1600, 450], [1510, 340], [1400, 340], [1320, 610], [1200, 620], [1190, 800], [890, 830]],
+  "c14_f0": [[0, 470], [0, 600], [270, 820], [330, 930], [520, 1078], [1400, 1078], [1530, 890], [1690, 650], [1480, 600], [1300, 455], [1120, 455], [1100, 400], [980, 345], [820, 350], [810, 340], [700, 340], [680, 270], [550, 280], [440, 290], [290, 240], [150, 235], [145, 345], [220, 400], [220, 455]]
+ },
+ "presses": {
+  "P9a": {"zone": "z9", "framing": "c9_f0", "status": "OBSERVED",
+          "footprint_px": [[115, 790], [650, 785], [570, 1078], [150, 1078]],
+          "note": "the 100 t eccentric press in the camera-9 foreground; floor contact traced on c9_f0 (left plinth, right column foot); the front edge is cut by the frame bottom, so the footprint is a lower bound in depth (+-40 px)"},
+  "P9b": {"zone": "z9", "framing": "c9_f0", "status": "OBSERVED",
+          "centre_px": [340, 225], "centre_sigma_px": 60.0, "size_m": [1.4, 1.4],
+          "note": "the C-frame press behind P9a; its base is hidden behind P9a's crown in both framings, so the footprint is ASSUMED: a 1.4 m square centred on the floor point below its column in c9_f0 (pixel (340, 225), +-60 px)"},
+  "P14a": {"zone": "z14", "framing": "c14_f0", "status": "ASSUMED",
+           "footprint_px": [[555, 268], [668, 262], [650, 200], [560, 205]],
+           "note": "front edge = base on the floor; back edge hidden (+-40 px)"},
+  "P14b": {"zone": "z14", "framing": "c14_f0", "status": "ASSUMED",
+           "footprint_px": [[835, 345], [960, 335], [950, 270], [840, 275]],
+           "note": "front edge = base on the floor; back edge hidden (+-40 px)"},
+  "P14c": {"zone": "z14", "framing": "c14_f0", "status": "ASSUMED",
+           "footprint_px": [[1125, 450], [1255, 445], [1250, 380], [1130, 385]],
+           "note": "front edge = base on the floor; back edge hidden (+-40 px)"},
+  "P14d": {"zone": "z14", "framing": "c14_f0", "status": "ASSUMED",
+           "footprint_px": [[1490, 590], [1700, 600], [1690, 520], [1500, 515]],
+           "note": "front edge = base on the floor behind the operator's seat; back edge hidden (+-40 px)"}
+ },
+ "danger_clearance_m": 1.0,
+ "p4_clips": {
+  "_doc": "the 10 A1+ TRAIN clips probe P4 measured each press on (P4 run fe65352, scripts/p4_press_probe.py run --per-camera 10 --seed 20261017, out/p4/summary.json of that run); source tag of ram_roi. P4 drew the ROIs on train keyframes and motion maps of 15-16 train clips per framing whose ids it did not record.",
+  "P9a": ["0_tr114", "2_tr18", "2_tr34", "2_tr37", "2_tr78", "4_te7", "4_tr33", "4_tr49", "6_te11", "6_tr17"],
+  "P9b": ["0_te25", "0_tr173", "0_tr177", "0_tr22", "0_tr33", "0_tr43", "0_tr44", "1_te7", "4_te17", "4_tr32"],
+  "P14a": ["3_te5", "3_tr31", "3_tr33", "3_tr40", "3_tr7", "7_te7", "7_tr15", "7_tr17", "7_tr20", "7_tr22"],
+  "P14b": ["3_te5", "3_tr31", "3_tr33", "3_tr40", "3_tr7", "7_te7", "7_tr15", "7_tr17", "7_tr20", "7_tr22"],
+  "P14c": ["3_te5", "3_tr31", "3_tr33", "3_tr40", "3_tr7", "7_te7", "7_tr15", "7_tr17", "7_tr20", "7_tr22"],
+  "P14d": ["3_te5", "3_tr31", "3_tr33", "3_tr40", "3_tr7", "7_te7", "7_tr15", "7_tr17", "7_tr20", "7_tr22"]
+ }
+}
