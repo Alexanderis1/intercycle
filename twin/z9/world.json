@@ -1,0 +1,1 @@
+{"empty": false, "n_boxes": 9, "n_tris": 108, "res": 0.1, "extent": [-0.2, -0.2, 14.2, 10.2], "dock": [1.0, 1.0], "frames": "ROS x = plan x, ROS y = plan z, z up; psi = pi/2 - plan_yaw"}

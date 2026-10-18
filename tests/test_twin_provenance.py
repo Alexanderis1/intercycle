@@ -88,19 +88,29 @@ def test_active_split_pointer(tmp_path):
         PR.active_split_path(tmp_path)
     (tmp_path / "prereg" / "split.csv").write_text(_split_text([("a", "g", "train")]), encoding="utf-8")
     assert PR.active_split_path(tmp_path).name == "split.csv"
-    (tmp_path / "prereg" / "ACTIVE_SPLIT").write_text("# amended at A1+\nprereg/split_a1.csv\n", encoding="utf-8")
+    (tmp_path / "prereg" / "ACTIVE_SPLIT").write_text("# amended at A1+\nsplit_a1.csv\n", encoding="utf-8")
     with pytest.raises(FileNotFoundError):
         PR.active_split_path(tmp_path)                                    # named file missing: fail closed
     (tmp_path / "prereg" / "split_a1.csv").write_text(_split_text([("a", "g", "dev")]), encoding="utf-8")
     assert PR.load_active_split(tmp_path)["a"].split == "dev"
+    for bad in ("prereg/split_a1.csv", "../split_a1.csv", "split_a1.txt"):   # a bare .csv name inside prereg/ only
+        (tmp_path / "prereg" / "ACTIVE_SPLIT").write_text(bad + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="bad prereg/ACTIVE_SPLIT entry"):
+            PR.active_split_path(tmp_path)
 
 
 def test_repo_active_split_parses_if_present():
-    try:
-        rows = PR.load_active_split()
-    except FileNotFoundError:
+    if not (PR.REPO / "prereg" / "ACTIVE_SPLIT").exists() and not (PR.REPO / "prereg" / "split.csv").exists():
         pytest.skip("no split committed on this branch yet")
+    rows = PR.load_active_split()                                         # a committed split must resolve
     assert rows and {r.split for r in rows.values()} <= {"train", "dev", "test"}
+
+
+def test_active_split_agrees_with_the_esk_loader():
+    from intercycle import esk
+    if not (PR.REPO / "prereg" / "ACTIVE_SPLIT").exists() and not (PR.REPO / "prereg" / "split.csv").exists():
+        pytest.skip("no split committed on this branch yet")
+    assert PR.active_split_path() == esk.active_split_path()
 
 
 # ------------------------------------------------------------------------------------------------ train-only check
