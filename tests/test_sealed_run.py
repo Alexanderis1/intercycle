@@ -20,6 +20,7 @@ assert _spec and _spec.loader
 SR = importlib.util.module_from_spec(_spec)
 sys.modules["sealed_run_script"] = SR
 _spec.loader.exec_module(SR)
+_REAL_CLIPS_ROOTS = SR.CLIPS_STAGE_ROOTS      # before any fixture swaps in the stand-in roots
 
 from twin.rng import check_world_seed  # noqa: E402
 from twin.schemas.labels import SampleItem, sample_items_sha256  # noqa: E402
@@ -409,6 +410,37 @@ def test_run_sets_the_flag_only_after_the_refusals_and_writes_runlog(c):
     assert st["status"] == "done" and st["n_clips"] == 2 and st["ingest"] == "intercycle.perception.esk_ingest.ingest_clip"
     assert (s["root"] / "perc" / "attempt_001" / "tracks" / "0_te1.parquet").read_bytes() == b"tclip zero"
     assert rec["stages"]["clips"]["outputs_sha256"]["tracks/0_te1.parquet"] == sha(b"tclip zero")
+
+
+def test_double_stage_runs_after_the_refusals_with_the_test_seeds(s):
+    """The CPU-double stage (cut design) gets the 16 revealed test seeds, a fresh runs root, and the sealed flag."""
+    seen = {}
+
+    def fake_double(out, seeds):
+        seen.update(out=out, seeds=seeds, flag=os.environ.get(SR.SEALED_ENV))
+        return {"runs_root": str(out / "runs"), "invalid": str(out / "runs" / "invalid_all.json"), "n_missions": 192,
+                "usd": 0.0, "wall_s": 1.0}
+
+    try:
+        rec = SR.run(s["repo"], s["root"], ["double"], fake_fetch, fake_runner, double_runner=fake_double)
+    finally:
+        os.environ.pop(SR.SEALED_ENV, None)
+    assert seen["flag"] == "1" and len(seen["seeds"]) == 16 and all(v > 999 for v in seen["seeds"])
+    RB = SR._robot_module()                   # scripts/sealed_robot.py: the robot stage lives outside sealed_run.py
+    assert seen["out"] == s["repo"] / RB.DOUBLE_OUT / "attempt_001"
+    assert rec["stages"]["double"]["status"] == "done" and rec["stages"]["double"]["n_missions"] == 192
+    with pytest.raises(RB.StageRefusal, match="sealed flag"):
+        RB.run_double_stage(s["repo"], 9, [1000] * 16, fake_double)   # never outside an attempt
+    with pytest.raises(RB.StageRefusal, match="not wired"):
+        RB.run_stage("isaac", {"attempt": 1, "seeds": {"seed_ints": [1000] * 16}})
+
+
+def test_robot_stage_module_is_outside_the_realclip_closure():
+    """Wiring / fixing the double stage after FREEZE_REALCLIP must not touch a real-clip input (robot check 5)."""
+    closure = SR.import_closure(REPO, "HEAD", _REAL_CLIPS_ROOTS)
+    assert "scripts/sealed_run.py" in closure
+    assert not {"scripts/sealed_robot.py", "scripts/run_double.py", "intercycle/eval/twin_batch.py",
+                "twin/plant.py"} & closure
 
 
 def test_upload_check_rejects_changed_bytes():
@@ -930,7 +962,8 @@ def test_robot_refuses_without_freeze_realclip_or_when_it_is_not_an_ancestor_of_
         SR.check_realclip_unchanged(repo, SR.read_freeze(repo))
 
 
-def test_robot_stages_are_refused_until_wired(s):
+def test_robot_stages_are_refused_until_wired(s, monkeypatch):
+    monkeypatch.setattr(SR, "ROBOT_MODULE", "sealed_robot_missing")     # no robot module -> refused before anything
     with pytest.raises(SR.Refusal, match="not wired"):
         SR.run(s["repo"], s["root"], ["double"], fake_fetch, fake_runner)
     assert os.environ.get(SR.SEALED_ENV) is None and not (s["repo"] / SR.RUNLOG).exists()

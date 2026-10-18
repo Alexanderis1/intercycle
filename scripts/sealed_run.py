@@ -19,7 +19,7 @@ SPLIT FREEZE (USER DECISION, Sun ~07:00 CEST). There are two freezes and each st
   The 09:15 real-clip run is therefore made from a DETACHED WORKTREE at the commit that wrote prereg/FREEZE_REALCLIP
   (`git worktree add --detach <dir> <that commit>`, then `run --stages clips` from <dir>), never from main once the
   robot work has moved on (docs/probes/CUSTODIAN_STEPS.md, "Real-clip run at 09:15").
-* the ROBOT freeze `prereg/FREEZE` (~10:15), checked by the robot stages (`double`, `isaac`) by refusals 1-4 below
+* the ROBOT freeze `prereg/FREEZE` (~10:15), checked by the robot stage (`double`; Isaac stays outside sealed_run) by refusals 1-4 below
   as before, plus TEST_SEED_COMMIT, plus:
   5. prereg/FREEZE_REALCLIP exists, names a commit that is an ancestor of the FREEZE commit, and NO real-clip input
      differs between FREEZE_REALCLIP and FREEZE: the static import closure of the clips stage (CLIPS_STAGE_ROOTS and
@@ -79,7 +79,12 @@ is a new attempt with its own records; nothing earlier is rewritten.
   scripts/sealed_ingest.py, shipped with `add_local_python_source` and imported by name in the container (not
   cloudpickled: the client and image Pythons differ). Outputs go to a FRESH <sealed-root>/perc/attempt_<NNN>/ per
   attempt (test tracks never enter the repo); only their sha256 go into RUNLOG.
-* the CPU-double and Isaac batches belong to the EVAL runner; their stages are not wired here yet (refused).
+* `double`: the sealed CPU-double batch (USER DECISION Sun ~07:00 CEST, the CUT design: static, learned, reactive x 16
+  test worlds x days 9-10 x zones = 192 missions), run by scripts/sealed_robot.py (ROBOT_MODULE, imported by name so
+  it stays outside the real-clip closure) through scripts/run_double.py `run_sealed` with the 16 revealed test seeds
+  (world i = seed_ints[i]) after every refusal passed (so after the robot FREEZE), into a FRESH
+  <repo>/out/sealed_double/attempt_<NNN>/ (the twin_eval runs root is its runs/). run_double refuses unless the
+  sealed flag is set. Isaac stays outside sealed_run (descriptive only; refused here).
 
 `dev-dry-run` exercises the clips stage end to end on DEV clips before the sealed run: it copies the named clips (each
 must be a `dev` row of the active split) from $INTERCYCLE_DATA/clips into a scratch dev root (never the sealed root),
@@ -146,9 +151,11 @@ PERC_IMAGE_MODULE = "cloud/modal_perc.py"   # the dev batch: its image (detector
 DRAND_URL = "https://api.drand.sh"
 CLIPS_PER_CALL = 16                         # one detector load per call; 126 clips -> 8 calls
 CLIP_STAGES = ("clips",)
-ROBOT_STAGES = ("double", "isaac")
+# The robot stages sealed_run runs: only the CPU double (USER DECISION Sun ~07:00 CEST: Isaac, movers and A-lite are
+# descriptive and stay OUTSIDE sealed_run; an "isaac" stage is refused as not wired).
+ROBOT_STAGES = ("double",)
 STAGES = CLIP_STAGES + ROBOT_STAGES
-ROBOT_MODULE = "sealed_robot"               # scripts/sealed_robot.py: run_stage(stage, record) -> dict (not yet written)
+ROBOT_MODULE = "sealed_robot"               # scripts/sealed_robot.py: run_stage(stage, record, repo=, double_runner=)
 # Robot check 5: the real-clip inputs that must be byte-identical between FREEZE_REALCLIP and FREEZE. The import closure
 # is walked from these roots (static `import` / `from` statements, also inside functions; a root missing from a tree is
 # skipped: an added or removed file shows in the diff anyway). esk_ingest is a root because the container imports it by
@@ -822,10 +829,12 @@ def _now_iso() -> str:
 
 
 def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str], dict] = drand_fetch,
-        runner: Callable[[list[list[dict]]], list[dict]] | None = None) -> dict:
+        runner: Callable[[list[list[dict]]], list[dict]] | None = None,
+        double_runner: Callable[[Path, list[int]], dict] | None = None) -> dict:
     """One sealed attempt: refusals, then a `started` RUNLOG record, the stages, and the closing record. The clips
     stage checks prereg/FREEZE_REALCLIP (preflight_clips); the robot stages check prereg/FREEZE (preflight); one
-    attempt never mixes them (they are frozen at different commits)."""
+    attempt never mixes them (they are frozen at different commits). `double_runner` (tests) stands in for
+    scripts/run_double.py run_sealed inside the robot module."""
     bad = sorted(set(stages) - set(STAGES))
     if bad or not stages:
         raise Refusal(f"stages {bad or stages} are not wired in sealed_run.py (known: {list(STAGES)})")
@@ -851,12 +860,14 @@ def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str],
     cur = stages[0]
     try:
         if "clips" in stages:
+            cur = "clips"
             results["clips"] = dict(run_clips(sealed_root, jobs, runner or modal_runner, sealed_root / perc_rel),
                                     status="done")
         for st in robot:
             cur = st
             assert robot_mod is not None
-            results[st] = dict(robot_mod.run_stage(st, dict(start)), status="done")
+            results[st] = dict(robot_mod.run_stage(st, dict(start), repo=repo, double_runner=double_runner),
+                               status="done")
     except Exception as e:  # noqa: BLE001 - recorded, then re-raised
         results[cur] = {"status": "error", "error": repr(e)}
         append_runlog(repo, known, {"attempt": attempt, "status": "error", "timestamp": _now_iso(),

@@ -52,7 +52,7 @@ TRUTH_PRODUCERS = (
 # Files that name truth paths without opening them (contracts, this guard).
 CONTRACT_FILES = ("twin/truth_guard.py", "twin/schemas/")
 # Process launchers that may import truth modules to start the plant / generator (they never open truth themselves).
-ORCHESTRATORS = ("scripts/slice.py", "scripts/sealed_run.py")
+ORCHESTRATORS = ("scripts/slice.py", "scripts/sealed_run.py", "scripts/run_double.py")
 # Modules whose import gives access to truth.
 TRUTH_MODULES = ("twin.engine", "twin.plant", "twin.camera", "twin.camera_v0", "twin.oracle_feed", "twin.daygen",
                  "twin.daygen_stub", "twin.margin_calib", "twin.eval_metrics")
