@@ -1,0 +1,50 @@
+{
+ "_doc": "CAL v0 click plan (lane S2 calprep): which TRAIN keyframe per framing the user clicks on, which 4 floor points, and which relations to type. Pixel positions are full-resolution (1920x1080) positions on the RAW (distorted) people-masked frame, read by eye to about +-8 px: they only place the numbered markers of the guide image. The user's own clicks are the data. Written by scripts/cal_click_prep.py, which turns this file into the guide images and README.txt in out/cal_click/. Metres: only the painted stripe width of 0.10 m is given, and that is the P6 assumption (S3a-P6.md), not a measurement; every other length stays untyped because the images give none that can be justified. Scale of H comes from the 4 m camera-height prior (PLAN_TWIN section 3 P6 and CAL v0).",
+ "stripe_width_m": 0.10,
+ "framings": {
+  "c9_f0": {
+   "keyframe": "2_tr26_k2",
+   "why": "252 train clips (the biggest framing); this frame has only a few people (masked, top left, none on the floor you click) and the whole green walkway, the yellow stripes and the open floor in view; sharp (Laplacian variance 1161; least masked area among the sharper half of the 504 train keyframes of this framing).",
+   "k1_note": "own k1 from twin/cal/k1_v0.json (k1_norm -0.294, 3 lines).",
+   "region": "the right third of the picture: the green walkway with the yellow line that makes a rectangular notch (a grey rectangle bordered by a yellow L) at the right edge.",
+   "points": [
+    {"id": "p1", "uv": [1672, 518], "what": "top-left corner of the yellow L: the middle of the stripe where its short top arm meets the long line, right of the green walkway at about one-half of the picture height", "x_m": 0.0, "y_m": 0.0, "relation": "ORIGIN. Long line p1-p3 runs down the picture along the inner yellow line; the top arm runs to the right from p1 and is at 90 degrees to p1-p3 on the floor."},
+    {"id": "p2", "uv": [1762, 526], "what": "right end of that short top arm (centre of the stripe's cut end, next to the wall)", "x_m": null, "y_m": 0.0, "relation": "On the top arm through p1, at 90 degrees to the line p1-p3. Length p1-p2 NOT known: leave blank."},
+    {"id": "p3", "uv": [1836, 979], "what": "bottom-left corner of the same yellow L, low on the right (middle of the stripe at the corner)", "x_m": 0.0, "y_m": null, "relation": "On the same straight long yellow line as p1 (collinear with p1). Length p1-p3 NOT known: leave blank."},
+    {"id": "p4", "uv": [1905, 981], "what": "a point on the bottom arm of the L, as far right as you can still see the stripe, about 70 px right of p3", "x_m": null, "y_m": null, "relation": "On the bottom arm through p3 (this arm runs at 90 degrees to p1-p3, so it is parallel to the top arm p1-p2). Any point on the arm is fine."}
+   ],
+   "extra": [
+    {"id": "p5", "uv": [1722, 521], "what": "OPTIONAL pair p5 and p6. p5 = upper edge of the top arm stripe at its middle, p6 = lower edge of the same stripe straight below it (click p6 right after p5). Only if both edges are clear at full zoom.", "relation": "p5 and p6 are the two edges of the SAME yellow stripe, 0.10 m apart (ASSUMED stripe width)."}
+   ],
+   "also_seen": "The press data plate reads EKSANTRIK PRES, TONAJ 100 TON, TABLA 670 X 1100 (full-res x 330-450, y 370-440). The bed is hidden in the die opening and is not at floor height, so it cannot be clicked as a floor point."
+  },
+  "c9_f1": {
+   "keyframe": "4_tr31_k1",
+   "why": "109 train clips (camera 9 after it was re-aimed); sharp (Laplacian variance 1552) and among the least masked of the 218 train keyframes of this framing, with a clear floor along the green walkway. It has many far-away people, all masked (dark boxes), none on the walkway notch.",
+   "k1_note": "NO k1 of its own: c9_f1 had no train clip in the original split. The undistorted copy uses the k1 of c9_f0 (same camera 9, same fixed 4.0 mm lens). PROVISIONAL.",
+   "region": "the right third of the picture: the green walkway, with the same rectangular notch as in c9_f0 (a grey rectangle bordered by a yellow L), lower right.",
+   "points": [
+    {"id": "p1", "uv": [1650, 677], "what": "top-left corner of the first yellow L, just left of the row of waste bins at the end of the green walkway (middle of the stripe at the corner)", "x_m": 0.0, "y_m": 0.0, "relation": "ORIGIN. Long line p1-p3 runs down the picture along the inner yellow line; the short top arm runs to the right from p1 at 90 degrees to p1-p3 on the floor."},
+    {"id": "p2", "uv": [1688, 680], "what": "right end of that short top arm (centre of the stripe's cut end)", "x_m": null, "y_m": 0.0, "relation": "On the top arm through p1, at 90 degrees to p1-p3. Length p1-p2 NOT known: leave blank."},
+    {"id": "p3", "uv": [1721, 862], "what": "bottom-left corner of the same yellow L (middle of the stripe at the corner), near the white plastic canisters", "x_m": 0.0, "y_m": null, "relation": "On the same straight long yellow line as p1 (collinear with p1). Length p1-p3 NOT known: leave blank."},
+    {"id": "p4", "uv": [1790, 866], "what": "a point on the bottom arm of the L, as far right as you can still see the stripe", "x_m": null, "y_m": null, "relation": "On the bottom arm through p3 (at 90 degrees to p1-p3, parallel to the top arm p1-p2). Any point on the arm is fine."}
+   ],
+   "extra": [],
+   "also_seen": "A pallet-sized frame with red and white parts stands on the floor at the centre (full-res x 1330-1530, y 600-660). Its size is not known, so it is not used."
+  },
+  "c14_f0": {
+   "keyframe": "7_tr19_k2",
+   "why": "55 train clips. Camera 14 is the weak framing: the floor has ONE long painted line (worn yellow with a green edge) and slab seams. This frame has almost no masked area (one person at the right and one small box at the top, all away from the line) and the line is fully in view.",
+   "k1_note": "own k1 from twin/cal/k1_v0.json (k1_norm -0.118, 2 lines, weak).",
+   "region": "the whole floor in the lower two thirds of the picture: the long yellow line that runs from the left-centre to the black steel plate at the lower right, and a fainter dashed yellow line at the far left.",
+   "points": [
+    {"id": "p1", "uv": [502, 478], "what": "ESTIMATE where the faint dashed yellow line (far left) would meet the long yellow-and-green line. The corner itself is worn away: click the point where you judge the two lines cross (marker is the straight-line extension of both).", "x_m": 0.0, "y_m": 0.0, "relation": "ORIGIN. Corner of two painted lines, taken as 90 degrees on the floor. If you cannot judge it, click on the long yellow line at its left end and say so in the note."},
+    {"id": "p2", "uv": [1495, 929], "what": "right end of the long yellow line, where it runs into the black steel plate (lower right)", "x_m": 0.0, "y_m": null, "relation": "On the long painted line through p1 (same straight line as p1). Length NOT known: leave blank."},
+    {"id": "p3", "uv": [243, 567], "what": "left end of the dashed yellow line (far left, above the blue-edged black plate): the first yellow dash you can see", "x_m": null, "y_m": 0.0, "relation": "On the dashed painted line through p1, which is at 90 degrees to the long line on the floor. Length NOT known: leave blank."},
+    {"id": "p4", "uv": [267, 814], "what": "the sharp right-hand corner of the blue-edged black steel plate on the left (where its top edge meets the floor)", "x_m": null, "y_m": null, "relation": "A floor corner of a flat steel plate lying on the floor. No relation to the lines is claimed; it only spreads the points over the image."}
+   ],
+   "extra": [],
+   "also_seen": "Slab seams cross the floor, but their spacing is not known. The black plates with bolt holes (lower left and lower right) are die plates lying on the floor; their size is not known."
+  }
+ }
+}
