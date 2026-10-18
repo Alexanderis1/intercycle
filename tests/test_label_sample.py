@@ -28,12 +28,22 @@ def _inv() -> pd.DataFrame:
         for k in range(n):
             rows.append(dict(clip_id=f"3_{g}_{k}", camera=14, framing_id="c14_f0", group_id=g, duration=dur,
                              split="dev"))
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    df["sha256"] = [f"{i:064x}" for i in range(len(df))]       # all distinct
+    return df
+
+
+def _inv_with_copies() -> pd.DataFrame:
+    """_inv() plus byte-identical copies (same sha256, other clip id) of three camera-9 clips."""
+    inv = _inv()
+    src = pd.DataFrame(inv[inv["clip_id"].isin(["0_c9_a0_0", "0_c9_a1_0", "0_c9_a2_1"])]).copy()
+    src["clip_id"] = ["9_copy_" + c for c in src["clip_id"]]
+    return pd.DataFrame(pd.concat([inv, src], ignore_index=True))
 
 
 def _pts(inv: pd.DataFrame):
     dur = dict(zip(inv.clip_id, inv.duration))
-    return lambda cid: [round(i / 25.0, 6) for i in range(int(dur[cid] * 25))]   # 25 fps from 0
+    return lambda cid: [round(i / 25.0, 6) for i in range(int(round(dur[cid] * 25)))]   # 25 fps from 0
 
 
 PRESSES = {"P9a": ["c9_f0", "c9_f1"], "P9b": ["c9_f1"]}
@@ -114,3 +124,80 @@ def test_hash_file_lines():
     sl = _build()
     txt = LS.hash_text(sl, b"{}")
     assert txt.splitlines()[0].startswith(sl.items_sha256)
+
+
+def test_refuses_inventory_rows_outside_dev():
+    inv = _inv()
+    inv.loc[0, "split"] = "test"
+    with pytest.raises(ValueError, match="inventory rows outside dev"):
+        LS.build_sample_list(inv, _pts(inv), PRESSES, split="dev", seed=1, n_frames={9: 1, 14: 1},
+                             n_windows={"P9a": 1}, n_reserve=0)
+    base = _build()
+    with pytest.raises(ValueError, match="inventory rows outside dev"):
+        LS.build_supplement(inv, _pts(inv), PRESSES, base, split="dev", seed=1, n_windows={"P9a": 1},
+                            n_reserve={}, n_frames={})
+
+
+def test_dedupe_keeps_one_clip_per_sha256_and_fails_closed_without_sha():
+    inv = _inv_with_copies()
+    d = LS.dedupe_by_sha(inv)
+    assert len(d) == len(_inv()) and d["sha256"].is_unique
+    assert not d["clip_id"].str.startswith("9_copy_").any()   # the smallest clip_id of each set is kept
+    with pytest.raises(ValueError, match="sha256"):
+        LS.dedupe_by_sha(inv.drop(columns=["sha256"]))
+
+
+def test_sample_list_never_samples_two_byte_copies():
+    inv = _inv_with_copies()
+    sl = LS.build_sample_list(inv, _pts(inv), PRESSES, split="dev", seed=3, n_frames={9: 12, 14: 6},
+                              n_windows={"P9a": 4, "P9b": 2}, n_reserve=1)
+    sha = dict(zip(inv.clip_id, inv.sha256))
+    assert not any(i.clip_id.startswith("9_copy_") for i in sl.items)
+    for press in ("P9a", "P9b"):
+        s = [sha[i.clip_id] for i in sl.items if i.kind == "stroke_window" and i.press == press]
+        assert len(s) == len(set(s))
+    fr = [(sha[i.clip_id], i.t_pts) for i in sl.items if i.kind == "frame"]
+    assert len(fr) == len(set(fr))
+
+
+def _supplement(inv, base, seed=11, presses=None, **kw):
+    args = dict(n_windows={"P9a": 1, "P9b": 1}, n_reserve={"P9a": 1}, n_frames={9: 1})
+    args.update(kw)
+    return LS.build_supplement(inv, _pts(inv), presses or {"P9a": ["c9_f0"], "P9b": ["c9_f1"]}, base,
+                               split="dev", seed=seed, **args)
+
+
+def test_supplement_excludes_base_sha_per_press_and_restricts_framings():
+    inv = _inv_with_copies()
+    # a base list drawn the OLD way (no dedupe) may name byte copies; the supplement maps them through sha256
+    base = LS.build_sample_list(inv, _pts(inv), PRESSES, split="dev", seed=5, n_frames={9: 6, 14: 2},
+                                n_windows={"P9a": 2, "P9b": 2}, n_reserve=0, dedupe=False)
+    sup = _supplement(inv, base)
+    S.SampleList.model_validate(sup.model_dump(mode="json"))
+    assert sup.items_sha256 == _supplement(inv, base).items_sha256          # deterministic
+    sha = dict(zip(inv.clip_id, inv.sha256))
+    fr_of = dict(zip(inv.clip_id, inv.framing_id))
+    for it in sup.items:
+        assert not it.clip_id.startswith("9_copy_")
+        if it.kind == "stroke_window":
+            used = {sha[b.clip_id] for b in base.items if b.kind == "stroke_window" and b.press == it.press}
+            assert sha[it.clip_id] not in used
+            assert fr_of[it.clip_id] == {"P9a": "c9_f0", "P9b": "c9_f1"}[it.press]
+            assert it.sample_id.startswith(f"dev-sws1-{it.press}-")
+        else:
+            used_f = {(sha[b.clip_id], b.t_pts) for b in base.items if b.kind == "frame"}
+            assert (sha[it.clip_id], it.t_pts) not in used_f and it.camera == 9
+            assert it.sample_id == "dev-fs1-c9-01"
+    ids = [i.sample_id for i in sup.items if i.kind == "stroke_window" and i.press == "P9a"]
+    assert ids == ["dev-sws1-P9a-01", "dev-sws1-P9a-r1"]
+    assert base.items_sha256 in sup.rule
+
+
+def test_supplement_refuses_short_supply_and_test_split():
+    inv = _inv()
+    base = _build()
+    with pytest.raises(ValueError, match="only"):
+        _supplement(inv, base, n_windows={"P9a": 50}, n_reserve={}, n_frames={})
+    with pytest.raises(ValueError, match="dev"):
+        LS.build_supplement(inv, _pts(inv), PRESSES, base, split="test", seed=1, n_windows={"P9a": 1},
+                            n_reserve={}, n_frames={})

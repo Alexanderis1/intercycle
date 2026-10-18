@@ -42,6 +42,14 @@ DEFAULT_FRAMES = {9: 20, 14: 20}
 DEFAULT_WINDOWS = {"P9a": 10, "P9b": 10}
 DEFAULT_RESERVE = 3
 ROIS = ROOT / "docs" / "probes" / "S3a-P4_rois.json"
+# Fix round 1 supplement (labels/dev/sample_s1.json). The base list gave 6 distinct running P9a windows (all c9_f0;
+# its c9_f1 windows were not scorable) and 5 distinct running P9b windows; the targets are 10 + 10 distinct running
+# windows. P9a is drawn on c9_f0 only (its ROI is labelled there; in c9_f1 the ram is not identifiable). Reserves are
+# generous because P9b ran in 5 of 10 distinct base clips; RULES.md "Supplementary lists" says how they are used.
+S1_PRESSES = {"P9a": ["c9_f0"], "P9b": ["c9_f1"]}
+S1_WINDOWS = {"P9a": 4, "P9b": 5}
+S1_RESERVE = {"P9a": 8, "P9b": 12}
+S1_FRAMES = {9: 1}
 
 PtsFn = Callable[[str], list[float]]
 
@@ -108,13 +116,27 @@ def rule_text(seed: int, n_frames: dict[int, int], n_windows: dict[str, int], n_
     )
 
 
-def build_sample_list(inv: pd.DataFrame, pts_fn: PtsFn, presses: dict[str, list[str]], *, split: str, seed: int,
-                      n_frames: dict[int, int], n_windows: dict[str, int], n_reserve: int) -> SampleList:
+def dedupe_by_sha(inv: pd.DataFrame) -> pd.DataFrame:
+    """One clip per byte-identical set (Amendment 1: sha256 / dup_of): keep the smallest clip_id of each sha256."""
+    if "sha256" not in inv.columns:
+        raise ValueError("inventory has no sha256 column: cannot drop byte-identical copies (fail closed)")
+    return inv.sort_values("clip_id").drop_duplicates("sha256", keep="first").reset_index(drop=True)
+
+
+def _check_dev(inv: pd.DataFrame, split: str) -> None:
     if split != "dev":
         raise ValueError("this sampler draws the dev split only (the test labeller works in the custodian session)")
     if set(inv["split"]) - {"dev"}:
         raise ValueError(f"inventory rows outside dev: {sorted(set(inv['split']) - {'dev'})}")
-    inv = inv.sort_values("clip_id").reset_index(drop=True)
+
+
+def build_sample_list(inv: pd.DataFrame, pts_fn: PtsFn, presses: dict[str, list[str]], *, split: str, seed: int,
+                      n_frames: dict[int, int], n_windows: dict[str, int], n_reserve: int,
+                      dedupe: bool = True) -> SampleList:
+    """The DEV sample list. `dedupe` (default since fix round 1) keeps one clip per sha256 before sampling; the
+    committed labels/dev/sample.json was drawn before that fix (commit 87fa5c1), i.e. with dedupe=False."""
+    _check_dev(inv, split)
+    inv = dedupe_by_sha(inv) if dedupe else inv.sort_values("clip_id").reset_index(drop=True)
     pts_cache: dict[str, list[float]] = {}
 
     def pts(cid: str) -> list[float]:
@@ -152,8 +174,87 @@ def build_sample_list(inv: pd.DataFrame, pts_fn: PtsFn, presses: dict[str, list[
             sid = f"{split}-sw-{press}-{k:02d}" if k <= n else f"{split}-sw-{press}-r{k - n}"
             items.append(SampleItem(sample_id=sid, kind="stroke_window", clip_id=c, group_id=str(row.loc[c, "group_id"]),
                                     camera=_cam(row.loc[c, "camera"]), split="dev", press=press, t0=t0, t1=t1))
-    return SampleList(contract="twin.label_samples/1", split="dev", seed=seed,
-                      rule=rule_text(seed, n_frames, n_windows, n_reserve, presses), items=items,
+    rule = rule_text(seed, n_frames, n_windows, n_reserve, presses)
+    if dedupe:
+        rule += " Byte-identical clips (same sha256) are reduced to one clip (smallest clip_id) before sampling."
+    return SampleList(contract="twin.label_samples/1", split="dev", seed=seed, rule=rule, items=items,
+                      items_sha256=sample_items_sha256(items))
+
+
+def build_supplement(inv: pd.DataFrame, pts_fn: PtsFn, presses: dict[str, list[str]], base: SampleList, *,
+                     split: str, seed: int, n_windows: dict[str, int], n_reserve: dict[str, int],
+                     n_frames: dict[int, int], tag: str = "s1") -> SampleList:
+    """A seeded supplementary DEV list drawn after `base` (fix round 1 of lane S4-labels).
+
+    * Inventory reduced to one clip per sha256 first (byte-identical copies never appear twice).
+    * Stroke windows, per press: candidates are the deduped clips of that press's framings whose sha256 was NOT
+      already sampled for that press in `base`; same seeded round-robin over groups and window rule as the base list
+      (rng [seed, 3, press index]); n primary + n_reserve reserves (ids <split>-sw<tag>-<press>-NN / -rK).
+    * Frames, per camera: replacement grid frames whose (sha256, PTS) is not already a sampled frame of `base`
+      (rng [seed, 4, camera]); ids <split>-f<tag>-c<cam>-NN.
+    """
+    _check_dev(inv, split)
+    if base.split != "dev":
+        raise ValueError("the base sample list is not a dev list")
+    full_sha = dict(zip(inv["clip_id"], inv["sha256"]))        # before dedupe: base items may name dropped copies
+    inv = dedupe_by_sha(inv)
+    sha_of = dict(zip(inv["clip_id"], inv["sha256"]))
+    pts_cache: dict[str, list[float]] = {}
+
+    def pts(cid: str) -> list[float]:
+        if cid not in pts_cache:
+            pts_cache[cid] = sorted(float(x) for x in pts_fn(cid))
+        return pts_cache[cid]
+
+    def item_sha(clip_id: str) -> str:
+        if clip_id not in full_sha:
+            raise ValueError(f"base item clip {clip_id} is not in the dev inventory")
+        return full_sha[clip_id]
+
+    items: list[SampleItem] = []
+    for cam in sorted(n_frames):
+        rng = np.random.default_rng([seed, 4, cam])
+        used = {(item_sha(i.clip_id), round(float(i.t_pts or 0.0), 6)) for i in base.items
+                if i.kind == "frame" and i.camera == cam}
+        sub = inv[inv["camera"] == cam]
+        groups = sorted(set(sub["group_id"]))
+        order = [groups[i] for i in rng.permutation(len(groups))]
+        pools = {g: [(c, t) for c in sub.loc[sub["group_id"] == g, "clip_id"] for t in frame_grid(pts(c))
+                     if (sha_of[c], round(t, 6)) not in used] for g in groups}
+        picked = _round_robin(pools, order, n_frames[cam], rng, f"camera {cam} supplementary frames")
+        gid = dict(zip(sub["clip_id"], sub["group_id"]))
+        for k, (c, t) in enumerate(picked, 1):
+            items.append(SampleItem(sample_id=f"{split}-f{tag}-c{cam}-{k:02d}", kind="frame", clip_id=c,
+                                    group_id=gid[c], camera=_cam(cam), split="dev", t_pts=t))
+    names = sorted(presses)
+    for pi, press in enumerate(names):
+        if press not in n_windows:
+            continue
+        rng = np.random.default_rng([seed, 3, pi])
+        used = {item_sha(i.clip_id) for i in base.items if i.kind == "stroke_window" and i.press == press}
+        sub = inv[inv["framing_id"].isin(presses[press]) & ~inv["sha256"].isin(sorted(used))]
+        groups = sorted(set(sub["group_id"]))
+        order = [groups[i] for i in rng.permutation(len(groups))]
+        pools = {g: list(sub.loc[sub["group_id"] == g, "clip_id"]) for g in groups}
+        n, nr = n_windows[press], n_reserve.get(press, 0)
+        picked = _round_robin(pools, order, n + nr, rng, f"press {press} supplementary windows")
+        row = sub.set_index("clip_id")
+        for k, c in enumerate(picked, 1):
+            t0, t1 = window_for(pts(c), rng)
+            sid = f"{split}-sw{tag}-{press}-{k:02d}" if k <= n else f"{split}-sw{tag}-{press}-r{k - n}"
+            items.append(SampleItem(sample_id=sid, kind="stroke_window", clip_id=c, group_id=str(row.loc[c, "group_id"]),
+                                    camera=_cam(row.loc[c, "camera"]), split="dev", press=press, t0=t0, t1=t1))
+    rule = (
+        f"scripts/label_sample.py build_supplement, seed {seed}, split dev, supplement '{tag}' to the base list "
+        f"{base.items_sha256}. Inventory reduced to one clip per sha256 (smallest clip_id) before sampling. Frames: "
+        f"per camera {dict(sorted(n_frames.items()))} replacement grid frames whose (sha256, PTS) is not a base frame "
+        f"(rng [seed, 4, camera]). Stroke windows: per press {n_windows} primary + {n_reserve} reserve, press framings "
+        f"{presses}; candidates exclude every sha256 already sampled for that press in the base list; seeded "
+        f"round-robin over groups (rng [seed, 3, press index]); window = whole clip if <= {MAX_WINDOW_S:g} s, else "
+        f"{MAX_WINDOW_S:g} s from a seeded-random start snapped to a PTS; no motion detector, track or proposal is "
+        f"read. Labelled in list order per labels/RULES.md 'Supplementary lists'. Times are container PTS seconds."
+    )
+    return SampleList(contract="twin.label_samples/1", split="dev", seed=seed, rule=rule, items=items,
                       items_sha256=sample_items_sha256(items))
 
 
@@ -182,13 +283,23 @@ def main(argv: list[str] | None = None) -> int:
     from intercycle import esk
 
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    ap.add_argument("--out", default=str(ROOT / "labels" / "dev" / "sample.json"))
+    ap.add_argument("--out", default=None)
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    ap.add_argument("--supplement", default=None, metavar="BASE_SAMPLE_JSON",
+                    help="draw the fix-round-1 supplementary list (S1_*) against this base sample list")
     a = ap.parse_args(argv)
     inv = esk.load("dev")
-    sl = build_sample_list(inv, lambda c: container_pts(esk.clip_path(c)), press_framings(), split="dev",
-                           seed=a.seed, n_frames=DEFAULT_FRAMES, n_windows=DEFAULT_WINDOWS, n_reserve=DEFAULT_RESERVE)
-    out = Path(a.out)
+    pts_fn: PtsFn = lambda c: container_pts(esk.clip_path(c))  # noqa: E731
+    if a.supplement:
+        base = SampleList.model_validate(json.loads(Path(a.supplement).read_text(encoding="utf-8")))
+        sl = build_supplement(inv, pts_fn, S1_PRESSES, base, split="dev", seed=a.seed, n_windows=S1_WINDOWS,
+                              n_reserve=S1_RESERVE, n_frames=S1_FRAMES, tag="s1")
+        default_out = ROOT / "labels" / "dev" / "sample_s1.json"
+    else:
+        sl = build_sample_list(inv, pts_fn, press_framings(), split="dev", seed=a.seed, n_frames=DEFAULT_FRAMES,
+                               n_windows=DEFAULT_WINDOWS, n_reserve=DEFAULT_RESERVE)
+        default_out = ROOT / "labels" / "dev" / "sample.json"
+    out = Path(a.out) if a.out else default_out
     out.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(sl.model_dump(mode="json"), indent=1) + "\n").encode("utf-8")
     out.write_bytes(data)

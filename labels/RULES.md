@@ -42,6 +42,8 @@ the sha256 of this file.
 - **Uncertain object.** If the labeller cannot tell whether something is a person (or a forklift), it is not boxed
   and the note describes it with its approximate position, so the ambiguity is reported, not guessed.
 - **Blur.** Motion blur does not stop boxing: box the blurred extent of the body.
+- **Border check.** Before a frame is closed, the labeller views the four image borders (strips about 200 px
+  wide) as full-resolution crops; people sitting or standing at the border are often only partly in view.
 
 ## Strokes
 
@@ -57,9 +59,38 @@ the sha256 of this file.
 - **Running.** A press is running in a window if at least one BDC is seen. A window with the press stopped is
   labelled `strokes: []` with the note "press not running"; it stays in the label set, and the reserve windows
   (`...-r1`, `-r2`, ...) replace such windows in list order for the 20 scored windows.
+- **Not scorable (ambiguous).** If the ram (or a ram-coupled part) cannot be identified in the ROI, so that BDCs
+  cannot be clicked even though something may move, the window is neither running nor stopped: it is labelled
+  `strokes: []`, its note starts with "NOT SCORABLE:", and it is excluded from stroke scoring (status `ambiguous`).
+  Reserves replace it like a stopped window.
+- **Duplicates.** A byte-identical copy (same sha256, Amendment 1 `dup_of`) of an item already labelled is labelled the
+  same way but scored once: status `duplicate` with `dup_of` (for frames: same sha256 and same PTS).
+- **The scored set is machine-readable.** `labels/dev/scored.json` gives every labelled item one status: frames
+  `scored` | `duplicate`; stroke windows `scored` (running, at least one BDC clicked) | `not_running` | `ambiguous` |
+  `duplicate` | `not_needed`. It records the sha256 of each label file and of each sample list it covers.
+  Scorers read labels only through `twin/dev_labels.py`, which checks those hashes and fails closed. The 20 scored
+  windows are 10 per press with distinct clip sha256.
+
+## Supplementary lists
+
+- A supplementary sample list (`labels/dev/sample_s1.json`, `scripts/label_sample.py --supplement`) is drawn with a
+  seeded RNG and hashed (`sample_s1.sha256`) and committed BEFORE any of its items is viewed. It is drawn from the dev
+  inventory reduced to one clip per sha256, and excludes every clip sha256 already sampled for the same press.
+- Its frames and its primary stroke windows are all labelled. Its reserve windows are labelled in list order, per
+  press, only until that press has 10 `scored` windows over the base and supplementary lists together; the remaining
+  reserves are not labelled and get the status `not_needed`. The list order is seeded random, so this stopping rule
+  does not select on content.
+- Its labels go to a separate label set (`labels/dev/labels_s1.json`) that answers its hash.
 - How strokes are seen is written in the label set notes (frame stepping, space-time strip of the ROI pixels).
 
 ## Never
 
 - No test clip or frame is opened by the dev labeller. Frames are extracted to the private store
   `$INTERCYCLE_DATA/labelling/` (gitignored) and never committed or published: they show unmasked people.
+
+## Revisions
+
+- **r1 (fix round 1, Sun 18 Oct ~02:50 CEST).** Added: Border check, Not scorable, Duplicates, the scored set and
+  Supplementary lists. The base labels (`labels.json`, first made under the previous version of this file, sha256
+  `8a3b9ab5984e13350444b26db853619f807738a31c298f75bfa4514e27695b63`) were re-checked under this version, and their
+  `rules_sha256` now names this version.

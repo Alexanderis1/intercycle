@@ -7,8 +7,10 @@ writes to $INTERCYCLE_DATA/labelling/dev/ (gitignored; the images show unmasked 
 * grid/<sample_id>.jpg         a viewing copy at 1280 px with a labelled 100-native-px grid
 * windows/<sample_id>.npz      every frame of a stroke window: ROI crop stack (with a margin) + PTS
 * crop <sample_id> x0 y0 x1 y1 an upscaled crop of a frame with a fine labelled grid (for exact box edges)
+* kymo <sample_id> x0 x1       space-time strips of a stroke window (column mean of native x0..x1 per frame)
 
-    python scripts/label_extract.py frames | windows | crop <sample_id> x0 y0 x1 y1 [--step 20]
+    python scripts/label_extract.py frames | windows [--sample labels/dev/sample_s1.json]
+    python scripts/label_extract.py crop <sample_id> x0 y0 x1 y1 [--step 20] | kymo <sample_id> x0 x1
 """
 from __future__ import annotations
 
@@ -36,10 +38,13 @@ def store() -> Path:
     return p
 
 
-def items() -> list[dict]:
+def items(sample: Path | None = None) -> list[dict]:
+    """The sample list's items; refuses (SystemExit) the whole list if any item is not a dev clip of esk.load("dev")."""
     from intercycle import esk
 
-    d = json.loads(SAMPLE.read_text(encoding="utf-8"))
+    d = json.loads((sample or SAMPLE).read_text(encoding="utf-8"))
+    if d.get("split") != "dev":
+        raise SystemExit(f"refusing sample list with split {d.get('split')!r}: dev only")
     dev = esk.load("dev").set_index("clip_id")
     for it in d["items"]:
         if it["split"] != "dev" or it["clip_id"] not in dev.index:
@@ -85,13 +90,13 @@ def grid_view(img: np.ndarray, scale: float, step: int, origin=(0, 0)) -> np.nda
     return out
 
 
-def cmd_frames() -> None:
+def cmd_frames(sample: Path | None = None) -> None:
     import cv2
 
     s = store()
     (s / "frames").mkdir(exist_ok=True)
     (s / "grid").mkdir(exist_ok=True)
-    for it in items():
+    for it in items(sample):
         if it["kind"] != "frame":
             continue
         t = it["t_pts"]
@@ -114,14 +119,14 @@ def roi_box(press: str, framing: str) -> tuple[int, int, int, int]:
             min(1080, int(y1) + ROI_MARGIN))
 
 
-def cmd_windows() -> None:
+def cmd_windows(sample: Path | None = None) -> None:
     from intercycle import esk
 
     s = store()
     (s / "windows").mkdir(exist_ok=True)
     inv = esk.load("dev")
     fr: dict[str, str] = {str(c): str(f) for c, f in zip(inv["clip_id"], inv["framing_id"])}
-    for it in items():
+    for it in items(sample):
         if it["kind"] != "stroke_window":
             continue
         x0, y0, x1, y1 = roi_box(it["press"], fr[it["clip_id"]])
@@ -153,16 +158,63 @@ def cmd_crop(sid: str, x0: int, y0: int, x1: int, y1: int, step: int, out: Path 
     return out
 
 
+def cmd_kymo(sid: str, x0: int, x1: int, frames_per_img: int = 90, px_per_frame: int = 8, yscale: int = 4) -> list[Path]:
+    """Space-time strip of a stroke window: for native columns x0..x1 (inclusive), the column-mean grey of every
+    decoded frame of windows/<sid>.npz, one strip column per frame, upscaled; native y on the left, PTS ticks on
+    every frame (labelled every 4th). The labeller reads the BDC (lowest image position of the ram band) off it."""
+    import cv2
+
+    s = store()
+    z = np.load(s / "windows" / f"{sid}.npz")
+    pts, crops, box = z["pts"], z["crops"], z["box"]
+    bx0, by0 = int(box[0]), int(box[1])
+    a, b = x0 - bx0, x1 - bx0 + 1
+    if a < 0 or b > crops.shape[2] or a >= b:
+        raise SystemExit(f"columns {x0}-{x1} outside the window crop x {bx0}-{bx0 + crops.shape[2] - 1}")
+    grey = crops[..., a:b, :].astype(np.float32).mean(axis=(2, 3))          # (N frames, h)
+    outs: list[Path] = []
+    (s / "kymo").mkdir(exist_ok=True)
+    for start in range(0, len(pts), frames_per_img):
+        seg = grey[start:start + frames_per_img].T                        # (h, n)
+        img = cv2.resize(seg, (seg.shape[1] * px_per_frame, seg.shape[0] * yscale), interpolation=cv2.INTER_NEAREST)
+        lo, hi = float(img.min()), float(img.max())
+        img = ((img - lo) * (255.0 / max(hi - lo, 1e-6))).astype(np.uint8)
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        pad_top, pad_left = 34, 40
+        canvas = np.zeros((img.shape[0] + pad_top, img.shape[1] + pad_left, 3), np.uint8)
+        canvas[pad_top:, pad_left:] = img
+        for k in range(seg.shape[1]):
+            x = pad_left + k * px_per_frame + px_per_frame // 2
+            cv2.line(canvas, (x, pad_top - 6 if k % 4 else pad_top - 14), (x, pad_top - 1), (0, 255, 255), 1)
+            if k % 4 == 0:
+                cv2.putText(canvas, f"{pts[start + k]:.2f}", (x - 14, 10 + 10 * ((k // 4) % 2)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.33, (0, 255, 255), 1)
+        for yy in range(0, seg.shape[0], 10):
+            y = pad_top + yy * yscale
+            cv2.putText(canvas, str(by0 + yy), (2, y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (0, 0, 255), 1)
+            cv2.line(canvas, (pad_left - 4, y), (pad_left - 1, y), (0, 0, 255), 1)
+        out = s / "kymo" / f"{sid}_k{x0}_{x1}_{start}.png"
+        cv2.imwrite(str(out), canvas)
+        outs.append(out)
+    return outs
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    ap.add_argument("cmd", choices=["frames", "windows", "crop"])
+    ap.add_argument("cmd", choices=["frames", "windows", "crop", "kymo"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("--step", type=int, default=20)
+    ap.add_argument("--sample", default=None, help="sample list (default labels/dev/sample.json)")
     a = ap.parse_args(argv)
+    sample = Path(a.sample) if a.sample else None
     if a.cmd == "frames":
-        cmd_frames()
+        cmd_frames(sample)
     elif a.cmd == "windows":
-        cmd_windows()
+        cmd_windows(sample)
+    elif a.cmd == "kymo":
+        sid, xa, xb = a.args
+        for o in cmd_kymo(sid, int(xa), int(xb)):
+            print(o)
     else:
         sid, *xy = a.args
         print(cmd_crop(sid, *map(int, xy), step=a.step, out=None))
