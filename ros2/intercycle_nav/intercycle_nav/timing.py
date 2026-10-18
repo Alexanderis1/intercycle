@@ -157,6 +157,24 @@ class TimingCore:
         return best
 
 
+INIT_SPREAD_XY_M = 0.5                 # = intercycle_sim.loc_noise.START_DXY (R-W4 start-pose noise, uniform +-0.5 m)
+INIT_SPREAD_YAW_DEG = 10.0             # = loc_noise.START_DPSI (uniform +-10 deg)
+
+
+def initial_pose_covariance(spread_xy_m: float = INIT_SPREAD_XY_M,
+                            spread_yaw_deg: float = INIT_SPREAD_YAW_DEG) -> list[float]:
+    """Row-major 6x6 covariance (x, y, z, roll, pitch, yaw) for AMCL's /initialpose that matches the start-pose draw:
+    a uniform error on [-a, a] has variance a^2 / 3 -> var_xy = 0.5^2/3 = 0.0833 m^2, var_yaw = (10 deg)^2/3 = 0.0102
+    rad^2. nav2_simple_commander's setInitialPose sends a zero covariance, which lets AMCL start with every particle on
+    the believed pose (and random injection is off in nav2.yaml), so it may never cover the true start (audit fix 4)."""
+    if spread_xy_m < 0 or spread_yaw_deg < 0:
+        raise ValueError("initial pose spread must be >= 0")
+    c = [0.0] * 36
+    c[0] = c[7] = float(spread_xy_m) ** 2 / 3.0
+    c[35] = math.radians(float(spread_yaw_deg)) ** 2 / 3.0
+    return c
+
+
 def window_open(windows, t: float, need_s: float) -> tuple[float, float] | None:
     """The predicted idle window containing t with at least need_s left, else None."""
     for a, b in windows or []:
