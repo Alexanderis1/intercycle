@@ -11,13 +11,25 @@ writes to $INTERCYCLE_DATA/labelling/dev/ (gitignored; the images show unmasked 
 
     python scripts/label_extract.py frames | windows [--sample labels/dev/sample_s1.json]
     python scripts/label_extract.py crop <sample_id> x0 y0 x1 y1 [--step 20] | kymo <sample_id> x0 x1 [y0 y1]
+
+SEALED mode (custodian session only): `--sealed` reads the hashed TEST sample list
+C:\\intercycle_sealed\\labels\\sample.json (checked against its .sha256; every item must be a test row of the active
+split, else the whole list is refused), decodes C:\\intercycle_sealed\\clips\\<clip_id>.mp4 and writes the same outputs
+to C:\\intercycle_sealed\\labelling\\ (never into the repo or $INTERCYCLE_DATA). `--sealed-root` moves that root.
+
+    python scripts/label_extract.py --sealed frames | windows
+    python scripts/label_extract.py --sealed crop <sample_id> x0 y0 x1 y1 [--step 20] | kymo <sample_id> x0 x1 [y0 y1]
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -28,6 +40,88 @@ if str(ROOT) not in sys.path:
 SAMPLE = ROOT / "labels" / "dev" / "sample.json"
 ROIS = ROOT / "docs" / "probes" / "S3a-P4_rois.json"
 ROI_MARGIN = 40
+SEALED_ROOT = Path(r"C:\intercycle_sealed")
+
+
+@dataclass(frozen=True)
+class Sealed:
+    """Where the sealed TEST mode reads and writes: <root>/labels/sample.json, <root>/clips, <root>/labelling."""
+    root: Path = SEALED_ROOT
+
+    @property
+    def sample(self) -> Path:
+        return self.root / "labels" / "sample.json"
+
+    @property
+    def clips(self) -> Path:
+        return self.root / "clips"
+
+    @property
+    def store(self) -> Path:
+        return self.root / "labelling"
+
+
+def _inside(p: Path, parent: Path) -> bool:
+    try:
+        p.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def sealed_store(sealed: Sealed) -> Path:
+    """The sealed labelling store; refuses a location inside the repo or $INTERCYCLE_DATA."""
+    p = sealed.store
+    data = os.environ.get("INTERCYCLE_DATA")
+    if _inside(p, ROOT) or (data and _inside(p, Path(data))):
+        raise SystemExit(f"refusing sealed store {p}: inside the repo or $INTERCYCLE_DATA")
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def sealed_framings(split_csv: Path | None = None) -> dict[str, str]:
+    """clip_id -> framing_id of the TEST rows of the active split (train/dev rows are never returned)."""
+    import csv
+    import io
+
+    from twin.schemas.prereg import active_split_path, parse_split
+
+    path = split_csv or active_split_path()
+    text = path.read_text(encoding="utf-8")
+    rows = parse_split(text)
+    rd = list(csv.DictReader(io.StringIO(text)))
+    if not rd or "framing_id" not in rd[0]:
+        raise SystemExit(f"{path.name} has no framing_id column (fail closed)")
+    return {r["clip_id"]: r["framing_id"] for r in rd if rows[r["clip_id"]].split == "test"}
+
+
+def sealed_items(sealed: Sealed, split_csv: Path | None = None) -> list[dict]:
+    """The sealed TEST list's items. Refuses (SystemExit) the whole list unless it validates as a SampleList of split
+    test, its bytes match the sha256 file written next to it, and every item is a test row of the active split."""
+    from twin.schemas.labels import SampleList
+
+    path = sealed.sample
+    data = path.read_bytes()
+    sha_file = path.with_suffix(".sha256")
+    if not sha_file.is_file():
+        raise SystemExit(f"refusing {path.name}: no {sha_file.name} next to it (the list is hashed before labelling)")
+    want = {ln.split("  ", 1)[1]: ln.split("  ", 1)[0] for ln in sha_file.read_text(encoding="utf-8").splitlines()
+            if "  " in ln}
+    if want.get(path.name) != hashlib.sha256(data).hexdigest():
+        raise SystemExit(f"refusing {path.name}: its bytes do not match {sha_file.name}")
+    try:
+        sl = SampleList.model_validate(json.loads(data.decode("utf-8")))
+    except ValueError as e:
+        raise SystemExit(f"refusing {path.name}: not a valid sample list ({type(e).__name__})") from None
+    if sl.split != "test":
+        raise SystemExit(f"refusing sample list with split {sl.split!r}: test only in --sealed mode")
+    test = sealed_framings(split_csv)
+    out = []
+    for it in sl.items:
+        if it.split != "test" or it.clip_id not in test:
+            raise SystemExit(f"refusing {it.sample_id}: {it.clip_id} is not a test clip of the active split")
+        out.append(it.model_dump(mode="json"))
+    return out
 
 
 def store() -> Path:
@@ -52,12 +146,12 @@ def items(sample: Path | None = None) -> list[dict]:
     return d["items"]
 
 
-def decode(clip_id: str, t_lo: float, t_hi: float):
-    """Yield (pts, bgr) for every frame with t_lo - 1e-6 <= pts <= t_hi + 1e-6."""
+def decode(clip_id: str, t_lo: float, t_hi: float, path: Path | None = None):
+    """Yield (pts, bgr) for every frame with t_lo - 1e-6 <= pts <= t_hi + 1e-6 (of `path`, default the dev clip)."""
     import av  # pyright: ignore[reportMissingImports]
     from intercycle import esk
 
-    with av.open(str(esk.clip_path(clip_id))) as c:
+    with av.open(str(path or esk.clip_path(clip_id))) as c:
         st = c.streams.video[0]
         tb = st.time_base
         assert tb is not None
@@ -90,24 +184,32 @@ def grid_view(img: np.ndarray, scale: float, step: int, origin=(0, 0)) -> np.nda
     return out
 
 
-def cmd_frames(sample: Path | None = None) -> None:
+def _clip_fn(sealed: Sealed | None) -> Callable[[str], Path | None]:
+    return (lambda c: sealed.clips / f"{c}.mp4") if sealed else (lambda c: None)
+
+
+def cmd_frames(sample: Path | None = None, sealed: Sealed | None = None) -> None:
     import cv2
 
-    s = store()
+    s = sealed_store(sealed) if sealed else store()
+    clip = _clip_fn(sealed)
     (s / "frames").mkdir(exist_ok=True)
     (s / "grid").mkdir(exist_ok=True)
-    for it in items(sample):
+    for it in (sealed_items(sealed) if sealed else items(sample)):
         if it["kind"] != "frame":
             continue
         t = it["t_pts"]
-        got = [(p, im) for p, im in decode(it["clip_id"], t, t)]
+        got = [(p, im) for p, im in decode(it["clip_id"], t, t, clip(it["clip_id"]))]
         if len(got) != 1 or abs(got[0][0] - t) > 1e-6:
             raise SystemExit(f"{it['sample_id']}: no decoded frame at PTS {t}")
         img = got[0][1]
         cv2.imwrite(str(s / "frames" / f"{it['sample_id']}.png"), img)
         cv2.imwrite(str(s / "grid" / f"{it['sample_id']}.jpg"), grid_view(img, 1280 / img.shape[1], 100),
                     [cv2.IMWRITE_JPEG_QUALITY, 90])
-        print(it["sample_id"], it["clip_id"], f"{t:.4f}", img.shape)
+        if sealed:
+            print(it["sample_id"], f"{t:.4f}", img.shape)
+        else:
+            print(it["sample_id"], it["clip_id"], f"{t:.4f}", img.shape)
 
 
 def roi_box(press: str, framing: str) -> tuple[int, int, int, int]:
@@ -119,32 +221,43 @@ def roi_box(press: str, framing: str) -> tuple[int, int, int, int]:
             min(1080, int(y1) + ROI_MARGIN))
 
 
-def cmd_windows(sample: Path | None = None) -> None:
-    from intercycle import esk
+def cmd_windows(sample: Path | None = None, sealed: Sealed | None = None) -> None:
+    clip = _clip_fn(sealed)
+    if sealed:
+        s = sealed_store(sealed)
+        its = sealed_items(sealed)
+        fr = sealed_framings()
+    else:
+        from intercycle import esk
 
-    s = store()
+        s = store()
+        inv = esk.load("dev")
+        fr = {str(c): str(f) for c, f in zip(inv["clip_id"], inv["framing_id"])}
+        its = items(sample)
     (s / "windows").mkdir(exist_ok=True)
-    inv = esk.load("dev")
-    fr: dict[str, str] = {str(c): str(f) for c, f in zip(inv["clip_id"], inv["framing_id"])}
-    for it in items(sample):
+    for it in its:
         if it["kind"] != "stroke_window":
             continue
         x0, y0, x1, y1 = roi_box(it["press"], fr[it["clip_id"]])
         pts, crops = [], []
-        for p, im in decode(it["clip_id"], it["t0"], it["t1"]):
+        for p, im in decode(it["clip_id"], it["t0"], it["t1"], clip(it["clip_id"])):
             pts.append(p)
             crops.append(im[y0:y1, x0:x1])
         if not pts or abs(pts[0] - it["t0"]) > 1e-6 or abs(pts[-1] - it["t1"]) > 1e-6:
             raise SystemExit(f"{it['sample_id']}: decoded window does not span [{it['t0']}, {it['t1']}]")
         np.savez_compressed(s / "windows" / f"{it['sample_id']}.npz", pts=np.asarray(pts), crops=np.stack(crops),
                             box=np.asarray([x0, y0, x1, y1]), framing=fr[it["clip_id"]])
-        print(it["sample_id"], it["clip_id"], it["press"], fr[it["clip_id"]], len(pts), (x0, y0, x1, y1))
+        if sealed:
+            print(it["sample_id"], it["press"], len(pts), (x0, y0, x1, y1))
+        else:
+            print(it["sample_id"], it["clip_id"], it["press"], fr[it["clip_id"]], len(pts), (x0, y0, x1, y1))
 
 
-def cmd_crop(sid: str, x0: int, y0: int, x1: int, y1: int, step: int, out: Path | None) -> Path:
+def cmd_crop(sid: str, x0: int, y0: int, x1: int, y1: int, step: int, out: Path | None,
+             sealed: Sealed | None = None) -> Path:
     import cv2
 
-    s = store()
+    s = sealed_store(sealed) if sealed else store()
     img = cv2.imread(str(s / "frames" / f"{sid}.png"))
     if img is None:
         raise SystemExit(f"no extracted frame {sid}")
@@ -159,14 +272,14 @@ def cmd_crop(sid: str, x0: int, y0: int, x1: int, y1: int, step: int, out: Path 
 
 
 def cmd_kymo(sid: str, x0: int, x1: int, y_lo: int | None = None, y_hi: int | None = None, frames_per_img: int = 90,
-             px_per_frame: int = 8, yscale: int = 4, trace: bool = False) -> list[Path]:
+             px_per_frame: int = 8, yscale: int = 4, trace: bool = False, sealed: Sealed | None = None) -> list[Path]:
     """Space-time strip of a stroke window: for native columns x0..x1 (inclusive), the column-mean grey of every
     decoded frame of windows/<sid>.npz, one strip column per frame, upscaled; native y on the left (optionally only
     rows y_lo..y_hi), PTS ticks on every frame (labelled every 4th, with a faint vertical line). The labeller reads the
     BDC (lowest image position of the ram band) off it."""
     import cv2
 
-    s = store()
+    s = sealed_store(sealed) if sealed else store()
     z = np.load(s / "windows" / f"{sid}.npz")
     pts, crops, box = z["pts"], z["crops"], z["box"]
     bx0, by0 = int(box[0]), int(box[1])
@@ -221,20 +334,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("args", nargs="*")
     ap.add_argument("--step", type=int, default=20)
     ap.add_argument("--sample", default=None, help="sample list (default labels/dev/sample.json)")
+    ap.add_argument("--sealed", action="store_true",
+                    help=f"custodian only: the sealed TEST list under {SEALED_ROOT} (labels/sample.json, clips/, "
+                         f"labelling/)")
+    ap.add_argument("--sealed-root", default=None, help=f"--sealed: another sealed root (default {SEALED_ROOT})")
     a = ap.parse_args(argv)
+    if a.sealed and a.sample:
+        ap.error("--sealed reads <sealed root>/labels/sample.json only; --sample is the dev list")
+    if a.sealed_root and not a.sealed:
+        ap.error("--sealed-root needs --sealed")
+    sealed = Sealed(Path(a.sealed_root)) if a.sealed_root else (Sealed() if a.sealed else None)
     sample = Path(a.sample) if a.sample else None
     if a.cmd == "frames":
-        cmd_frames(sample)
+        cmd_frames(sample, sealed)
     elif a.cmd == "windows":
-        cmd_windows(sample)
+        cmd_windows(sample, sealed)
     elif a.cmd == "kymo":
         sid, xa, xb, *yr = a.args
         ylo, yhi = (int(yr[0]), int(yr[1])) if yr else (None, None)
-        for o in cmd_kymo(sid, int(xa), int(xb), ylo, yhi, yscale=8 if yr else 4):
+        for o in cmd_kymo(sid, int(xa), int(xb), ylo, yhi, yscale=8 if yr else 4, sealed=sealed):
             print(o)
     else:
         sid, *xy = a.args
-        print(cmd_crop(sid, *map(int, xy), step=a.step, out=None))
+        print(cmd_crop(sid, *map(int, xy), step=a.step, out=None, sealed=sealed))
     return 0
 
 
