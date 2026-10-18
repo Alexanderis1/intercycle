@@ -322,3 +322,48 @@ def test_writer_refuses_gaps(tmp_path):
         w.write(eng.tick(s.t0_s))
         with pytest.raises(ValueError, match="not 0.5 s after"):
             w.write(eng.tick(s.t0_s + 1.0))
+
+
+def test_writer_leaves_no_stream_when_the_run_crashes(tmp_path):
+    """A plant crash mid-run never leaves a cut-off stream at the final path (it would parse as a short run): the
+    writer fills <path>.partial and moves it onto the final path only on a clean exit; a stale stream from an
+    earlier attempt is removed when the writer opens."""
+    s = _day()
+    eng = _engine(s)
+    final = tmp_path / "runs" / "x" / "realised_state.jsonl"
+    final.parent.mkdir(parents=True)
+    final.write_text("stale\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="plant crashed"):
+        with RealisedWriter(eng, final, "x", 0) as w:
+            for t in eng.tick_times()[:100]:
+                w.write(eng.tick(float(t)))
+            assert not final.exists()                                    # never visible while being written
+            raise RuntimeError("plant crashed")
+    assert not final.exists()
+    assert list(final.parent.iterdir()) == []                            # the .partial is removed too
+    p = write_realised(_engine(s), final, "x", 0)                       # a clean run publishes the whole stream
+    with open(p, encoding="utf-8") as f:
+        _, ticks = parse_realised(f)
+        assert len(list(ticks)) == int(s.duration_s * 2)
+    assert sorted(x.name for x in final.parent.iterdir()) == ["realised_state.jsonl"]
+
+
+def test_engine_refuses_a_script_start_off_the_2hz_grid():
+    with pytest.raises(ValueError, match="grid"):
+        Engine(_script([_run()], t0_s=100.25), SITE)
+    Engine(_script([_run()], t0_s=100.5), SITE)                         # on the grid: accepted
+
+
+def test_header_t0_is_the_first_tick_of_the_stream(tmp_path):
+    s = _day()
+    for t_from, first in ((None, s.t0_s), (s.t0_s + 500.0, s.t0_s + 500.0), (s.t0_s + 500.2, s.t0_s + 500.5)):
+        p = write_realised(_engine(s), tmp_path / f"{t_from}" / "realised_state.jsonl", "x", 0, t_from=t_from)
+        with open(p, encoding="utf-8") as f:
+            header, ticks = parse_realised(f)
+            assert header.t0_s == first == next(ticks).t
+    eng = _engine(s)
+    with RealisedWriter(eng, tmp_path / "w" / "realised_state.jsonl", "x", 0) as w:    # header t0_s = day start
+        with pytest.raises(ValueError, match="first tick"):
+            w.write(eng.tick(s.t0_s + 500.0))
+    with pytest.raises(ValueError, match="no tick"):
+        RealisedWriter(_engine(s), tmp_path / "e" / "realised_state.jsonl", "x", 0, t_from=s.t0_s + s.duration_s)

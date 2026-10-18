@@ -241,6 +241,9 @@ class Engine:
             raise ValueError(f"script zones {sorted(set(script.zones) - zones)} are not in the site")
         if set(script.presses) - {p.id for p in site.presses}:
             raise ValueError("script presses are not in the site")
+        if abs(script.t0_s * TICK_HZ - round(script.t0_s * TICK_HZ)) > 1e-6:
+            raise ValueError(f"script t0_s={script.t0_s} is not on the {TICK_HZ} Hz grid (the stream's first tick "
+                             "would not be t0_s)")
         self.script, self.site = script, site
         self.t0 = float(script.t0_s)
         self.t_end = self.t0 + float(script.duration_s)
@@ -313,9 +316,14 @@ class Engine:
         for t in self.tick_times(t_from, t_to):
             yield self.tick(float(t), extra(float(t)) if extra else ())
 
-    def header(self, run_id: str, world: int) -> RealisedHeader:
+    def header(self, run_id: str, world: int, t_from: float | None = None) -> RealisedHeader:
+        """The stream header; t0_s = the time of the stream's FIRST tick: the first grid tick at or after t_from
+        (default: the scripted day's start, which __init__ keeps on the grid). An empty range fails closed."""
+        ts = self.tick_times(t_from)
+        if len(ts) == 0:
+            raise ValueError(f"no tick of the scripted day [{self.t0}, {self.t_end}) at or after t_from={t_from}")
         return RealisedHeader(kind="header", contract="twin.realised_state/1", run_id=run_id, world=world,
-                              day=self.script.day, hz=TICK_HZ, t0_s=self.t0, zones=list(self.script.zones),
+                              day=self.script.day, hz=TICK_HZ, t0_s=float(ts[0]), zones=list(self.script.zones),
                               presses=list(self.script.presses))
 
     def stroke_times(self, press: str) -> list[float]:
@@ -337,23 +345,33 @@ def _line(model: Any) -> str:
 
 
 class RealisedWriter:
-    """Writes runs/<id>/realised_state.jsonl: the header, then ticks on the contiguous 2 Hz grid (checked)."""
+    """Writes runs/<id>/realised_state.jsonl: the header, then ticks on the contiguous 2 Hz grid (checked), the first
+    tick at exactly header.t0_s (the first grid tick at or after t_from; default the scripted day's start).
 
-    def __init__(self, engine: Engine, path: str | os.PathLike, run_id: str, world: int):
+    Fail closed for EVAL, which scores against this file: the stream is written to `<path>.partial` and moved onto
+    `path` (os.replace) only when the with-block exits without an exception. A crash deletes the partial file, and a
+    stale stream already at `path` (an earlier attempt) is removed when the writer opens, so a cut-off truth stream
+    is never at the final path. (A hard kill leaves only the .partial, never the final file.)"""
+
+    def __init__(self, engine: Engine, path: str | os.PathLike, run_id: str, world: int, t_from: float | None = None):
         self.engine, self.path = engine, Path(path)
-        self.header = engine.header(run_id, world)
+        self.partial = self.path.with_name(self.path.name + ".partial")
+        self.header = engine.header(run_id, world, t_from)
         self._f: IO[Any] | None = None
         self._prev: float | None = None
 
     def __enter__(self) -> RealisedWriter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._f = open_truth(self.path, "w", newline="\n")
+        self.path.unlink(missing_ok=True)
+        self._f = open_truth(self.partial, "w", newline="\n")
         self._f.write(_line(self.header))
         return self
 
     def write(self, tick: RealisedTick) -> None:
         if self._f is None:
             raise RuntimeError("RealisedWriter is not open")
+        if self._prev is None and abs(tick.t - self.header.t0_s) > 1e-6:
+            raise ValueError(f"first tick t={tick.t} is not the header's t0_s={self.header.t0_s}")
         if self._prev is not None and abs(tick.t - self._prev - DT) > 1e-6:
             raise ValueError(f"tick t={tick.t} is not {DT} s after {self._prev}")
         if [p.id for p in tick.presses] != self.header.presses:
@@ -362,15 +380,20 @@ class RealisedWriter:
         self._prev = tick.t
 
     def __exit__(self, et: type[BaseException] | None, ev: BaseException | None, tb: TracebackType | None) -> None:
-        if self._f is not None:
-            self._f.close()
-            self._f = None
+        if self._f is None:
+            return
+        self._f.close()
+        self._f = None
+        if et is None:
+            os.replace(self.partial, self.path)
+        else:
+            self.partial.unlink(missing_ok=True)
 
 
 def write_realised(engine: Engine, path: str | os.PathLike, run_id: str, world: int, t_from: float | None = None,
                    t_to: float | None = None, extra: ExtraMovers | None = None) -> Path:
     """Run the engine over [t_from, t_to) (default: the whole scripted day) and write the realised stream."""
-    with RealisedWriter(engine, path, run_id, world) as w:
+    with RealisedWriter(engine, path, run_id, world, t_from) as w:
         for tk in engine.ticks(t_from, t_to, extra):
             w.write(tk)
     return Path(path)
