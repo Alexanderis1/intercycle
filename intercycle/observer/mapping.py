@@ -375,7 +375,12 @@ def mask_cameras(obs: Observation, floor_ok, share: np.ndarray, vis_min: float =
 
 
 def _occluders(obs: Observation, occ_classes) -> np.ndarray:
-    return np.isin(obs.cls, np.asarray(occ_classes, np.int8))
+    # == np.isin(obs.cls, occ) for integer class codes (lane obs-speed: np.isin's set machinery dominated per tick)
+    cls = np.asarray(obs.cls)
+    out = np.zeros(cls.shape, bool)
+    for c in np.asarray(occ_classes, np.int8).reshape(-1).tolist():
+        out |= cls == c
+    return out
 
 
 def obs_v1_to_v2(obs: Observation, share: np.ndarray, vis_min: float = ZONE_VIS_MIN, *, zones,
