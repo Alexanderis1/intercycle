@@ -15,8 +15,8 @@ Truth and files (the plant's output reaches the observer side ONLY through files
   * `runs/<id>/realised_state.jsonl` (TRUTH, for EVAL): the engine's 2 Hz stream over the mission, the robot added as
     a mover of class `robot`, written through `twin.engine.RealisedWriter` (fail closed: published on `finish` only).
   * `runs/<id>/obs_v2.jsonl`: the camera model runs IN the plant process and is the only consumer of the realised
-    ticks (twin/camera_v0.py MEASURED_SHIM now; twin/camera.py stat_v1 later, `make_camera`). Each tick becomes one
-    Observation v2 line (`intercycle.observer.mapping.obs_to_dict`), written to the file only once the sim clock has
+    ticks (twin/camera.py stat_v1, `make_camera`; twin/camera_v0.py MEASURED_SHIM stays as the G0 reference). Each
+    tick becomes one Observation v2 line (T-W6 hold = the camera's fitted `hold_s`) (`intercycle.observer.mapping.obs_to_dict`), written to the file only once the sim clock has
     reached its delivery time `t` (= t_cap + latency), so a consumer tailing the file live never sees an observation
     early. Lines still undelivered when the mission ends are written by `finish`. The broadcaster and observer_live
     read this file only; the plant writes no plant_state.json (the body-shop feed) and sends ROS nothing but the
@@ -95,7 +95,7 @@ import numpy as np
 
 from intercycle.observer import mapping as OM
 from twin import robot_camera as RC
-from twin.camera_v0 import CameraV0, Detections
+from twin.camera import CameraStatV1, Detections
 from twin.engine import Engine, RealisedWriter, load_day_script
 from twin.rng import check_world_seed, keyed_rng
 from twin.schemas import load
@@ -355,9 +355,9 @@ def reset_draw(ps: PressSafety, world_seed: int, day: int, key: str, override_s:
 
 
 def make_camera(site: Site, world_seed: int, day: int):
-    """The twin camera model run in the plant process. v0 = MEASURED_SHIM (twin/camera_v0.py); stat_v1 (twin/camera.py,
-    lane S3b) replaces it here."""
-    return CameraV0(site, world_seed, day)
+    """The twin camera model run in the plant process: stat_v1 (twin/camera.py, lane S3b). The G0 stand-in
+    twin/camera_v0.py (MEASURED_SHIM) is kept as the noise reference of tests/test_stat_v1_noise.py."""
+    return CameraStatV1(site, world_seed, day)
 
 
 def make_gate(world_seed: int, day: int, key: str):
@@ -374,7 +374,8 @@ class ObsAdapter:
     truth, T-W6) is kept. The robot is class OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold):
     call it on every tick in time order."""
 
-    def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None):
+    def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None,
+                 hold_s: float = OM.OCC_HOLD_S):
         self.press_ids = list(press_ids) if press_ids else [p.id for p in site.presses]
         self.zone_ids = list(zone_ids) if zone_ids else [z.id for z in site.zones]
         zones = {z.id: z for z in site.zones}
@@ -382,7 +383,7 @@ class ObsAdapter:
         self.cams = [zones[z].camera for z in self.zone_ids]
         self.rects = [_bbox(presses[p].danger_polygon.value, presses[p].dilation_m.value) for p in self.press_ids]
         self.share = floor_share(self.rects, [zones[z].floor_polygon.value for z in self.zone_ids])
-        self.conv = OM.ObsV2Converter(self.share, self.rects)
+        self.conv = OM.ObsV2Converter(self.share, self.rects, hold_s=hold_s)
 
     def __call__(self, d: Detections) -> OM.Observation:
         n = len(d)
@@ -485,7 +486,8 @@ class Plant:
         self.k_end = round((self.t0 + self.T) * TICK_HZ)          # ticks k / 2 in [t0, t0 + T)
         self.written = -math.inf
         self.camera = make_camera(self.site, self.world_seed, self.day)
-        self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"))
+        self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"),
+                                  hold_s=float(getattr(self.camera, "hold_s", OM.OCC_HOLD_S)))
         self.obs_path = self.run_dir / "obs_v2.jsonl"
         self._obs_f = open(self.obs_path, "w", encoding="utf-8", newline="\n")
         self._obs_buf: deque[OM.Observation] = deque()            # computed, not yet delivered (t > sim time)

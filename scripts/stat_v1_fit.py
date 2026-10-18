@@ -177,17 +177,18 @@ def fit_labels(inv: pd.DataFrame) -> dict:
 
 def fit_tracks(inv: pd.DataFrame, sigma_px: float) -> dict:
     gaps = defaultdict(list)                     # cam -> gap durations (s)
-    rebirth = Counter()
-    track_s = Counter()
+    rebirth: Counter = Counter()
+    track_s: defaultdict[tuple[int, str], float] = defaultdict(float)
     d2 = defaultdict(list)
-    for _, row in inv.iterrows():
-        clip, cam = row["clip_id"], int(row["camera"])
+    for clip, cam in zip(inv["clip_id"].astype(str).tolist(), inv["camera"].astype(int).tolist()):
         tr = load_tracks(clip)
         if tr.empty:
             continue
-        t0c, t1c = float(tr["t"].min()), float(tr["t"].max())
+        tt = tr["t"].to_numpy(float)
+        t0c, t1c = float(tt.min()), float(tt.max())
         ends, starts = [], []
-        for (tid, cls), g in tr.groupby(["track_id", "class"]):
+        for key, g in tr.groupby(["track_id", "class"]):
+            tid, cls = key  # type: ignore[misc]
             g = g.sort_values("t")
             t = g["t"].to_numpy(float)
             uv = g[["u", "v"]].to_numpy(float)
@@ -270,7 +271,7 @@ def fit_energy() -> dict:
                 raise SystemExit(f"{f}: not a train table")
             ok = ~m["missing"].to_numpy(bool) & np.isfinite(m["roi_energy"].to_numpy(float))
             e = m["roi_energy"].to_numpy(float)
-            n_st = int(m["stroke"].sum())
+            n_st = int(m["stroke"].to_numpy(bool).sum())
             if n_st >= 2:
                 _, thr = detect_strokes(m["t"].to_numpy(float), np.where(ok, m["flow_v"].to_numpy(float), np.nan))
                 v = np.abs(m["flow_v"].to_numpy(float))
