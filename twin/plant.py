@@ -84,6 +84,7 @@ default (the body-shop near-perfect gate, disclosed) by one import in `make_gate
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import time
@@ -99,6 +100,7 @@ from twin import camera_gate as CG
 from twin import inspect_model as IM
 from twin import robot_camera as RC
 from twin.camera import CameraStatV1, Detections
+from twin.camera_v0 import CameraV0
 from twin.engine import Engine, RealisedWriter, load_day_script
 from twin.rng import check_world_seed, keyed_rng
 from twin.schemas import load
@@ -356,9 +358,38 @@ def reset_draw(ps: PressSafety, world_seed: int, day: int, key: str, override_s:
 # ------------------------------------------------------------------------------------------------ camera -> obs v2
 
 
-def make_camera(site: Site, world_seed: int, day: int):
-    """The twin camera model run in the plant process: stat_v1 (twin/camera.py, lane S3b). The G0 stand-in
-    twin/camera_v0.py (MEASURED_SHIM) is kept as the noise reference of tests/test_stat_v1_noise.py."""
+STUB_SITE_FILE = "site_v0.yaml"      # = twin/compile.py INPUT_FILES["site"][1], the G0 v0 stub site
+
+
+class StubCameraV0(CameraV0):
+    """The G0 stand-in camera (twin/camera_v0.py MEASURED_SHIM) on the G0 stub site ONLY. stat_v1's parameters are
+    fitted for the v1 site's cameras, framings and ram ROIs, so on site_v0 it learns no press; the stub slice runs this
+    camera instead. Its model name "camera_v0" has no twin-run observer config (`observer_live.config_for_camera`
+    refuses it unless the caller explicitly runs on the stub set, and a sealed run refuses its placeholder threshold),
+    so it never reaches a twin run. Holds: mapping's OCC_HOLD_S (sized for MEASURED_SHIM's iid misses); no ROIs."""
+    MODEL = "camera_v0"
+
+    def __init__(self, site: Site, world_seed: int, day: int):
+        super().__init__(site, world_seed, day)
+        self.hold_s_by_camera = {int(z.camera): float(OM.OCC_HOLD_S) for z in site.zones}
+        self.hold_s_by_press = {p.id: float(OM.OCC_HOLD_S) for p in site.presses}
+        self.roi_vis: dict[str, dict[int, float]] | None = None
+
+    def provenance(self) -> dict[str, Any]:
+        canon = json.dumps(OM.MEASURED_SHIM, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return {"model": self.MODEL, "cal_source": "G0 MEASURED_SHIM (stub site only)", "h_mode": "none",
+                "draw_index": {}, "hold_s": max(self.hold_s_by_camera.values()),
+                "hold_s_by_camera": {str(c): h for c, h in sorted(self.hold_s_by_camera.items())},
+                "params_sha256": hashlib.sha256(canon).hexdigest()}
+
+
+def make_camera(site: Site, world_seed: int, day: int, *, stub_site: bool = False):
+    """The twin camera model run in the plant process: stat_v1 (twin/camera.py, lane S3b) on the v1 site. On the G0
+    stub site (`stub_site`, the site file is site_v0.yaml) the G0 stand-in `StubCameraV0`, whose observer config
+    exists only for an explicit stub run (fail closed). twin/camera_v0.py also stays the noise reference of
+    tests/test_stat_v1_noise.py."""
+    if stub_site:
+        return StubCameraV0(site, world_seed, day)
     return CameraStatV1(site, world_seed, day)
 
 
@@ -508,7 +539,8 @@ class Plant:
         self.k_next = round(self.t0 * TICK_HZ)
         self.k_end = round((self.t0 + self.T) * TICK_HZ)          # ticks k / 2 in [t0, t0 + T)
         self.written = -math.inf
-        self.camera = make_camera(self.site, self.world_seed, self.day)
+        self.camera = make_camera(self.site, self.world_seed, self.day,
+                                  stub_site=Path(p["site"]).name == STUB_SITE_FILE)
         self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"),
                                   hold_s=dict(self.camera.hold_s_by_press), roi_vis=self.camera.roi_vis)
         self.obs_path = self.run_dir / "obs_v2.jsonl"
@@ -1128,7 +1160,7 @@ class Plant:
                        status_reason=reason, robot_caused_press_stops=self.trips, holds=self.holds,
                        incidents=self.incidents, press_time_lost_s=round(lost_s, 3),
                        path_length_m=round(self.path_len, 3), code=self.code, variant=self.variant,  # type: ignore[arg-type]
-                       reset_override_s=self.reset_override_s, 
+                       reset_override_s=self.reset_override_s,
                        camera=CameraProvenance.model_validate(self.camera.provenance()),
                        wall_s=None if sim_summary is None else sim_summary.get("wall_s"), **counts)
 
