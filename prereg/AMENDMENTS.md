@@ -373,3 +373,18 @@ The A5 table was computed from a working tree that did not match the merge commi
 - **Sealed batch cost:** projected ≈ $5.9 on Modal (observer $0.41 + missions $5.50), inside the session's Modal cap.
 - **Dev dry run of this path:** `scripts/run_double.py` on Modal, dev world 0, day 9, 3 missions, 1 round:
   0 invalid, 0 crashed, $0.08, 459 s wall (out/double/freeze_dry2_w0d9z9, ~09:53-10:01 CEST).
+
+## Amendment 9 (A9): robot FREEZE re-committed for the missing G2 hash record (code unchanged)
+
+- **Recorded:** Sun 18 Oct 2026, ~10:40 CEST, lead. **User decision (~10:37 CEST), verbatim:** "Re-freeze now, disclose".
+- **What happened:** the robot custodian derived seeds at 08:18:14 UTC (drand round 6562677; TEST_SEED_COMMIT on branch
+  custodian/robot bf4dd7f, never merged), then `sealed_run.py check --stages double` refused: "the G2 hash record
+  prereg/G2_HASHES.json is not in the FREEZE tree c87d2c3f3a2e". The record (PLAN §4 G2 row) had never been written.
+  No mission ran; nothing was spent; no test-world result exists.
+- **Change:** prereg/G2_HASHES.json written by `scripts/write_g2_hashes.py` from the committed files (twin/daygen.py,
+  twin/dynamics.json, twin/engine.py, twin/camera.py, twin/site.yaml; all unchanged since RC 9146511). No code, data or
+  parameter changed. prereg/FREEZE is re-committed to name this commit; FREEZE_REALCLIP (RC 9146511, written by c87d2c3)
+  is unchanged and the real-clip run is unaffected (neither file is a real-clip input).
+- **Seeds:** the round-6562677 seeds are void and unused; new seeds come from the first drand round after the new FREEZE
+  commit. **Deviation, disclosed:** the robot freeze moves from 10:15 to ~10:40 CEST (A3 item 3 said "by 10:15, else
+  descriptive"); the user chose to re-freeze because only the hash record of already-frozen files was missing.

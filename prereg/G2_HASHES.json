@@ -1,0 +1,10 @@
+{
+ "contract": "twin.g2_hashes/1",
+ "files": {
+  "twin/camera.py": "3bcdf117399c046e34d7d448625a5a60b86ac0bd8d2775d185c3d2c164e88356",
+  "twin/daygen.py": "9ba3952a5279d32c7c26d9410ea34053a726845c84167ffe0737013482fe64fb",
+  "twin/dynamics.json": "a8ea6679c609ea2cb0324c94aaa9ede391e9d3480cca51ef766e5dd856cc2409",
+  "twin/engine.py": "6b5eb62d304765f39ea082cd3077de0a25d2915668603bf680285597efb7aa89",
+  "twin/site.yaml": "458f2a296e0d9494747e50ef85046fd71862f6cc206400b6dd4fe6aaba4785ec"
+ }
+}
