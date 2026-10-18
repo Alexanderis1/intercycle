@@ -161,7 +161,10 @@ def test_robot_entering_a_running_press_trips_it_and_the_reset_starts_after_exit
     zm = [(d["t_cap"] - T0, d["zone_motion"][0]) for d in map(json.loads, (pl.run_dir / "obs_v2.jsonl").open())]
     run = [v for t, v in zm if t < 9.5 and v is not None]
     stop = [v for t, v in zm if 10.5 + 0.5 <= t < 20.0 and v is not None]
-    assert max(stop) < 0.3 < max(run)
+    # stat_v1 units (twin/camera.py item 11): normalised ROI energy, idle pool while stopped; MOTION_THR is the
+    # matching observer threshold (camera_v0's ram-speed units gave max(stop) < 0.3 < max(run))
+    from twin.camera import MOTION_THR
+    assert np.mean(np.asarray(stop) > MOTION_THR) < 0.35 < np.mean(np.asarray(run) > MOTION_THR)
 
 
 def test_trip_while_the_robot_stays_inside_keeps_the_press_tripped(tmp_path):

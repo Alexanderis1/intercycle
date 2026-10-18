@@ -11,7 +11,11 @@ learns from (the measured-error camera), never a truth "zone active" flag. Per z
 > motion_thr; NaN (MISSING: occluded zone, invalid camera) stays NaN (T-W6: MISSING is never "no motion").
 learn_cycles constants come from the machine kind (`learn_cycles.KINDS`; press = PRESS_PLACEHOLDER until probe P4), and
 a run marked sealed (cfg.sealed or INTERCYCLE_SEALED_RUN=1) refuses any constant still at its placeholder, the motion
-threshold included (`PlaceholderConstantError`).
+threshold included (`PlaceholderConstantError`). The motion threshold of the twin's camera (stat_v1: zone_motion = ram-
+ROI energy / the press's median idle energy, idle median 1.0) is `config_for_stat_v1(...)`, read from
+twin/stat_v1_params.json `energy.motion_thr` (`stat_v1_motion_thr`; the JSON is read, twin.camera is never imported)
+with its source recorded; the 0.5 default stays a PLACEHOLDER for 0/1 streams (the v1 converter's moving-PART count).
+A twin run on stat_v1 output must use `config_for_stat_v1` (at 0.5 every idle press would read as motion).
   * slow layer: the MachineModel per machine, re-learned every learn_every_s on the last learn_window_s; a machine
     without a confident model has confidence 0 (the robot ignores < MIN_CONF). SlowLayer.traffic is empty, as in the
     body-shop SyntheticSchedule: the robot reads traffic from the map layer's L2/L3.
@@ -83,6 +87,7 @@ from intercycle.observer.change_detect_l1 import L1_CFG, L1ChangeDetector
 from intercycle.types import DAY0_UNIX, FastLayer, MachineModel, MachineNow, SlowLayer, State
 
 OBS_FILE = "obs_v2.jsonl"
+STAT_V1_PARAMS = Path(__file__).resolve().parent / "stat_v1_params.json"
 TWIN_BINS = (0, M.STOP_BIN)
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 TOD_TAG = ("ASSUMED: no hour-of-day structure is observed in the real clips (probe P2: no timing information); "
@@ -284,6 +289,28 @@ class ObserverLiveConfig:
     hz: float = M.FRAME_HZ
 
 
+def stat_v1_motion_thr(path: str | os.PathLike = STAT_V1_PARAMS) -> tuple[float, str]:
+    """(value, source) of the stat_v1 motion threshold from the fitted parameter file (scripts/stat_v1_fit.py:
+    Youden J of the normalised TRAIN ROI energy). Fails closed (ValueError) on a file that is not a stat_v1 parameter
+    file or has no finite positive threshold."""
+    p = Path(path)
+    d = json.loads(p.read_text(encoding="utf-8"))
+    if d.get("contract") != "twin.stat_v1_params/1":
+        raise ValueError(f"{p}: not a stat_v1 parameter file")
+    mt = d["energy"]["motion_thr"]
+    v = float(mt["value"])
+    if not (math.isfinite(v) and v > 0.0):
+        raise ValueError(f"{p}: energy.motion_thr {v!r} is not a finite positive threshold")
+    return v, (f"stat_v1 (twin/{p.name} energy.motion_thr = {v}, youden_j {mt.get('youden_j')}, "
+               f"tpr {mt.get('tpr_moving')}, fpr {mt.get('fpr_idle')}): {mt.get('rule')}")
+
+
+def config_for_stat_v1(margin_path: str, params_path: str | os.PathLike = STAT_V1_PARAMS, **kw) -> ObserverLiveConfig:
+    """The config for a twin run on stat_v1 output: motion_thr and its source from twin/stat_v1_params.json."""
+    thr, src = stat_v1_motion_thr(params_path)
+    return ObserverLiveConfig(margin_path=margin_path, motion_thr=thr, motion_thr_source=src, **kw)
+
+
 def is_sealed(cfg: ObserverLiveConfig) -> bool:
     return bool(cfg.sealed) or os.environ.get(SEALED_ENV) == "1"
 
@@ -301,7 +328,8 @@ class ObserverLive:
             if m["kind"] not in cfg.consts:
                 raise ValueError(f"machine {m['id']}: no learn_cycles constants for kind {m['kind']!r}")
             self.consts.append(LC.require_measured(cfg.consts[m["kind"]], sealed))
-        if sealed and str(cfg.motion_thr_source).upper().startswith(LC.PLACEHOLDER):
+        self._thr_placeholder = str(cfg.motion_thr_source).upper().startswith(LC.PLACEHOLDER)
+        if sealed and self._thr_placeholder:
             raise LC.PlaceholderConstantError(f"motion_thr {cfg.motion_thr} is a placeholder ({cfg.motion_thr_source})")
         self.margin: Margin = load_margin(cfg.margin_path)       # raises unless frozen and valid (fail closed)
         if not math.isclose(self.margin.cell_m, float(spec["env_res"]), rel_tol=0.0, abs_tol=1e-12):
@@ -335,8 +363,18 @@ class ObserverLive:
 
     # ---------------------------------------------------------------- ingest
     def motion(self, obs: M.Observation) -> np.ndarray:
-        """(M,) float: 1 motion, 0 no motion, NaN MISSING (never thresholded)."""
+        """(M,) float: 1 motion, 0 no motion, NaN MISSING (never thresholded). With the PLACEHOLDER threshold (sized for
+        0/1 moving-part counts) a non-integer zone_motion (a continuous energy, e.g. stat_v1's ROI energy ratio, idle
+        median 1.0) is refused (PlaceholderConstantError, fail closed, S3b fix2): such a stream needs its own threshold
+        (`config_for_stat_v1`), never 0.5."""
         zm = np.asarray(obs.zone_motion, float)
+        if self._thr_placeholder:
+            f = zm[np.isfinite(zm)]
+            if (f != np.round(f)).any():
+                raise LC.PlaceholderConstantError(
+                    f"zone_motion {f.tolist()} is a continuous energy but motion_thr {self.cfg.motion_thr} is a "
+                    f"placeholder ({self.cfg.motion_thr_source}): use the camera model's threshold "
+                    "(config_for_stat_v1 for stat_v1)")
         return np.where(np.isfinite(zm), (zm > self.cfg.motion_thr).astype(float), np.nan)
 
     def _cond(self, t: float, y: np.ndarray) -> M.Cond:

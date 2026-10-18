@@ -15,8 +15,9 @@ Truth and files (the plant's output reaches the observer side ONLY through files
   * `runs/<id>/realised_state.jsonl` (TRUTH, for EVAL): the engine's 2 Hz stream over the mission, the robot added as
     a mover of class `robot`, written through `twin.engine.RealisedWriter` (fail closed: published on `finish` only).
   * `runs/<id>/obs_v2.jsonl`: the camera model runs IN the plant process and is the only consumer of the realised
-    ticks (twin/camera_v0.py MEASURED_SHIM now; twin/camera.py stat_v1 later, `make_camera`). Each tick becomes one
-    Observation v2 line (`intercycle.observer.mapping.obs_to_dict`), written to the file only once the sim clock has
+    ticks (twin/camera.py stat_v1, `make_camera`; twin/camera_v0.py MEASURED_SHIM stays as the G0 reference). Each
+    tick becomes one Observation v2 line (T-W6 hold = the camera's fitted hold of the camera that sees each press,
+    `hold_s_by_press`) (`intercycle.observer.mapping.obs_to_dict`), written to the file only once the sim clock has
     reached its delivery time `t` (= t_cap + latency), so a consumer tailing the file live never sees an observation
     early. Lines still undelivered when the mission ends are written by `finish`. The broadcaster and observer_live
     read this file only; the plant writes no plant_state.json (the body-shop feed) and sends ROS nothing but the
@@ -96,13 +97,13 @@ import numpy as np
 from intercycle.observer import mapping as OM
 from twin import camera_gate as CG
 from twin import robot_camera as RC
-from twin.camera_v0 import CameraV0, Detections
+from twin.camera import CameraStatV1, Detections
 from twin.engine import Engine, RealisedWriter, load_day_script
 from twin.rng import check_world_seed, keyed_rng
 from twin.schemas import load
 from twin.schemas.common import MISSION_T_S, TICK_HZ, Condition
 from twin.schemas.dynamics import Dynamics
-from twin.schemas.runs import CodeHashes, RealisedMover, Summary
+from twin.schemas.runs import CameraProvenance, CodeHashes, RealisedMover, Summary
 from twin.schemas.safety import PressSafety, Safety
 from twin.schemas.site import Site, point_in_polygon
 from twin.schemas.tables import LogRow
@@ -356,9 +357,9 @@ def reset_draw(ps: PressSafety, world_seed: int, day: int, key: str, override_s:
 
 
 def make_camera(site: Site, world_seed: int, day: int):
-    """The twin camera model run in the plant process. v0 = MEASURED_SHIM (twin/camera_v0.py); stat_v1 (twin/camera.py,
-    lane S3b) replaces it here."""
-    return CameraV0(site, world_seed, day)
+    """The twin camera model run in the plant process: stat_v1 (twin/camera.py, lane S3b). The G0 stand-in
+    twin/camera_v0.py (MEASURED_SHIM) is kept as the noise reference of tests/test_stat_v1_noise.py."""
+    return CameraStatV1(site, world_seed, day)
 
 
 def make_gate(world_seed: int, day: int, key: str):
@@ -371,11 +372,19 @@ class ObsAdapter:
     `zone_ids` in order, each camera's visible floor = its zone's floor polygon), per the mapping.py §v2 contract:
     zone_vis = the share of the zone's floor (rect + ZONE_MARGIN_M) that a camera with cam_floor_ok sees (`floor_share`)
     minus the share hidden by person / vehicle detections, and zone_motion NaN where zone_vis < ZONE_VIS_MIN or an
-    occluder touches the zone (held, T-W6), through `mapping.ObsV2Converter`. The camera's own NaN (occlusion seen in
-    truth, T-W6) is kept. The robot is class OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold):
-    call it on every tick in time order."""
+    occluder touches the zone (held, T-W6), through `mapping.ObsV2Converter`. A press whose zone_motion comes from an
+    image ram ROI (`roi_vis`, stat_v1's `CameraStatV1.roi_vis`: press -> {camera: share of the ROI inside its
+    framing's image}) is seen through that ROI, not through the floor: its row of the share matrix is the ROI's
+    visibility (lead decision, S3b fix1), so zone_vis = 1 while the ROI's camera is up and the ROI is in the image,
+    and the walkable-floor share of rect + margin (0-0.40 on twin/site.yaml) no longer forces NaN. Presses without an
+    ROI keep the floor share. The camera's own NaN (ROI occlusion in image space, T-W6) is kept. The robot is class
+    OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold): call it on every tick in time order."""
 
-    def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None):
+    def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None,
+                 *, hold_s: float | dict[str, float], roi_vis: dict[str, dict[int, float]] | None = None):
+        # hold_s has no default: it is the camera model's own fitted hold, never a silent fallback. A dict is one hold
+        # per press (stat_v1 `hold_s_by_press`: the hold of the camera that sees the press, S3b fix2); every press of
+        # `press_ids` must have one (fail closed). A float is one hold for every press.
         self.press_ids = list(press_ids) if press_ids else [p.id for p in site.presses]
         self.zone_ids = list(zone_ids) if zone_ids else [z.id for z in site.zones]
         zones = {z.id: z for z in site.zones}
@@ -383,7 +392,21 @@ class ObsAdapter:
         self.cams = [zones[z].camera for z in self.zone_ids]
         self.rects = [_bbox(presses[p].danger_polygon.value, presses[p].dilation_m.value) for p in self.press_ids]
         self.share = floor_share(self.rects, [zones[z].floor_polygon.value for z in self.zone_ids])
-        self.conv = OM.ObsV2Converter(self.share, self.rects)
+        for i, pid in enumerate(self.press_ids):
+            if roi_vis and pid in roi_vis:
+                row = np.zeros(len(self.zone_ids))
+                for cam, s in roi_vis[pid].items():
+                    if cam in self.cams:                 # an ROI camera outside `zone_ids` is not seen: row 0, NaN
+                        row[self.cams.index(cam)] = float(s)
+                self.share[i] = row
+        if isinstance(hold_s, dict):
+            missing = [p for p in self.press_ids if p not in hold_s]
+            if missing:
+                raise ValueError(f"hold_s has no hold for presses {missing}")
+            hold = np.array([float(hold_s[p]) for p in self.press_ids], float)
+        else:
+            hold = float(hold_s)
+        self.conv = OM.ObsV2Converter(self.share, self.rects, hold_s=hold)
 
     def __call__(self, d: Detections) -> OM.Observation:
         n = len(d)
@@ -486,7 +509,8 @@ class Plant:
         self.k_end = round((self.t0 + self.T) * TICK_HZ)          # ticks k / 2 in [t0, t0 + T)
         self.written = -math.inf
         self.camera = make_camera(self.site, self.world_seed, self.day)
-        self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"))
+        self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"),
+                                  hold_s=dict(self.camera.hold_s_by_press), roi_vis=self.camera.roi_vis)
         self.obs_path = self.run_dir / "obs_v2.jsonl"
         self._obs_f = open(self.obs_path, "w", encoding="utf-8", newline="\n")
         self._obs_buf: deque[OM.Observation] = deque()            # computed, not yet delivered (t > sim time)
@@ -1099,7 +1123,8 @@ class Plant:
                        status_reason=reason, robot_caused_press_stops=self.trips, holds=self.holds,
                        incidents=self.incidents, press_time_lost_s=round(lost_s, 3),
                        path_length_m=round(self.path_len, 3), code=self.code, variant=self.variant,  # type: ignore[arg-type]
-                       reset_override_s=self.reset_override_s,
+                       reset_override_s=self.reset_override_s, 
+                       camera=CameraProvenance.model_validate(self.camera.provenance()),
                        wall_s=None if sim_summary is None else sim_summary.get("wall_s"), **counts)
 
     def finish(self, out_dir: str | None = None, sim_summary: dict | None = None) -> dict:
@@ -1144,7 +1169,8 @@ class Plant:
                 "capture_source": RC.CAPTURE_SOURCE, "captures": self.captures, "events": self.events,
                 "ram_geometry": {"source": RAM_GEOMETRY_SOURCE, "tdc_z_m": RAM_TDC_Z, "stroke_m": RAM_STROKE_M,
                                  "half_m": RAM_HALF_M},
-                "camera": type(self.camera).__name__, "log_file": log_file.name, "plant_wall_s": round(self.wall_plant, 2),
+                "camera": type(self.camera).__name__, "camera_provenance": self.camera.provenance(),
+                "log_file": log_file.name, "plant_wall_s": round(self.wall_plant, 2),
                 "reset_sweep": self._sweep_tag(),
                 "safety": {ps.press: {"guard": ps.guard.model_dump(), "reset_median_s": ps.reset.median_s,
                                       "reset_p90_s": ps.reset.p90_s} for ps in self.safety.presses}}

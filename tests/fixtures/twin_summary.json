@@ -24,5 +24,20 @@
   "generator_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "dynamics_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
  },
- "wall_s": 380.2
+ "wall_s": 380.2,
+ "camera": {
+  "model": "stat_v1",
+  "cal_source": "cal_v1 draws",
+  "h_mode": "joint",
+  "draw_index": {
+   "9": 17,
+   "14": 103
+  },
+  "hold_s": 34.0,
+  "hold_s_by_camera": {
+   "9": 34.0,
+   "14": 7.5
+  },
+  "params_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+ }
 }
