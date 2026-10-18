@@ -1,5 +1,49 @@
 {
   "$defs": {
+    "CameraProvenance": {
+      "additionalProperties": false,
+      "description": "The twin camera model's provenance in a run (twin/camera.py `CameraStatV1.provenance`).",
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "cal_source": {
+          "title": "Cal Source",
+          "type": "string"
+        },
+        "h_mode": {
+          "title": "H Mode",
+          "type": "string"
+        },
+        "draw_index": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Draw Index",
+          "type": "object"
+        },
+        "hold_s": {
+          "minimum": 0,
+          "title": "Hold S",
+          "type": "number"
+        },
+        "params_sha256": {
+          "title": "Params Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "cal_source",
+        "h_mode",
+        "draw_index",
+        "hold_s",
+        "params_sha256"
+      ],
+      "title": "CameraProvenance",
+      "type": "object"
+    },
     "CodeHashes": {
       "additionalProperties": false,
       "properties": {
@@ -200,6 +244,17 @@
       ],
       "default": null,
       "title": "Reset Override S"
+    },
+    "camera": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CameraProvenance"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

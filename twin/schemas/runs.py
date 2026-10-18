@@ -104,6 +104,16 @@ class CodeHashes(Strict):
     dynamics_sha256: str | None = None
 
 
+class CameraProvenance(Strict):
+    """The twin camera model's provenance in a run (twin/camera.py `CameraStatV1.provenance`)."""
+    model: str
+    cal_source: str                          # "cal_v1 draws" / "cal_v1 draws_fixed_scale" / "site framings (...)"
+    h_mode: str
+    draw_index: dict[str, int]               # camera id -> CAL v1 draw index (the world's true camera); {} = no draws
+    hold_s: float = Field(ge=0)
+    params_sha256: str
+
+
 class Summary(Strict):
     contract: Literal["twin.summary/1"]
     run_id: str
@@ -132,6 +142,7 @@ class Summary(Strict):
     # Only "primary" runs may enter the primary metric (`require_primary`).
     variant: SummaryVariant = "primary"
     reset_override_s: float | None = Field(default=None, gt=0)
+    camera: CameraProvenance | None = None   # the twin plant always writes it (calibration draw per world)
 
     @model_validator(mode="after")
     def _counts(self):

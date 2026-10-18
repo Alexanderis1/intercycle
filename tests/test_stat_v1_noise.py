@@ -161,6 +161,21 @@ def test_stub_site_has_no_calibration_error_and_sealed_refuses_it(monkeypatch):
         CAM.CameraStatV1(v0, WORLD, 1)
 
 
+def test_partial_or_missing_cal_draws_are_refused_on_a_calibrated_site():
+    """No silent true = nominal fallback outside sealed runs: a site with cal_sources needs CAL v1 draws for every
+    framing, and a partial match (e.g. a renamed framing id) is refused on any site."""
+    hd = json.loads(CAM.HDRAWS_PATH.read_text(encoding="utf-8"))
+    part = dict(hd, framings={k: v for k, v in hd["framings"].items() if k != "c9_f1"})
+    with pytest.raises(ValueError, match="framings have CAL v1 draws"):
+        CAM.CameraStatV1(SITE, WORLD, 1, hdraws=part)
+    assert SITE.cal_sources
+    with pytest.raises(ValueError, match="cal_sources"):
+        CAM.CameraStatV1(SITE, WORLD, 1, hdraws=dict(hd, framings={}))
+    prov = CAM.CameraStatV1(SITE, WORLD, 1).provenance()
+    assert prov["cal_source"] == "cal_v1 draws" and set(prov["draw_index"]) == {"9", "14"}
+    assert prov["hold_s"] > 0 and len(prov["params_sha256"]) == 64
+
+
 def test_calibration_bias_is_constant_per_world():
     """The world's true camera differs from the nominal one: a standing person's mean error is a fixed offset."""
     cam = CAM.CameraStatV1(SITE, WORLD, 1)
@@ -509,3 +524,11 @@ def test_site_v1_plant_empty_floor_running_presses_give_finite_zone_motion(tmp_p
     for j, pid in enumerate(pl.adapter.press_ids):
         v = zm[np.isfinite(zm[:, j]), j]
         assert float(np.mean(v > CAM.MOTION_THR)) > 2.5 * fpr, pid
+    # the world's calibration draw is recorded in summary.json and plant_summary.json
+    from twin.schemas.runs import Summary
+    summ = Summary.model_validate(json.loads((pl.run_dir / "summary.json").read_text(encoding="utf-8")))
+    assert summ.camera is not None and summ.camera.cal_source == "cal_v1 draws"
+    assert summ.camera.draw_index == {str(c): i for c, i in pl.camera.draw_index.items()}
+    assert summ.camera.hold_s == pl.camera.hold_s == pl.adapter.conv.hold_s
+    diag = json.loads((pl.run_dir / "plant_summary.json").read_text(encoding="utf-8"))
+    assert diag["camera_provenance"] == summ.camera.model_dump(mode="json")

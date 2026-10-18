@@ -90,6 +90,7 @@ occludes them. Markov states (miss, gross, AR noise, track history) are carried 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -401,12 +402,20 @@ class CameraStatV1:
         fr_site = {f.id: f for f in site.framings}
         # the observer's (nominal) calibration = the site's framings; the world's true camera = one CAL v1 draw per
         # camera. A site whose framings have no CAL v1 draws (the G0 stub site_v0) gets true = nominal (no calibration
-        # error, `cal_source` says so); a sealed run refuses it (fail closed).
+        # error, `cal_source` says so); a sealed run, a site with cal_sources and a partial match refuse it (fail
+        # closed). `provenance()` carries cal_source and the draw per camera into summary.json / plant_summary.json.
         self.nominal: dict[str, CamGeom] = {}
         self.true: dict[str, CamGeom] = {}
         self.draw_index: dict[int, int] = {}
         key = "draws" if h_mode == "joint" else "draws_fixed_scale"
-        have = all(fid in hd["framings"] for z in site.zones for fid in z.framings)
+        fids = [fid for z in site.zones for fid in z.framings]
+        n_have = sum(fid in hd["framings"] for fid in fids)
+        have = n_have == len(fids)
+        if 0 < n_have < len(fids):               # fail closed: never a silent mix of true and nominal cameras
+            raise ValueError(f"only {n_have} of {len(fids)} framings have CAL v1 draws (twin/cal/h_draws_v1.json): "
+                             f"missing {[f for f in fids if f not in hd['framings']]}")
+        if not have and site.cal_sources:        # a calibrated site must carry its calibration error
+            raise ValueError("the site has cal_sources but no framing has CAL v1 draws (twin/cal/h_draws_v1.json)")
         if not have and os.environ.get(SEALED_ENV) == "1":
             raise ValueError("sealed run: every framing needs CAL v1 draws (twin/cal/h_draws_v1.json)")
         self.cal_source = f"cal_v1 {key}" if have else "site framings (no CAL v1 draws: no calibration error)"
@@ -462,6 +471,16 @@ class CameraStatV1:
         self.stats = {"ticks": 0, "true": 0, "seen": 0, "hidden": 0, "occluded": 0, "missed": 0, "gross": 0,
                       "fp": 0, "idsw": 0, "forklift_as_person_c9": 0, "roi_missing": 0, "roi_held": 0,
                       "roi_blocked_unseen": 0, "image_only": 0}
+
+    # ---------------------------------------------------------------- provenance
+    def provenance(self) -> dict[str, Any]:
+        """What the run must record about this camera (summary.json `camera` / plant_summary.json): the model, the
+        calibration source and CAL v1 draw index per camera (str keys), the H mode, the hold and the parameter file's
+        canonical sha256."""
+        canon = json.dumps(self.P, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return {"model": "stat_v1", "cal_source": self.cal_source, "h_mode": self.h_mode,
+                "draw_index": {str(c): int(i) for c, i in sorted(self.draw_index.items())},
+                "hold_s": float(self.hold_s), "params_sha256": hashlib.sha256(canon).hexdigest()}
 
     # ---------------------------------------------------------------- fitted hold
     def _hold_s(self) -> float:

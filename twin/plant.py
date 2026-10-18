@@ -101,7 +101,7 @@ from twin.rng import check_world_seed, keyed_rng
 from twin.schemas import load
 from twin.schemas.common import MISSION_T_S, TICK_HZ, Condition
 from twin.schemas.dynamics import Dynamics
-from twin.schemas.runs import CodeHashes, RealisedMover, Summary
+from twin.schemas.runs import CameraProvenance, CodeHashes, RealisedMover, Summary
 from twin.schemas.safety import PressSafety, Safety
 from twin.schemas.site import Site, point_in_polygon
 from twin.schemas.tables import LogRow
@@ -1112,7 +1112,8 @@ class Plant:
                        status_reason=reason, robot_caused_press_stops=self.trips, holds=self.holds,
                        incidents=self.incidents, press_time_lost_s=round(lost_s, 3),
                        path_length_m=round(self.path_len, 3), code=self.code, variant=self.variant,  # type: ignore[arg-type]
-                       reset_override_s=self.reset_override_s,
+                       reset_override_s=self.reset_override_s, 
+                       camera=CameraProvenance.model_validate(self.camera.provenance()),
                        wall_s=None if sim_summary is None else sim_summary.get("wall_s"), **counts)
 
     def finish(self, out_dir: str | None = None, sim_summary: dict | None = None) -> dict:
@@ -1157,7 +1158,8 @@ class Plant:
                 "capture_source": RC.CAPTURE_SOURCE, "captures": self.captures, "events": self.events,
                 "ram_geometry": {"source": RAM_GEOMETRY_SOURCE, "tdc_z_m": RAM_TDC_Z, "stroke_m": RAM_STROKE_M,
                                  "half_m": RAM_HALF_M},
-                "camera": type(self.camera).__name__, "log_file": log_file.name, "plant_wall_s": round(self.wall_plant, 2),
+                "camera": type(self.camera).__name__, "camera_provenance": self.camera.provenance(),
+                "log_file": log_file.name, "plant_wall_s": round(self.wall_plant, 2),
                 "reset_sweep": self._sweep_tag(),
                 "safety": {ps.press: {"guard": ps.guard.model_dump(), "reset_median_s": ps.reset.median_s,
                                       "reset_p90_s": ps.reset.p90_s} for ps in self.safety.presses}}
