@@ -33,11 +33,14 @@ with the LEAD DECISION: fail closed, i.e. every cell of a press grid not learned
 bin 0 and STOP_BIN, `twin_bin`; the robot never meets an unlearned bin and never falls back to the union rule), and for
 STOP_BIN the inflated STOP_BIN envelope. unknown_rects carry only the live map's own UNKNOWN rects plus the detector's
 UNKNOWN cells (CUSUM alarms and the fail-closed unlearned cells), inflated by the same margin (the frozen rule inflates
-"occupied OR UNKNOWN"). The robot (intercycle_nav.masks, Site.own_stop) looks up STOP_BIN for a press whose own fast
-entry is a confident STOPPED (confidence >= 4, inside its TTL), bin 0 while it cycles, and the union of all bins for
-anything else (UNKNOWN, missing, low confidence: fail closed). `robot_bins` / `calibration_pred` give S7b's dev
-recorder exactly that lookup, un-inflated, so the certified margin applies to what the robot gets
-(inflate(calibration_pred) == the broadcast per-bin envelope OR the broadcast UNKNOWN cells). The margin's cell_m must
+"occupied OR UNKNOWN"). The robot (intercycle_nav.masks, Site.own_stop) looks up, over its keep-out horizon
+[t, t + H] (H = 6 s), STOP_BIN for a press whose own fast entry is a confident STOPPED (confidence >= 4) that stays
+inside its TTL over the WHOLE horizon, bin 0 while it cycles, and the union of all bins for anything else (UNKNOWN,
+missing, low confidence, a stop expiring inside the horizon, a fast layer older than 30 s: fail closed).
+`robot_bins` / `calibration_pred` give S7b's dev recorder exactly that lookup, un-inflated, from the slow and fast
+layers the robot holds (the last broadcast ones, not this observer's current models) at the robot's lookup time, so the
+certified margin applies to what the robot gets (inflate(calibration_pred) == the broadcast per-bin envelope OR the
+broadcast UNKNOWN cells). The margin's cell_m must
 equal the L1 grid cell (env_res) and margin_m must fit in the grid's margin around the zone, else ValueError (fail
 closed: re-calibrate on this grid). `tags["m7_application"]` carries this into every run's diagnostics.
 
@@ -76,12 +79,20 @@ TWIN_BINS = (0, M.STOP_BIN)
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 TOD_TAG = ("ASSUMED: no hour-of-day structure is observed in the real clips (probe P2: no timing information); "
            "any time-of-day or shift structure in the map's slices comes from the generated days")
+# the robot's lookup parameters (intercycle_nav.masks MaskParams.horizon_s / step_s and ObserverState.fast_max_age_s
+# defaults, = observer_bridge's horizon_s / step_s defaults; tests/test_observer_live.py pins the equality)
+ROBOT_HORIZON_S = 6.0
+ROBOT_STEP_S = 0.5
+ROBOT_FAST_MAX_AGE_S = 30.0
 M7_TAG = ("LEAD DECISION (audit S6 #3, option B): per-bin M-W7 inflation. Every running phase bin is broadcast as the "
           "inflated bin-0 envelope and STOP_BIN as the inflated STOP_BIN envelope; only the change detector's UNKNOWN "
           "and fail-closed unlearned cells (inflated) are broadcast as UNKNOWN boxes. The robot opens a press's STOP_BIN "
-          "envelope only on its own confident STOPPED (confidence >= 4, inside its TTL); UNKNOWN, missing or low "
-          "confidence reads the union of both bins (fail closed). S7b's calibration pred = calibration_pred(), the "
-          "same lookup un-inflated")
+          "envelope only on its own confident STOPPED (confidence >= 4) that stays inside its TTL over the whole "
+          "keep-out horizon [t, t + 6 s] (audit S6-optB fix 1: a stop expiring inside the horizon reads the union); "
+          "UNKNOWN, missing or low confidence reads the union of both bins (fail closed). With the learner's STOPPED "
+          "TTL (min(ttl_s, 10 s), floor 2 s) the STOP_BIN envelope opens only when ttl_s >= 6 s; no bounded stop "
+          "validity is in use (none decided). S7b's calibration pred = calibration_pred(slow, fast, t), the same "
+          "lookup un-inflated, from the layers the robot holds at its lookup time t")
 
 
 def twin_bin(b: int) -> int:
@@ -95,15 +106,25 @@ def twin_bin(b: int) -> int:
     raise ValueError(f"phase bin {b} outside 0..{M.STOP_BIN}")
 
 
-def robot_bins(model: MachineModel | None, now: MachineNow | None) -> tuple[int, ...]:
-    """The twin bins the robot looks up for one press from one fast entry, at its issue time (intercycle_nav.masks:
-    an off-line press with Site.own_stop, not held): a confident STOPPED (fast and slow confidence >= MIN_CONF) ->
-    (STOP_BIN,); a confident ACTIVE / IDLE with a usable period (own_phase cycling; every running phase bin reads bin 0)
-    -> (0,); anything else (missing, UNKNOWN, low confidence) -> TWIN_BINS, the union (fail closed)."""
+def robot_bins(model: MachineModel | None, now: MachineNow | None, issue_t: float, t: float,
+               horizon_s: float = ROBOT_HORIZON_S, step_s: float = ROBOT_STEP_S,
+               fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S) -> tuple[int, ...]:
+    """The twin bins the robot looks up for one press (intercycle_nav.masks.machine_bins for an off-line press with
+    Site.own_stop, not held) at plant time t over its keep-out horizon [t, t + horizon_s], from the slow model and the
+    fast entry it holds, the fast layer issued at plant time issue_t:
+      * missing, UNKNOWN, low confidence (fast or slow < MIN_CONF), a fast layer older than fast_max_age_s, an entry
+        past its TTL at t -> TWIN_BINS, the union (fail closed);
+      * a confident STOPPED -> (STOP_BIN,) only while the entry stays inside its TTL at every step of the horizon grid
+        (np.arange(0, horizon_s, step_s), as machine_bins), else TWIN_BINS (the press may restart once it expires);
+      * a confident ACTIVE / IDLE with a usable period (own_phase cycling; every running phase bin reads bin 0) -> (0,)."""
     if model is None or now is None or now.confidence < LC.MIN_CONF or model.confidence < LC.MIN_CONF:
         return TWIN_BINS
+    left = issue_t + now.ttl_s - t
+    if t - issue_t > fast_max_age_s or left < 0:
+        return TWIN_BINS
     if now.state == State.STOPPED:
-        return (M.STOP_BIN,)
+        last = float(np.arange(0.0, horizon_s + 1e-9, step_s)[-1])
+        return (M.STOP_BIN,) if last <= left else TWIN_BINS
     if now.state in (State.ACTIVE, State.IDLE) and math.isfinite(model.period_s) and model.period_s > 0:
         return (0,)
     return TWIN_BINS
@@ -371,11 +392,17 @@ class ObserverLive:
         """Press i's broadcast UNKNOWN cells: the detector's UNKNOWN (CUSUM + fail-closed unlearned), inflated."""
         return inflate(self.det.unknown_mask(self.ids[i]), self.margin, cell_m=float(self.spec["env_res"]))
 
-    def calibration_pred(self, fast: FastLayer) -> list[np.ndarray]:
-        """S7b's dev recorder: per press, the un-inflated pred of the lookup the robot makes from this fast layer
-        (`robot_bins` of the current slow model and the fast entry). inflate(pred) is what the robot gets."""
+    def calibration_pred(self, slow: SlowLayer, fast: FastLayer, t: float, horizon_s: float = ROBOT_HORIZON_S,
+                         step_s: float = ROBOT_STEP_S, fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S) -> list[np.ndarray]:
+        """S7b's dev recorder: per press, the un-inflated pred of the lookup the robot makes at plant time t over its
+        keep-out horizon (`robot_bins`). The recorder MUST pass the slow and fast layers the robot actually holds at t
+        (the last ones broadcast to it), never this observer's current models: the robot looks up with what it last
+        received. inflate(pred) is what the robot gets."""
+        models = {m.index: m for m in slow.machines}
         nows = {m.index: m for m in fast.machines}
-        return [self.pred_l1(i, robot_bins(self.models[i], nows.get(i))) for i in range(self.M)]
+        issue_t = float(fast.issue_time) - DAY0_UNIX
+        return [self.pred_l1(i, robot_bins(models.get(i), nows.get(i), issue_t, t, horizon_s, step_s, fast_max_age_s))
+                for i in range(self.M)]
 
     def map_snapshot(self) -> TwinMapSnapshot:
         """The broadcast copy of the live map: per-bin inflated envelopes (`TwinMapSnapshot.envelope`), and
