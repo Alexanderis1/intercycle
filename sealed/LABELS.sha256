@@ -1,0 +1,13 @@
+# twin.sealed/1 LABELS
+f3d7711ed8a0b73814336a3569e57b64ae6750ea5f1e1c55e683239f9a45f261  labels/labels_frames.json
+8d6f1e8e68f0a83e7302df4787c2f0b168fce758eb4866f4f738a814cae194c6  labels/labels_windows.json
+198483a28ca2b2a91513bea29ea548ed5f443e56f34da4c96c7e875eb948dab5  labels/sample.json
+#ids 0_te9,0_tr16,0_tr17,0_tr19,0_tr45,0_tr52,0_tr58,0_tr60,0_tr69,0_tr70,0_tr71,0_tr72,0_tr84,0_tr89,0_tr91,1_tr22,1_tr23,1_tr25,1_tr27,1_tr30,1_tr31,1_tr70,1_tr82,1_tr84,3_te3,3_te7,3_tr15,3_tr17,3_tr19,3_tr29,3_tr37,3_tr42,3_tr43,5_te15,5_tr21,5_tr22,6_tr12,7_te5,7_tr1,7_tr14
+#count camera=9 class=0 n=15
+#count camera=9 class=1 n=9
+#count camera=9 class=5 n=3
+#count camera=9 class=6 n=1
+#count camera=14 class=3 n=9
+#count camera=14 class=7 n=3
+#sample_list 78239fe2059beb1ab4f9d2df8961bcbadf97a905d0d1d26a5d21e66c23110d50
+#aggregate db04104eccc04ff150fadcbf9cd6c5aebc05b00dbaa387d6414a646a292413ce
