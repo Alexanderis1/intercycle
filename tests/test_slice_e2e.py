@@ -197,6 +197,8 @@ def test_modal_learned_cfg_runs_the_learned_stack():
     assert c["plant"]["condition"] == "learned" and c["seconds"] == SL.MISSION_S == 600.0
     assert "-p scenario:=$IC_WORLD/scenario.yaml" in c["goal_cmd"] and c["scenario"] == "scenario.yaml"
     assert "-p sitegraph:=$IC_WORLD/sitegraph.json" in c["goal_cmd"] and "-p condition:=learned" in c["goal_cmd"]
+    assert "require_camera" not in c["goal_cmd"]
+    assert c["goal_cmd"].endswith(f" ; exec sleep {SL.HOLD_GOAL_S}")   # the sim, not the planner, ends the mission
     bc, br = c["extra_launch"]
     assert "-m twin.broadcast_live" in bc and "--obs $IC_OUT/obs_v2.jsonl" in bc and "run_cfg" not in bc
     assert "-p condition:=learned" in br and "keyring:=" in br and "observer_vk.txt" in br
@@ -213,7 +215,7 @@ def test_modal_probe_and_patrol_cfgs_are_labelled_for_what_they_are():
     p = SL.modal_cfg("t2", paths, "x" + SL.FILE_SUFFIX, cz, 100.0, "z14", 0, "probe", 2.0)
     assert p["plant"]["condition"] == "no_map" and len(p["extra_launch"]) == 1
     assert "-p condition:=none" in p["extra_launch"][0] and "keyring" not in p["extra_launch"][0]
-    assert "-p condition:=none" in p["goal_cmd"]
+    assert "-p condition:=none" in p["goal_cmd"] and "-p require_camera:=false" in p["goal_cmd"]   # blind trip probe
     w = SL.modal_cfg("t3", paths, "x" + SL.FILE_SUFFIX, cz, 100.0, "z14", 0, "patrol", 2.0)
     assert w["wiring_only"] and w["plant"]["condition"] == "no_map" and w["scenario"] == ""
     assert isinstance(w["goal"][0], list) and w["goal"][-1][:2] == list(cz.graph.pos["DOCK"])
@@ -314,6 +316,20 @@ def test_the_recorder_sees_a_direct_read(report, monkeypatch):
     seen = _record_truth_reads(monkeypatch)
     (out / ("w0_d9" + SL.FILE_SUFFIX)).read_bytes()
     assert seen and seen[0][0] == "tests/test_slice_e2e.py"
+
+
+def test_plant_status_comes_from_the_pulled_summary(report, tmp_path):
+    _, out = report
+    assert SL._plant_status(None) is None and SL._plant_status(tmp_path) is None
+    s = json.loads((out / "runs" / "mission_local" / "summary.json").read_text(encoding="utf-8"))
+    s.update(status="ok", status_reason=None)
+    (tmp_path / "summary.json").write_text(json.dumps(s), encoding="utf-8")
+    assert SL._plant_status(tmp_path) == "ok"
+    s.update(status="error", status_reason="mission ended at sim t=155.00 s before T=600.0 s")
+    (tmp_path / "summary.json").write_text(json.dumps(s), encoding="utf-8")
+    assert SL._plant_status(tmp_path).startswith("error: mission ended")
+    with pytest.raises(SL.SliceError, match="plant status error"):
+        SL.check_modal_mission({"tag": "t", "pulled": str(tmp_path), "plant_status": SL._plant_status(tmp_path)})
 
 
 def test_feed_check_requires_verified_layers(tmp_path):

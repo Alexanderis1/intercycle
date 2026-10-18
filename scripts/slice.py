@@ -521,13 +521,18 @@ def run_guard_tests() -> dict:
 # Modal missions. "timing" = step 6 proper: the LEARNED condition, the twin broadcaster (twin/broadcast_live.py: the
 # observer of step 5, learned on the same 20 min, tailing the mission's obs_v2.jsonl) signs slow / fast / map layers,
 # observer_bridge verifies them with the episode's keyring and builds the Nav2 masks, timing_planner (SIPP on the
-# zone's compiled TwinSiteGraph, sitegraph.json) runs the mission. "probe" = the same stack in condition no_map (no
-# feed, no masks: the robot enters on its own camera's no-motion check alone), run next to it on Modal so the
-# stop-in-Observation assertion is exercised on the Modal path by a robot-caused stop. "patrol" = a WIRING check only
-# (send_goal.py through the graph nodes; no planner, no feed, no inspection events), tagged as such.
+# zone's compiled TwinSiteGraph, sitegraph.json) runs the mission. "probe" = a TRIP PROBE on the same stack in
+# condition no_map: no feed, no masks, and the robot enters the press zone BLIND (require_camera false), the Modal
+# counterpart of the local double's trip probe, run next to the learned mission so the stop-in-Observation assertion
+# is exercised on the Modal path by a robot-caused stop (a learned robot fails closed and never enters a running
+# press, so it cannot supply one; first Modal run: its own-camera no_map robot waited 120 s and never entered either).
+# It is never a condition result. "patrol" = a WIRING check only (send_goal.py through the graph nodes; no planner,
+# no feed, no inspection events), tagged as such. Every mission lasts MISSION_S of sim time: when the planner is done
+# the goal process holds (the sim, not the planner, ends the mission), as the plant's fixed T needs.
 MODAL_PLANNERS = {"timing": ("learned", "learned"), "probe": ("no_map", "none"), "patrol": ("no_map", "")}
 REMOTE_PLANT_DIR = "/root/plant"     # = cloud/modal_isaac_robot.PLANT_DIR (outside $IC_WORLD; tests check)
 LEARN_OBS = "learn_obs.jsonl"        # = twin/broadcast_live.LEARN_FILE
+HOLD_GOAL_S = 100000                 # the goal process outlives the sim (episode.py stops the sim when goal exits)
 
 
 def modal_cfg(tag: str, paths: dict[str, Path], script_name: str, cz: C.CompiledZone, t0: float, zone: str,
@@ -573,6 +578,7 @@ def modal_cfg(tag: str, paths: dict[str, Path], script_name: str, cz: C.Compiled
     sock = "unix://$IC_WORK/observer.sock" if feed else "none"
     wait_vk = "for i in $(seq 1200); do [ -s $IC_WORK/observer_vk.txt ] && break; sleep 0.1; done; " if feed else ""
     keyring = " -p keyring:=\\\"$(cat $IC_WORK/observer_vk.txt)\\\"" if feed else ""
+    blind = " -p require_camera:=false" if planner == "probe" else ""
     extra = []
     if feed:
         extra.append("PYTHONPATH=$IC_SIM_PYTHONPATH exec $IC_SIM_PY -u -m twin.broadcast_live --work $IC_WORK"
@@ -583,7 +589,7 @@ def modal_cfg(tag: str, paths: dict[str, Path], script_name: str, cz: C.Compiled
     cfg["goal_cmd"] = (f"python3 -u -m intercycle_nav.timing_planner --ros-args -p use_sim_time:=true"
                        f" -p condition:={bcond} -p plant_t0:={t0} -p init:=[{start[0]},{start[1]},{start[2]}]"
                        f" -p mission_timeout_s:=100000.0 -p max_wait_s:=120.0 -p sitegraph:=$IC_WORLD/sitegraph.json"
-                       f" -p out:=$IC_WORK/goal.json{arg}")
+                       f" -p out:=$IC_WORK/goal.json{blind}{arg} ; exec sleep {HOLD_GOAL_S}")
     check_robot_scenario(cfg)
     return cfg
 
@@ -629,9 +635,18 @@ def run_modal(out: Path, cfgs: list[dict], world: dict[str, bytes], plant_files:
                      "pulled": str(dest) if dest else None, "error": res.get("error"), "phases": res.get("phases"),
                      "client_wall_s": wall, "goal": (res.get("goal") or {}).get("result"),
                      "n_inspected": (res.get("goal") or {}).get("n_inspected"),
-                     "plant_status": (res.get("plant") or {}).get("status"),
+                     "plant_status": _plant_status(dest),
                      "rtf": (res.get("sim") or {}).get("rtf"), "log_tail": (res.get("log_tail") or "")[-3000:]})
     return recs
+
+
+def _plant_status(run_dir: Path | None) -> str | None:
+    """The plant's own verdict on the mission: summary.json (twin.summary/1) status in the pulled episode dir."""
+    p = run_dir / "summary.json" if run_dir else None
+    if p is None or not p.exists():
+        return None
+    s = Summary.model_validate_json(p.read_text(encoding="utf-8"))
+    return s.status if s.status == "ok" else f"{s.status}: {s.status_reason}"
 
 
 def check_feed_verified(run_dir: Path) -> dict:
