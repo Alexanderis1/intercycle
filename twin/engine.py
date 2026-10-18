@@ -31,9 +31,13 @@ Press model (W-W3: the engine adds no stops of its own; every stop, short or lon
 
 apply_freeze(press, t0, t1, state) (W-W4 / R-W2): the plant decides WHEN a robot-caused stop, a manual reset or a
 hold happens and how long it lasts (safety.yaml: trip -> lognormal manual reset, U4); the engine only executes it.
-Times are absolute sim seconds (the realised stream's clock), interval [t0, t1). A freeze may start at the latest
-tick already emitted (the plant re-emits that tick after deciding) but never earlier: rewriting emitted truth fails
-closed.
+Times are absolute sim seconds (the realised stream's clock), interval [t0, t1). Rewriting emitted truth fails
+closed (audit fix2):
+* a freeze must start AFTER the latest tick a RealisedWriter has written for this engine (that tick is on disk; a
+  freeze from it would make the engine's truth, e.g. stroke_times, disagree with the stream). The natural plant loop
+  "tick t, write t, detect a contact at t" therefore freezes from the next tick, t + 0.5 s;
+* it may start at the latest tick tick() has COMPUTED but not written, never earlier; such a tick object is then
+  stale and the writer refuses it ("recompute"): the plant computes tick(t) again after deciding and writes that.
 
 Movers: intent i is present for absolute t in [t0_s + t_start, t0_s + t_start + duration / speed_scale]; its position
 is the segment polyline at local time (t - start) * speed_scale; speed = leg length / leg time * speed_scale;
@@ -253,7 +257,10 @@ class Engine:
         self.movers = sorted((_Mover(m.entity, m.cls, self.t0 + m.t_start, m.speed_scale, seg[m.segment].points)
                               for m in script.mover_intents), key=lambda m: m.id)
         self._floors = [(z.id, z.floor_polygon.value) for z in site.zones]
-        self._horizon = -math.inf                         # latest tick time emitted by tick()
+        self._horizon = -math.inf                         # latest tick time computed by tick()
+        self._written = -math.inf                         # latest tick time a RealisedWriter wrote (on disk)
+        self._gen = 0                                     # freeze generation: +1 per apply_freeze
+        self._gen_at: dict[int, int] = {}                 # grid index k (t = k / TICK_HZ) -> generation it was computed in
 
     # ---------------------------------------------------------------------------------------------- freezes
 
@@ -265,10 +272,26 @@ class Engine:
             raise ValueError(f"freeze state {state!r} not in {FREEZE_STATES}")
         if not (math.isfinite(t0) and math.isfinite(t1)) or t1 <= t0:
             raise ValueError(f"empty or invalid freeze [{t0}, {t1})")
+        if t0 <= self._written + EPS:
+            raise ValueError(f"freeze at {t0} starts at or before the latest written tick {self._written}: it would "
+                             "rewrite emitted truth already on disk (freeze from the next tick at the earliest)")
         if t0 < self._horizon - EPS:
-            raise ValueError(f"freeze at {t0} starts before the latest emitted tick {self._horizon}: "
+            raise ValueError(f"freeze at {t0} starts before the latest computed tick {self._horizon}: "
                              "it would rewrite emitted truth")
         self.presses[press].add(Freeze(press, float(t0), float(t1), state))
+        self._gen += 1
+
+    def _commit(self, tick: RealisedTick) -> None:
+        """Called by RealisedWriter before it writes `tick`: the tick must have been computed by this engine under
+        its current freezes and lie after the latest written tick; it then becomes the written horizon."""
+        k = round(tick.t * TICK_HZ)
+        if self._gen_at.get(k) != self._gen:
+            raise ValueError(f"tick t={tick.t} was not computed by this engine under its current freezes (a freeze "
+                             "was applied after it was computed): recompute it with tick() before writing")
+        if tick.t <= self._written + EPS:
+            raise ValueError(f"tick t={tick.t} is not after the latest written tick {self._written}")
+        del self._gen_at[k]
+        self._written = float(tick.t)
 
     def freezes(self) -> list[Freeze]:
         return sorted((f for p in self.presses.values() for f in p.freezes),
@@ -309,7 +332,9 @@ class Engine:
                                         r=MOVER_R[m.cls]))
         movers += list(extra)
         self._horizon = max(self._horizon, t)
-        return RealisedTick(kind="tick", t=float(t), presses=presses, movers=movers)
+        out = RealisedTick(kind="tick", t=float(t), presses=presses, movers=movers)
+        self._gen_at[round(t * TICK_HZ)] = self._gen
+        return out
 
     def ticks(self, t_from: float | None = None, t_to: float | None = None,
               extra: ExtraMovers | None = None) -> Iterator[RealisedTick]:
@@ -349,9 +374,12 @@ class RealisedWriter:
     tick at exactly header.t0_s (the first grid tick at or after t_from; default the scripted day's start).
 
     Fail closed for EVAL, which scores against this file: the stream is written to `<path>.partial` and moved onto
-    `path` (os.replace) only when the with-block exits without an exception. A crash deletes the partial file, and a
-    stale stream already at `path` (an earlier attempt) is removed when the writer opens, so a cut-off truth stream
-    is never at the final path. (A hard kill leaves only the .partial, never the final file.)"""
+    `path` (os.replace) only when the with-block exits without an exception AND at least one tick was written (a
+    clean exit with 0 ticks deletes the partial and raises). A crash deletes the partial file, and a stale stream
+    already at `path` (an earlier attempt) is removed when the writer opens, so a cut-off truth stream is never at the
+    final path. (A hard kill leaves only the .partial, never the final file.) Each tick must come from this engine's
+    tick() under its current freezes (Engine._commit); writing it moves the engine's written horizon, before which
+    apply_freeze refuses to start."""
 
     def __init__(self, engine: Engine, path: str | os.PathLike, run_id: str, world: int, t_from: float | None = None):
         self.engine, self.path = engine, Path(path)
@@ -376,6 +404,7 @@ class RealisedWriter:
             raise ValueError(f"tick t={tick.t} is not {DT} s after {self._prev}")
         if [p.id for p in tick.presses] != self.header.presses:
             raise ValueError("tick presses differ from the header")
+        self.engine._commit(tick)               # computed under the current freezes; becomes the written horizon
         self._f.write(_line(tick))
         self._prev = tick.t
 
@@ -384,10 +413,12 @@ class RealisedWriter:
             return
         self._f.close()
         self._f = None
-        if et is None:
+        if et is None and self._prev is not None:
             os.replace(self.partial, self.path)
-        else:
-            self.partial.unlink(missing_ok=True)
+            return
+        self.partial.unlink(missing_ok=True)
+        if et is None:                          # a clean exit with 0 ticks: no header-only 'completed' stream
+            raise ValueError(f"no tick was written to {self.path}: nothing is published (fail closed)")
 
 
 def write_realised(engine: Engine, path: str | os.PathLike, run_id: str, world: int, t_from: float | None = None,

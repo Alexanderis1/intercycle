@@ -259,6 +259,53 @@ def test_apply_freeze_fails_closed():
         eng.apply_freeze("P9a", s.t0_s + 9.5, s.t0_s + 12.0)
 
 
+def _stroke_ticks(path) -> list[float]:
+    with open(path, encoding="utf-8") as f:
+        _, ticks = parse_realised(f)
+        return [tk.t for tk in ticks if tk.presses[0].stroke]
+
+
+def test_a_freeze_at_a_written_tick_fails_closed(tmp_path):
+    """Audit fix2 (major): the plant loop 'tick t, write t, detect a contact at t, apply_freeze(t, ...)' must not be
+    accepted: the tick at t is already truth on disk ('running', a stroke) and a freeze from t would make the engine
+    disagree with it (a stroke counted twice). The freeze may start at the next tick at the earliest."""
+    s = _script([_run(phase=0.0, period=10.0), _stop("P14a")])
+    eng = Engine(s, SITE)
+    path = tmp_path / "realised_state.jsonl"
+    with RealisedWriter(eng, path, "r", 0) as w:
+        for t in eng.tick_times(t_to=s.t0_s + 10.5):                  # written up to and including +10.0
+            w.write(eng.tick(float(t)))
+        with pytest.raises(ValueError, match="written"):
+            eng.apply_freeze("P9a", s.t0_s + 10.0, s.t0_s + 13.0)
+        with pytest.raises(ValueError, match="written"):
+            eng.apply_freeze("P9a", s.t0_s + 4.0, s.t0_s + 13.0)
+        assert eng.stroke_times("P9a")[:3] == pytest.approx([s.t0_s, s.t0_s + 10.0, s.t0_s + 20.0])
+        eng.apply_freeze("P9a", s.t0_s + 10.5, s.t0_s + 13.0)         # from the next tick: allowed
+        for t in eng.tick_times(s.t0_s + 10.5):
+            w.write(eng.tick(float(t)))
+    st = eng.stroke_times("P9a")
+    assert st[:3] == pytest.approx([s.t0_s, s.t0_s + 10.0, s.t0_s + 22.5])
+    assert _stroke_ticks(path) == pytest.approx([math.ceil(x * 2) / 2 for x in st])   # the stream agrees with truth
+
+
+def test_a_tick_computed_before_a_later_freeze_is_not_written(tmp_path):
+    """A freeze at a tick that was computed but not yet written is allowed; the stale tick object must then be
+    recomputed: writing it would put pre-freeze state on disk under the engine's post-freeze truth."""
+    s = _script([_run(phase=0.0, period=10.0), _stop("P14a")])
+    eng = Engine(s, SITE)
+    with RealisedWriter(eng, tmp_path / "realised_state.jsonl", "r", 0) as w:
+        for t in eng.tick_times(t_to=s.t0_s + 10.0):
+            w.write(eng.tick(float(t)))
+        stale = eng.tick(s.t0_s + 10.0)
+        assert stale.presses[0].state == "running" and stale.presses[0].stroke
+        eng.apply_freeze("P9a", s.t0_s + 10.0, s.t0_s + 13.0)
+        with pytest.raises(ValueError, match="recompute"):
+            w.write(stale)
+        fresh = eng.tick(s.t0_s + 10.0)
+        assert fresh.presses[0].state == "tripped" and not fresh.presses[0].stroke
+        w.write(fresh)
+
+
 def test_tick_refuses_off_grid_and_out_of_day_times():
     s = _day()
     eng = _engine(s)
@@ -348,6 +395,16 @@ def test_writer_leaves_no_stream_when_the_run_crashes(tmp_path):
     assert sorted(x.name for x in final.parent.iterdir()) == ["realised_state.jsonl"]
 
 
+def test_a_clean_exit_with_no_tick_publishes_nothing(tmp_path):
+    """Audit fix2 (minor): a plant that opens the writer and returns early must not leave a header-only 'completed'
+    stream at the final path (0 ticks); the partial is removed and the exit fails closed."""
+    final = tmp_path / "runs" / "x" / "realised_state.jsonl"
+    with pytest.raises(ValueError, match="no tick was written"):
+        with RealisedWriter(_engine(), final, "x", 0):
+            pass
+    assert not final.exists() and list(final.parent.iterdir()) == []
+
+
 def test_engine_refuses_a_script_start_off_the_2hz_grid():
     with pytest.raises(ValueError, match="grid"):
         Engine(_script([_run()], t0_s=100.25), SITE)
@@ -362,8 +419,9 @@ def test_header_t0_is_the_first_tick_of_the_stream(tmp_path):
             header, ticks = parse_realised(f)
             assert header.t0_s == first == next(ticks).t
     eng = _engine(s)
-    with RealisedWriter(eng, tmp_path / "w" / "realised_state.jsonl", "x", 0) as w:    # header t0_s = day start
-        with pytest.raises(ValueError, match="first tick"):
-            w.write(eng.tick(s.t0_s + 500.0))
+    with pytest.raises(ValueError, match="no tick was written"):
+        with RealisedWriter(eng, tmp_path / "w" / "realised_state.jsonl", "x", 0) as w:    # header t0_s = day start
+            with pytest.raises(ValueError, match="first tick"):
+                w.write(eng.tick(s.t0_s + 500.0))
     with pytest.raises(ValueError, match="no tick"):
         RealisedWriter(_engine(s), tmp_path / "e" / "realised_state.jsonl", "x", 0, t_from=s.t0_s + s.duration_s)
