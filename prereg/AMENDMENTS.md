@@ -347,3 +347,29 @@ The A5 table was computed from a working tree that did not match the merge commi
   is `done` (it took the last one), matching PREREG "the first clean attempt is scored". `--attempt N` is unchanged.
   The RC-final audit had flagged this as a minor issue. Runbook: one safe.directory line in docs/probes/REALCLIP_RUN.md.
 - **§1 blob, scripts/sealed_run.py:** 2bbcabf0a1c04139b63f0c5ec9ce7e5bda83492e (A5) -> **d95f72f050e3b7a74d77334410a49e01de2f6ce6** (binding, = `git rev-parse 9f96abf:scripts/sealed_run.py`).
+
+## Amendment 8 (A8): robot part at FREEZE: 20-min learning in code, fix (a) not built, freeze mechanics
+
+- **Recorded:** Sun 18 Oct 2026, ~10:10 CEST, lead session intercycle-74, at the main commit RC that merges
+  lane/robot-freeze, before prereg/FREEZE_REALCLIP and prereg/FREEZE.
+- **Observer learning = 20 min (A5 item 6, now in code).** PREREG v1 "days 1-8" (§ on observer learning) is replaced: for each learned mission a
+  fresh observer reads the robot-free plant stream of the same world day over [t0-1200 s, t0) (lane learn20b, c4b8df3,
+  audit pass; `scripts/run_double.py` default `learn20`; the days 1-8 path stays behind the dev-only flag
+  `--observer-days18`, refused in a sealed run). Nothing carries over between days, zones or missions.
+- **Short window (user decision ~10:00 CEST, verbatim "Keep the shorter window, disclose"):** a mission starting less
+  than 1200 s into its day (SLOT_PAD_S = 600 s) learns from [day start, t0) only; the run record marks `clipped = true`
+  and `learn_s` < 1200. Expected ≈ 0.7 % of slots (< 1 of 64 learned missions).
+- **Fix (a) NOT built (A5 item 8 void).** Measured before building: the 2 Hz tick does not block learning (a clean
+  synthetic 1.69 s stroke learns at confidence 15 under the current limits; the estimator already removes the tick
+  quantisation). Real P9b fails because tracked strokes are split / merged (cycles 1.0-4.0 s; learned 1.518 s vs
+  generator ~1.70 s; jitter 0.203, consistency 0.103). Loosening the limits to pass it would be tuning, so no learning
+  limit was changed. Consequence, disclosed: the learned arm most likely has confidence 0 on every press and acts like
+  the static arm; the user decided (~10:00 CEST, verbatim "Freeze and run it, report honestly").
+- **Freeze mechanics (user decision "Both at 10:15"):** ONE frozen code commit RC for both parts. The files are written in
+  two consecutive commits because the checks require it: commit A writes prereg/FREEZE_REALCLIP = RC (the real-clip run
+  uses a detached worktree at A; C3 allows only that file after RC); commit B writes prereg/FREEZE = A (robot check 3
+  allows only prereg/FREEZE, TEST_SEED_COMMIT and results/sealed/** after A; check 5: RC is an ancestor of A and no
+  real-clip input differs). Seeds: drand round after commit B's time.
+- **Sealed batch cost:** projected ≈ $5.9 on Modal (observer $0.41 + missions $5.50), inside the session's Modal cap.
+- **Dev dry run of this path:** `scripts/run_double.py` on Modal, dev world 0, day 9, 3 missions, 1 round:
+  0 invalid, 0 crashed, $0.08, 459 s wall (out/double/freeze_dry2_w0d9z9, ~09:53-10:01 CEST).
