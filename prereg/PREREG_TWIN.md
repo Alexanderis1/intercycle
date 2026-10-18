@@ -20,9 +20,10 @@ after FREEZE (§2.1). The 11:15 auditor diffs this v1 against the final version 
   their timing and their lengths come from a generator we wrote (twin/daygen.py, twin/dynamics.json); no real clip has
   timing information (P2). A win on the twin says the learned policy uses that stop model better than a camera-only
   reactive rule does. It does not say the same win happens on a real press line.
-- **Zone 9 is the primary zone; zone 14 is fully assumed.** The camera-9 presses (P9a, P9b) have stroke periods learned
-  from train clips (P4); the camera-14 presses are ASSUMED (P4). The gate pools both zones per world, as the code does
-  (§3); the per-zone split is reported beside it, and any zone-14 effect rests wholly on assumed presses.
+- **Zone 9 carries the learned evidence; zone 14 is fully assumed.** The camera-9 presses (P9a, P9b) have stroke
+  periods learned from train clips (P4); the camera-14 presses are ASSUMED (P4). The gate pools both zones with equal
+  weight per world, as `twin_eval.per_world` does (§3) [lead reading of the user's "zone 9 primary"]; the per-zone
+  split is reported beside it, and zone 14's share of any effect rests wholly on assumed presses.
 - **H3 is a consistency check on the same generator.** The safety margin and the test worlds come from the same
   generator family; H3 checks that the margin keeps its miss share on new worlds of that family. It is not a safety
   proof for a real shop floor.
@@ -57,16 +58,23 @@ merged one in the same commit (and the change listed in prereg/AMENDMENTS.md) be
 quoted in §2 (seed derivation), §6 (exclusion) and §9 (default configs) must still read as written here. The learned
 and reactive blobs are re-recorded at FREEZE (§9).
 
-**Code that must change before FREEZE to match this text** (the text holds, PLAN §5; each is a bug until fixed):
-1. `twin_design.make_design` enforces the five-condition design on the sealed CPU double (`cs != CONDITIONS`); it must
-   enforce the cut design of §2 (static, learned, reactive; 16 × 2 × 2 × 3 = 192 cells).
-2. `sealed_run.py` reads one `prereg/FREEZE` for every stage; the real-clip stage must be gated by
-   `prereg/FREEZE_REALCLIP` and the robot stage by `prereg/FREEZE` (§2.1), and the seeds must be derived only after
-   `prereg/FREEZE`.
+**Code that must change to match this text** (the text holds, PLAN §5; each is a bug until fixed).
+
+Must be merged **before FREEZE_REALCLIP (08:30)**, because the 09:15 run uses them:
+2. `sealed_run.py` reads one `prereg/FREEZE` for every stage and requires seeds; the clips stage must be gated by
+   `prereg/FREEZE_REALCLIP` alone and run without seeds, the robot stage by `prereg/FREEZE`, and the seeds must be
+   derived only after `prereg/FREEZE` (§2.1). The clips stage must also refuse unless every real-clip path of §2.1
+   has, in the commit it runs from, the same git blob as at the FREEZE_REALCLIP commit.
 3. `realclip.FRAME_TOL_S = 1/12 s`; the H4 test side must use the r0 rule's nearest-frame tolerance of 0.05 s (§4.1),
    or the r0 rule and the test side differ.
 4. The real-clip occlusion figure must use the image-space ram-ROI rule (§10), and `detect_strokes` must emit the BDC
    (bottom) time of each stroke (§10).
+
+Must be merged **before FREEZE (~10:15)**:
+1. `twin_design.make_design` enforces the five-condition design on the sealed CPU double (`cs != CONDITIONS`); it must
+   enforce the cut design of §2 (static, learned, reactive; 16 × 2 × 2 × 3 = 192 cells).
+5. No writer enforces the fixed-margin rule of §7 (`conformal_margin.write_margin_file` refuses non-LTT results):
+   `scripts/write_fixed_margin.py` must compute margin_m exactly as §7 states and write `twin/m7_margin.json`.
 
 If the code and this text disagree on a not-amendable item, this text holds and the code is a bug to fix before the
 freeze that covers it.
@@ -97,12 +105,20 @@ freeze that covers it.
 |---|---|---|
 | File | `prereg/FREEZE_REALCLIP` = the 40-hex sha of the commit it freezes | `prereg/FREEZE` = the 40-hex sha of the commit it freezes |
 | When | 08:30 CEST | ~10:15 CEST |
-| Covers | the real-clip test: PERC ingest (detector, tracker, `detect_strokes`), pixel adapter, CAL, `realclip.py` scoring, the occlusion rule of §10, r0 (`prereg/r0_v1.json`), H4 (`twin_eval.h4_recall`), `sealed/MANIFEST.sha256`, `sealed/LABELS.sha256` | the robot part: twin generator and dynamics (G2 hashes), CPU double, both robot arms at their default configs (§9), the fixed M-W7 margin (§7), EVAL (`twin_eval.py`, `twin_design.py`), `classify_invalid.py` |
+| Covers | the real-clip test, frozen as these exact paths (the "real-clip paths"): `scripts/sealed_run.py`, `intercycle/eval/realclip.py`, `intercycle/observer/occlusion.py`, `intercycle/perception/press_motion.py`, `intercycle/perception/esk_ingest.py`, `intercycle/perception/detector.py`, `cloud/modal_perc.py`, `intercycle/eval/twin_eval.py` (for `h4_recall`), `prereg/r0_v1.json`, `sealed/MANIFEST.sha256`, `sealed/LABELS.sha256`; plus the pixel adapter and CAL files these import, as recorded in the FREEZE_REALCLIP commit message | the robot part: twin generator and dynamics (G2 hashes), CPU double, both robot arms at their default configs (§9), the fixed M-W7 margin (§7), EVAL (`twin_eval.py`, `twin_design.py`), `classify_invalid.py` |
 | Run | once at **09:15 CEST**, ephemeral Modal container launched by the custodian agent, on the test clips only | the 192 sealed CPU-double cells, after the seeds |
 | Seeds | none | derived only after the FREEZE commit (§2 "Test seeds") |
 
 - No change to the real-clip code or inputs after FREEZE_REALCLIP; no change to the robot code or inputs after FREEZE.
   The FREEZE commit contains the FREEZE_REALCLIP commit (it is an ancestor).
+- **Shared files** (`scripts/sealed_run.py`, `intercycle/eval/twin_eval.py`): the clips stage checks every real-clip
+  path against its FREEZE_REALCLIP blob (§1 item 2), so none of them changes between 08:30 and the 09:15 run. After
+  the 09:15 run, a robot-side change to these two files must leave the clips-stage code of `sealed_run.py` and the
+  function `twin_eval.h4_recall` textually unchanged; the auditor diffs both against the FREEZE_REALCLIP commit.
+- **The 09:15 outputs go only to the custodian agent until FREEZE is committed** (or until the lead declares the
+  robot part descriptive at 10:15): the lead receives only "run completed" and the output hash, so the real-clip
+  outcomes cannot inform any robot-part choice (margin, bug-fix amendments, the go/no-go on FREEZE). Any amendment
+  between 09:15 and FREEZE names the dev run that prompted it.
 - **If the robot part is not ready by 10:15**, FREEZE is not committed for the robot part, no test seed is derived and
   no sealed robot run happens: the robot results are reported as **descriptive dev results** (dev worlds 0-3), and
   **no H1, H2 or H3 claim is made**. H4 is then still computed on the real-clip run and reported, but it is not
@@ -203,12 +219,21 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
 - Risk level **α = 0.05**, confidence **δ = 0.10** (user decision, Sun ~00:45-01:40) [STATUS G0], [PLAN §4 S7b].
   α is H3's α_target (§4).
 - **The fixed-margin fallback is used** [A2], [PLAN §6 Fallback]: the 32-world Learn-then-Test calibration on dev
-  worlds 100-131 is not run. M-W7 is a **fixed latency-p99 margin**: margin_m = the 99th percentile of the measured
-  fast-layer age (`conformal_margin.age_summary(...)["p99"]`, the age per tick the robot actually holds) on the robot
-  dev runs (dev worlds 0-3, days 2-8), times the largest mover speed of the twin's dynamics (`twin/dynamics.json`,
-  the key and value recorded in the margin file), rounded up to a whole grid cell [lane PREREG-final reading of
-  "latency-p99 margin", to be confirmed by the lead before FREEZE]; disclosed as "fixed latency-p99 margin, not certified". It is computed from dev runs
-  only, before FREEZE.
+  worlds 100-131 is not run. M-W7 is a **fixed latency-p99 margin**: margin_m =
+  ceil(age_p99 × v_max / cell_m) × cell_m [lead, fixed by committing this file], where
+  - **age_p99** = `conformal_margin.age_summary(age_s, source)["p99"]` (numpy linear percentile) of the fast-layer
+    age the robot holds at each tick (`DAY0_UNIX + t − issue_unix` of the fast layer in use,
+    `twin/observer_live.py`, the quantity checked against `ROBOT_FAST_MAX_AGE_S = 30 s`), pooled over **every tick of
+    every learned-arm mission on dev worlds 0-3, days 2-8, zones 9 and 14** (the reactive arm has no fast layer);
+    a tick with no fast layer is left out and the count is recorded;
+  - **v_max** = the largest `sweep.hi` over the three mover speed keys of `twin/dynamics.json` `observed`:
+    `forklift.z14.speed_mps` (1.792664), `person.z14.speed_mps` (1.527327), `person.z9.speed_mps` (1.011488), i.e.
+    **1.792664 m/s** (forklift, zone 14) at the dynamics file of the FREEZE commit; one value for both zones;
+  - **cell_m** = the robot's inflation grid cell, `observer_live` spec `env_res` (default 0.25 m), the `cell_m` that
+    `inflate` is called with.
+  Disclosed as "fixed latency-p99 margin, not certified". It is computed from dev runs only, before FREEZE, by
+  `scripts/write_fixed_margin.py` (to be written; §1 "must change" item 5), which writes `twin/m7_margin.json` and
+  refuses to overwrite a frozen file.
 - The fallback is written to `twin/m7_margin.json` in the format `twin_eval.load_frozen_margin` reads
   (`margin_inflate.load_margin`: the margin schema, `frozen: true`, `status: "ok"`, `margin_m`, `cell_m`, the
   `inflation` block of `margin_inflate.inflation_spec`, and `unit.episode_s = 720` = one mission), with a `method`
@@ -246,10 +271,14 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
   - Bug fixes before FREEZE are allowed only as amendments with the dev run that prompted them; a change of a default
     value is not a bug fix. The FREEZE commit re-records both arms' blobs and the reactive config hash.
 - **Stop-entry asymmetry, kept and disclosed** (user decision, Sun ~07:00 CEST, [A2]): the learned arm treats a twin
-  press's own confident STOPPED as an idle window only inside the learner's TTL (`min(ttl_s, 10 s)`, ttl_s ≤ 10 /
-  stops_per_h; learner TTL ≤ ~2.6 s [A2]), which never leaves need_s (16.5 s), so **the learned arm never
-  enters a STOPPED press**. The reactive arm's own-camera still-run (KM) window does, so **the reactive arm can enter a
-  STOPPED press**. [code: ros2/intercycle_nav/test/test_stop_entry.py, twin/observer_live.py tags["stop_entry"]]
+  press's own confident STOPPED as an idle window only inside the learner's TTL. The TTL is set by
+  `intercycle/observer/learn_cycles.py::ttl_s`: ttl [s] = clip(min(0.5 · P · (0.025 / (1.96 · jitter))², 10 / stops_per_h),
+  2 s, 300 s), with P the period [s], jitter dimensionless and stops_per_h the stop rate [1/h] (so 10 / stops_per_h is
+  in seconds with the constant 10 in s/h); a STOPPED forecast is further capped at 10 s (`learn_cycles.py`, the
+  `State.STOPPED` cap in the forecast). The pinned fact is that this 10 s cap is below need_s = 16.5 s
+  (ros2/intercycle_nav/test/test_stop_entry.py), so **the learned arm never enters a STOPPED press**; the user-stated
+  typical learner TTL is ~2.6 s [A2]. The reactive arm's own-camera still-run (KM) window does, so **the reactive arm
+  can enter a STOPPED press**. [code: test_stop_entry.py, twin/observer_live.py tags["stop_entry"]]
 - Order [PLAN §4], [A2]: this PREREG committed → dev worlds generated (`scripts/gen_dev_worlds.py --set robot`) → dev
   runs (descriptive, no tuning) → FREEZE_REALCLIP 08:30 → real-clip run 09:15 → fixed margin (§7) and G2 → FREEZE
   ~10:15 → seeds (drand) → sealed CPU-double runs.
