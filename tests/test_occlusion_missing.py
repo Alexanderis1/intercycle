@@ -365,3 +365,27 @@ def test_roi_missing_series_holds_through_detector_gaps(dur):
     assert miss[first:last + 1].all()
     assert not miss[t > t[last] + 2.5 + 1e-6].any()
     assert not miss[t < a].any()
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_roi_occlusion_streaming_equals_the_ingest_series(seed):
+    """ONE image ROI rule (user decision Sun ~08:25 "Same ROI rule in twin"): the twin camera's tick-by-tick
+    `RoiOcclusion` gives exactly the real-clip ingest's `roi_missing_series` on the same boxes and times."""
+    rng = np.random.default_rng(seed)
+    t = np.round(np.arange(600) / 2.0, 6)
+    boxes = []
+    for _ in t:
+        b = []
+        for _ in range(int(rng.integers(0, 3))):
+            u, v = rng.uniform(600, 1100), rng.uniform(100, 700)
+            b.append((u, v, u + rng.uniform(10, 120), v + rng.uniform(20, 250)))
+        boxes.append(b)
+    hold = [0.0, 2.5, 7.5][seed]
+    want = O.roi_missing_series(t, boxes, ROI, hold_s=hold)
+    occ = O.RoiOcclusion(ROI, hold)
+    got = np.array([occ.step_boxes(tt, b) for tt, b in zip(t, boxes)])
+    assert np.array_equal(got, want)
+    occ.reset()
+    got2 = np.array([occ.step(tt, any(occ.hits(bb) for bb in b)) for tt, b in zip(t, boxes)])
+    assert np.array_equal(got2, want)
+    assert want.any() and not want.all()

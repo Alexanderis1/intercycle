@@ -409,15 +409,20 @@ def _camera_v2(obs: Observation, share: np.ndarray, vis_min: float) -> Observati
 
 
 def _occlude(v: Observation, zones: list, vis_min: float, margin: float, pad: float, occ_classes,
-             gate: HoldGate | None, cells: ZoneCells | None) -> Observation:
+             gate: HoldGate | None, cells: ZoneCells | None, floor_rule: np.ndarray | None = None) -> Observation:
     """T-W6 on a v2 observation: NaN zone_motion where a person / vehicle detection touches the zone (held by `gate`),
-    zone_vis lowered by the hidden floor share. Returns a new Observation; the input arrays are not modified."""
+    zone_vis lowered by the hidden floor share. `floor_rule` (M,) bool, default all True: zones where it is False are
+    not floor-occluded (no hit, no hidden share): their zone_motion comes from an image ram ROI whose camera already
+    applied the image-space ROI rule (`occlusion.RoiOcclusion`; its NaNs are kept). Returns a new Observation; the
+    input arrays are not modified."""
     zm, zv = v.zone_motion, v.zone_vis
     assert zm is not None and zv is not None
     if len(zones) != len(zm):
         raise ValueError(f"{len(zones)} zones for {len(zm)} zone_motion entries")
     occ = _occluders(v, occ_classes)
     hit = occluded_zones(v.x[occ], v.z[occ], v.r[occ], zones, margin=margin, pad=pad)
+    if floor_rule is not None:
+        hit &= floor_rule
     hidden = np.zeros(len(zones))
     if hit.any():
         if cells is None:
@@ -434,7 +439,8 @@ def _occlude(v: Observation, zones: list, vis_min: float, margin: float, pad: fl
 
 
 def _to_v2(obs: Observation, share, vis_min: float, zones, margin: float, pad: float, occ_classes,
-           gate: HoldGate | None, cells: ZoneCells | None, floor_ok=None) -> Observation:
+           gate: HoldGate | None, cells: ZoneCells | None, floor_ok=None,
+           floor_rule: np.ndarray | None = None) -> Observation:
     zones = list(zones)
     n_zone = np.asarray(share).shape[0]
     if len(zones) != n_zone:
@@ -442,7 +448,7 @@ def _to_v2(obs: Observation, share, vis_min: float, zones, margin: float, pad: f
     v = obs if obs.is_v2 else _camera_v2(obs, share, vis_min)
     if floor_ok is not None:
         v = mask_cameras(v, floor_ok, share, vis_min)
-    return _occlude(v, zones, vis_min, margin, pad, occ_classes, gate, cells)
+    return _occlude(v, zones, vis_min, margin, pad, occ_classes, gate, cells, floor_rule)
 
 
 class ObsV2Converter:
@@ -452,15 +458,22 @@ class ObsV2Converter:
         observer-side occlusion rule applied on its own person / vehicle detections (its NaNs are kept).
     `zones` = the M zone rects / polygons in zone order; `hold_s` keeps a zone MISSING after the last occluder
     detection (default OCC_HOLD_S, sized for MEASURED_SHIM's iid misses): one hold for every zone, or one per zone
-    (shape (M,): the twin camera's per-press hold, S3b fix2)."""
+    (shape (M,): the twin camera's per-press hold, S3b fix2). `floor_rule` (M,) bool (default: every zone) selects
+    the zones the FLOOR occlusion rule applies to; a zone left out is measured on an image ram ROI and occluded by the
+    image-space ROI rule of its camera (`occlusion.RoiOcclusion`, the real-clip ingest's rule; user decision Sun
+    ~08:25 "Same ROI rule in twin"), so the floor rule must not stack on it."""
 
     def __init__(self, share: np.ndarray, zones, vis_min: float = ZONE_VIS_MIN, margin: float = ZONE_MARGIN_M,
                  pad: float = OCC_PAD_M, hold_s: float | np.ndarray = OCC_HOLD_S, occ_classes=OCC_CLASSES,
-                 res: float = 0.25):
+                 res: float = 0.25, floor_rule=None):
         self.share = np.asarray(share, float)
         self.zones = list(zones)
         if len(self.zones) != self.share.shape[0]:
             raise ValueError(f"{len(self.zones)} zones but share has {self.share.shape[0]} rows")
+        fr = np.ones(len(self.zones), bool) if floor_rule is None else np.asarray(floor_rule)
+        if fr.dtype != bool or fr.shape != (len(self.zones),):
+            raise ValueError(f"floor_rule must be a bool array of shape ({len(self.zones)},), got {fr.dtype} {fr.shape}")
+        self.floor_rule = fr.copy()
         self.vis_min, self.margin, self.pad = vis_min, margin, pad
         self.occ_classes = tuple(occ_classes)
         self.cells = ZoneCells(self.zones, margin=margin, res=res)
@@ -473,7 +486,7 @@ class ObsV2Converter:
     def __call__(self, obs: Observation, floor_ok=None) -> Observation:
         """`floor_ok` = the image watchdog's (n_cam,) bool for this tick (watchdog.ImageWatchdog.step), or None."""
         return _to_v2(obs, self.share, self.vis_min, self.zones, self.margin, self.pad, self.occ_classes, self.gate,
-                      self.cells, floor_ok)
+                      self.cells, floor_ok, self.floor_rule)
 
 
 def check_obs_v2(obs: Observation, n_zone: int | None = None, n_cam: int | None = None) -> None:

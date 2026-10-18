@@ -186,7 +186,8 @@ def test_slice_names_no_truth_path():
 def _adapter(site):
     """The plant's ObsAdapter for `site` with the plant camera's holds (as `Plant.__init__` builds it)."""
     cam = SL.PL.make_camera(site, 0, 9)
-    return SL.PL.ObsAdapter(site, hold_s=dict(cam.hold_s_by_press), roi_vis=cam.roi_vis)
+    return SL.PL.ObsAdapter(site, hold_s=dict(cam.hold_s_by_press), roi_vis=cam.roi_vis,
+                            occlusion=cam.occlusion_rule)
 
 
 def _cz():
