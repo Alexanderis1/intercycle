@@ -90,7 +90,10 @@ def write_run(root: Path, world: int, day: int, zone: str, cond: str, *, passed:
          "status_reason": None if status == "ok" else "boom", "checkpoints_planned": len(ORDERS[zone]),
          "attempted": len(att), "passed": len(passed), "declined": len(set(declined) - att),
          "robot_caused_press_stops": trips, "holds": holds, "incidents": incs, "press_time_lost_s": lost,
-         "path_length_m": 10.0, "code": {"head": "abc"}, "variant": variant}
+         "path_length_m": 10.0, "code": {"head": "abc"}, "variant": variant,
+         "camera": {"model": "stat_v1", "cal_source": "cal_v1 draws", "h_mode": "joint",
+                    "draw_index": {"9": 17, "14": 103}, "hold_s": 34.0, "hold_s_by_camera": {"9": 34.0, "14": 7.5},
+                    "params_sha256": "0" * 64}}
     if variant == "reset_sweep":
         s["reset_override_s"] = 60.0
     s.update(summary_override or {})
