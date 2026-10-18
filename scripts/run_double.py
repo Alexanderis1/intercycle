@@ -93,8 +93,9 @@ def setup(out: Path, *, stubs: bool = False) -> dict:
     site, dyn = load(Site, paths["site"]), load(Dynamics, paths["dynamics"])
     compiled = C.compile_paths(paths["site"], paths["dynamics"], paths["tasks"])
     # spec only: observer_spec reads the adapter's geometry (press_ids, zone_ids, rects), never its hold; this adapter
-    # adapts no observation (each day's observations go through the world's own camera hold, run_world below)
-    adapter = PL.ObsAdapter(site, hold_s=0.0)
+    # adapts no observation (each day's observations go through the world's own camera hold, run_world below); its
+    # occlusion rule is never applied, so the geometry-only "floor" choice (no camera roi_vis here) changes nothing
+    adapter = PL.ObsAdapter(site, hold_s=0.0, occlusion="floor")
     spec = SL.observer_spec(site, compiled, adapter)
     out.mkdir(parents=True, exist_ok=True)
     margin, msrc = SL.margin_path(out)
@@ -158,8 +159,10 @@ def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float
         script = scripts[day] if scripts and day in scripts else generate_day(ctx, world.seed, day, day_s)
         eng = Engine(script, ctx["site"], ctx["dyn"])
         cam = _camera(ctx, world.seed, day)
-        # as the plant does (twin/plant.py): the camera's own per-press hold and ROI visibility (stat_v1, S3b fix2)
-        ad = PL.ObsAdapter(ctx["site"], hold_s=dict(cam.hold_s_by_press), roi_vis=cam.roi_vis)
+        # as the plant does (twin/plant.py): the camera's own per-press hold, ROI visibility (stat_v1, S3b fix2) and
+        # occlusion rule (stat_v1 "roi", the real clips' image-space rule, AMENDMENTS A4; the G0 stand-in "floor")
+        ad = PL.ObsAdapter(ctx["site"], hold_s=dict(cam.hold_s_by_press), roi_vis=cam.roi_vis,
+                           occlusion=cam.occlusion_rule)
         for t in eng.tick_times():
             obs = ad(cam.observe(eng.tick(float(t))))
             while pending and obs.t > pending[0][2] + 1e-9:
