@@ -249,7 +249,8 @@ class MachineView:
     index: int
     state: str                    # IDLE / ACTIVE / STOPPED / UNKNOWN (UNKNOWN also = stale / untrusted / missing)
     phase: float | None           # fraction of the map's cycle now (None = unknown -> whole envelope)
-    windows: list | None          # predicted idle windows (plant time); None = cannot be trusted
+    windows: list | None          # predicted idle windows (plant time); None = cannot be trusted (a twin press's own
+                                  # confident STOPPED: [(issue, issue + ttl)], predict.idle_windows stop_window)
     held: bool = False
     # the fast entry says STOPPED with confidence >= 4 (and a slow model with confidence >= 4), inside its TTL at t
     stop_ok: bool = False
@@ -388,7 +389,12 @@ class ObserverState:
             ph = own_phase(mod, now, fast.issue_time if fast else None, t)
             if ph is not None:
                 ph = ph % 1.0                          # map phase convention: 0 = start of motion in the zone (see README)
-            wins = idle_windows(mod, now, fast.issue_time, t, horizon_s, k_sigma) if (mod and now and fast) else None
+            # a twin press's own confident STOPPED inside its TTL is one idle window [issue, issue + ttl] (lane S5b-entry):
+            # the zone rect opens only while it covers [t, t + H] (idle_through) and the planner enters only while it
+            # leaves need_s (timing.window_open); an on-line machine (body shop) keeps None for STOPPED (unchanged)
+            own = self.site.own_stop.get(mid, False) and not self.site.on_line.get(mid, True)
+            wins = idle_windows(mod, now, fast.issue_time, t, horizon_s, k_sigma, stop_window=own) \
+                if (mod and now and fast) else None
             out.append(MachineView(mid, i, st, ph, wins, held=(mid == held_id), stop_ok=stop_ok,
                                    stop_left_s=float(stop_left) if stop_ok else 0.0))
         # production state from the broadcast only: the fast layer carries per-machine states; a line where at least half

@@ -26,6 +26,11 @@ from _truth_scan import REPO, import_closure, module_name, parse, py_files, rel,
 
 ALLOWED = ("numpy", "astropy", "pydantic", "nacl", "yaml", "twin", "intercycle")
 REPO_PACKAGES = ("twin", "intercycle")
+# ROS-free modules of the ros2/ tree that Isaac-side twin code may import BY EXACT NAME (twin.broadcast_live signs and
+# frames through intercycle_nav.broadcast and sends through intercycle_nav.feed). They are scanned by the same rule;
+# anything else under intercycle_nav (rclpy nodes) stays forbidden.
+ISAAC_SAFE_ROS = ("intercycle_nav", "intercycle_nav.broadcast", "intercycle_nav.feed")
+ROS_NAV_ROOT = REPO / "ros2" / "intercycle_nav"
 # twin modules that never run in the Isaac container: build_worlds writes the world files the container receives
 # (it imports scipy through intercycle.sim.geometry); twin.compile itself stays Isaac-safe.
 CPU_ONLY: tuple[str, ...] = ("twin.build_worlds",)
@@ -41,12 +46,15 @@ PROBE = r"""
 import builtins, importlib, json, sys
 ALLOWED = set(json.loads(sys.argv[1]))
 MODULES = json.loads(sys.argv[2])
-REPO_PKGS = ("twin", "intercycle")
+SAFE = set(json.loads(sys.argv[3])) if len(sys.argv) > 3 else set()
+REPO_PKGS = ("twin", "intercycle", "intercycle_nav")
 orig_import = builtins.__import__
 orig_import_module = importlib.import_module
 bad = []
 def check(importer, name):
     if importer.split(".")[0] in REPO_PKGS:
+        if name in SAFE:
+            return
         top = name.split(".")[0]
         if top and top not in ALLOWED and top not in sys.stdlib_module_names:
             bad.append([importer, name])
@@ -120,7 +128,7 @@ def static_violations(files: list[Path], exceptions: dict[tuple[str, str], str] 
                 bad.append(f"{r}:{line}: dynamic import with a non-literal module name")
                 continue
             top = name.split(".")[0]
-            if top in ALLOWED or top in sys.stdlib_module_names:
+            if top in ALLOWED or top in sys.stdlib_module_names or name in ISAAC_SAFE_ROS:
                 continue
             if lazy and (r, top) in exc:
                 continue
@@ -142,7 +150,7 @@ def isaac_side_files() -> list[Path]:
     files: set[Path] = set()
     for m in _twin_modules():
         for dep in import_closure(m):
-            if dep.split(".")[0] in REPO_PACKAGES and dep not in CPU_ONLY:
+            if (dep.split(".")[0] in REPO_PACKAGES or dep in ISAAC_SAFE_ROS) and dep not in CPU_ONLY:
                 f = resolve(dep)
                 if f is not None:
                     files.add(f.resolve())
@@ -174,18 +182,23 @@ def test_lazy_exceptions_are_still_needed():
 # ------------------------------------------------------------------------------------------------ runtime hook
 
 
-def _probe(mods: list[str], cwd: Path, pythonpath: Path) -> dict:
-    env = {**os.environ, "PYTHONPATH": str(pythonpath), "PYTHONUTF8": "1"}
-    res = subprocess.run([sys.executable, "-c", PROBE, json.dumps(ALLOWED), json.dumps(mods)], cwd=cwd,
-                         env=env, capture_output=True, text=True, timeout=120)
+def _probe(mods: list[str], cwd: Path, pythonpath: Path, extra_path: tuple[Path, ...] = ()) -> dict:
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(str(p) for p in (pythonpath, *extra_path)), "PYTHONUTF8": "1"}
+    res = subprocess.run([sys.executable, "-c", PROBE, json.dumps(ALLOWED), json.dumps(mods),
+                          json.dumps(ISAAC_SAFE_ROS)], cwd=cwd, env=env, capture_output=True, text=True, timeout=120)
     assert res.returncode == 0, res.stderr
     return json.loads(res.stdout.strip().splitlines()[-1])
+
+
+def test_isaac_safe_ros_modules_are_scanned():
+    files = {rel(f) for f in isaac_side_files()}
+    assert {"ros2/intercycle_nav/intercycle_nav/broadcast.py", "ros2/intercycle_nav/intercycle_nav/feed.py"} <= files
 
 
 def test_twin_modules_use_only_isaac_deps_at_runtime():
     mods = _twin_modules()
     assert "twin.schemas" in mods and "twin.camera_v0" in mods
-    out = _probe(mods, REPO, REPO)
+    out = _probe(mods, REPO, REPO, (ROS_NAV_ROOT,))
     assert not out["bad"], f"non-Isaac imports: {out['bad']}"
     assert not out["errors"], f"import failures: {out['errors']}"
 
@@ -202,6 +215,7 @@ BAD_SOURCES = {
     "dunder_import": "P = __import__('pandas')\n",
     "dynamic_name": "import importlib\nNAME = 'pan' + 'das'\nP = importlib.import_module(NAME)\n",
     "type_checking": "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import pandas\n",
+    "ros_node": "from intercycle_nav.observer_bridge import ObserverBridge\n",   # only ISAAC_SAFE_ROS by exact name
 }
 
 

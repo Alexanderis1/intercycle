@@ -360,6 +360,9 @@ def test_m7_application_tag_states_option_b(run):
     assert tag.startswith("LEAD DECISION") and "option B" in tag and "calibration_pred" in tag
     assert "whole keep-out horizon" in tag and "layers the robot holds" in tag
     assert "learner TTL >= 8 s" in tag and "HeldMap" in tag and "ttl_s >= 6 s" not in tag
+    se = ob.diagnostics()["tags"]["stop_entry"]
+    assert se.startswith("LEAD DECISION (lane S5b-entry)") and "[issue, issue + ttl]" in se and "own_stop" in se
+    assert "[t, t + H]" in se and "need_s" in se and "STOP_BIN" in se and "never enters a stopped press" in se
     a = ob.availability()
     assert set(a["closed_share"]) == {"running", "stopped", "union"}
     assert a["closed_share"]["union"] >= max(a["closed_share"]["running"], a["closed_share"]["stopped"])
@@ -565,6 +568,28 @@ def test_calibration_pred_is_the_robot_lookup_uninflated(still_run):
     fast = FastLayer(s.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, State.ACTIVE, 0.0, 0.5, 10.0, 8, 1) for i in range(ob.M)])
     with pytest.raises(ValueError):
         ob.calibration_pred(s, fast, replace(hm, ids=("X", "Y")), t)
+
+
+def test_robot_bins_and_calibration_pred_held_read_the_stop_bin(still_run):
+    """Audit minor (lane S5b-entry): the robot inside / reaching into a press zone holds it -> (STOP_BIN,), whatever
+    the layers say, as masks.machine_bins does for MachineView.held; calibration_pred takes per-press held flags."""
+    ob, obs = still_run
+    t = obs[-1].t_cap
+    held = _held(ob, t)
+    s, hm = held["slow"], held["map"]
+    nan = float("nan")
+    assert OL.robot_bins(None, None, t, t, nan, held=True) == (M.STOP_BIN,)
+    fast = FastLayer(s.site_id, 1, DAY0_UNIX + t, 1, [MachineNow(i, State.ACTIVE, 0.0, 0.5, 10.0, 8, 1) for i in range(ob.M)])
+    assert OL.robot_bins(s.machines[0], fast.machines[0], t, t + 0.5, float(hm.period[0]), held=True) == (M.STOP_BIN,)
+    assert OL.robot_bins(s.machines[0], fast.machines[0], t, t + 0.5, float(hm.period[0])) == (0,)
+    preds = ob.calibration_pred(s, fast, hm, t + 0.5, held=[True] + [False] * (ob.M - 1))
+    assert np.array_equal(preds[0], hm.pred(0, (M.STOP_BIN,)))
+    for i in range(1, ob.M):
+        assert np.array_equal(preds[i], hm.pred(i, (0,)))
+    assert all(np.array_equal(a, b) for a, b in zip(ob.calibration_pred(s, fast, hm, t + 0.5, held=None),
+                                                       ob.calibration_pred(s, fast, hm, t + 0.5)))
+    with pytest.raises(ValueError, match="held flags"):
+        ob.calibration_pred(s, fast, hm, t + 0.5, held=[True] * (ob.M + 1))
 
 
 def test_calibration_pred_uses_the_map_the_robot_holds(still_run, monkeypatch):

@@ -7,16 +7,27 @@ from intercycle.types import DAY0_UNIX, MachineModel, MachineNow, State
 
 
 def idle_windows(model: MachineModel, now: MachineNow, issue_unix: float, t_now: float,
-                 horizon_s: float = 900.0, k_sigma: float = 2.0) -> list[tuple[float, float]] | None:
+                 horizon_s: float = 900.0, k_sigma: float = 2.0,
+                 stop_window: bool = False) -> list[tuple[float, float]] | None:
     """Predicted idle windows (sim time), each shrunk by the growing phase uncertainty.
 
-    Returns None when the entry cannot be trusted (low confidence, expired, stopped, unknown).
+    Returns None when the entry cannot be trusted (low confidence, expired, unknown, and stopped unless `stop_window`).
+    stop_window (lane S5b-entry, lead decision; only for a machine whose OWN stop is a hazard state, i.e. the twin's
+    off-line presses, masks.Site.own_stop): a confident STOPPED entry (fast and slow confidence >= 4, inside its TTL)
+    is ONE idle window [issue, issue + ttl_s]: the stop is vouched for only until the entry's TTL ends, nothing past
+    it, so masks.idle_through opens the zone only while issue + ttl >= t + H (TTL >= horizon + lookup lag) and
+    timing.window_open plans an entry only while the TTL still leaves need_s. Default False: a STOPPED gives None, as
+    before (the body shop, whose line stop is the map's ANDON state, and every other caller are unchanged).
     """
     t_issue = issue_unix - DAY0_UNIX
-    if now.confidence < 4 or model.confidence < 4 or now.state in (State.STOPPED, State.UNKNOWN):
+    if now.confidence < 4 or model.confidence < 4 or now.state == State.UNKNOWN:
+        return None
+    if now.state == State.STOPPED and not stop_window:
         return None
     if t_now > t_issue + now.ttl_s:
         return None
+    if now.state == State.STOPPED:
+        return [(t_issue, t_issue + float(now.ttl_s))]
     T = model.period_s
     idle_len = (1 - model.busy_fraction) * T
     out = []
