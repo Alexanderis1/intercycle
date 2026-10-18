@@ -27,7 +27,15 @@ from twin.schemas.prereg import make_sealed, render_sealed  # noqa: E402
 
 CLIPS = {"0_te1": b"clip zero", "3_te2": b"clip three"}
 FRAMING = {"0_te1": "c9_f1", "3_te2": "c14_f0"}
+DEV_CLIPS = {"4_dv1": b"dev clip four"}
 INFO = {"genesis_time": 1000, "period": 30, "hash": "testchain"}
+G2_FILE = "prereg/G2_HASHES.json"
+
+
+@pytest.fixture(autouse=True)
+def _g2_file(monkeypatch):
+    """The scratch repos commit a G2 hash record at this path (the real file is the lead's call)."""
+    monkeypatch.setattr(SR, "G2_HASHES_FILE", G2_FILE)
 
 
 def g(repo: Path, *args: str) -> str:
@@ -88,19 +96,22 @@ def build(tmp: Path, source: str = "fallback") -> dict:
     rows = ["clip_id,group_id,split,sha256,framing_id"]
     rows += [f"{cid},g,test,{sha(d)},{FRAMING[cid]}" for cid, d in CLIPS.items()]
     rows.append(f"1_tr1,g,train,{'0' * 64},c9_f1")
+    rows += [f"{cid},g,dev,{sha(d)},c9_f1" for cid, d in DEV_CLIPS.items()]
     write(repo / "prereg" / "split_a1.csv", "\n".join(rows) + "\n")
     write(repo / "prereg" / "ACTIVE_SPLIT", "split_a1.csv\n")
     write(repo / "sealed" / "MANIFEST.sha256", render_sealed(make_sealed(
         "MANIFEST", [(sha(d), f"clips/{cid}.mp4") for cid, d in CLIPS.items()], list(CLIPS))))
     write(repo / "sealed" / "LABELS.sha256", render_sealed(make_sealed(
         "LABELS", lab_files, list(CLIPS), sample_list_sha256=samples["items_sha256"])))
+    write(repo / G2_FILE, json.dumps({"generator": sha(b"GEN = 1\n"), "dynamics": sha(b"{}\n")}) + "\n")
     code = commit(repo, "code", "twin", "prereg", "sealed")
     write(repo / "prereg" / "FREEZE", code + "\n")
     commit(repo, "FREEZE", "prereg/FREEZE")
     if source == "fallback":
         line = SR.derive(repo, root, fallback=True)["seed_commit"]
     else:
-        line = SR.derive(repo, root, fallback=False, fetch=fake_fetch, now=lambda: 4e9)["seed_commit"]
+        t_freeze = SR.freeze_commit_time(repo)
+        line = SR.derive(repo, root, fallback=False, fetch=fake_fetch, now=lambda: t_freeze + 60.0)["seed_commit"]
     write(repo / "prereg" / "TEST_SEED_COMMIT", line + "\n")
     commit(repo, "TEST_SEED_COMMIT", "prereg/TEST_SEED_COMMIT")
     return {"repo": repo, "root": root, "code": code, "c0": c0}
@@ -123,7 +134,7 @@ def test_preflight_passes_and_records_the_inputs(s):
     rec = SR.preflight(s["repo"], s["root"], fake_fetch)
     assert rec["freeze_sha"] == s["code"] and rec["n_clips"] == 2
     assert set(rec["inputs"]) == {"manifest", "labels", "generator", "dynamics", "test_seed_commit"}
-    assert rec["changed_since_freeze"] == sorted(SR.ALLOWED_AFTER_FREEZE)
+    assert rec["changed_since_freeze"] == sorted([SR.FREEZE, SR.SEED_COMMIT]) and rec["runlog"] == []
     sd = rec["seeds"]
     assert sd["source"] == "fallback" and len(sd["seeds"]) == 16 and all(v > 999 for v in sd["seed_ints"])
     assert {j["clip_id"]: (j["camera"], j["framing"]) for j in rec["jobs"]} == {"0_te1": (9, "c9_f1"),
@@ -357,12 +368,15 @@ def test_run_sets_the_flag_only_after_the_refusals_and_writes_runlog(s):
     finally:
         os.environ.pop(SR.SEALED_ENV, None)
     log = json.loads((s["repo"] / SR.RUNLOG).read_text(encoding="utf-8"))
-    for k in ("timestamp", "head", "freeze_sha", "inputs", "seeds", "stages", "finished"):
-        assert k in log
-    assert log["seeds"]["salt"] and len(log["seeds"]["seeds"]) == 16
-    st = log["stages"]["clips"]
+    assert log["contract"] == SR.RUNLOG_CONTRACT and [r["status"] for r in log["records"]] == ["started", "done"]
+    start, done = log["records"]
+    for k in ("attempt", "timestamp", "head", "freeze_sha", "inputs", "seeds", "stages", "status", "perc_dir"):
+        assert k in start
+    assert start["attempt"] == done["attempt"] == 1 and start["stages"] == ["clips"]
+    assert start["seeds"]["salt"] and len(start["seeds"]["seeds"]) == 16
+    st = done["stages"]["clips"]
     assert st["status"] == "done" and st["n_clips"] == 2 and st["ingest"] == "intercycle.perception.esk_ingest.ingest_clip"
-    assert (s["root"] / "perc" / "tracks" / "0_te1.parquet").read_bytes() == b"tclip zero"
+    assert (s["root"] / "perc" / "attempt_001" / "tracks" / "0_te1.parquet").read_bytes() == b"tclip zero"
     assert rec["stages"]["clips"]["outputs_sha256"]["tracks/0_te1.parquet"] == sha(b"tclip zero")
 
 
@@ -383,7 +397,9 @@ def test_runner_returning_fewer_clips_is_an_error(s):
             SR.run(s["repo"], s["root"], ["clips"], fake_fetch, lambda b: fake_runner(b)[:1])
     finally:
         os.environ.pop(SR.SEALED_ENV, None)
-    assert json.loads((s["repo"] / SR.RUNLOG).read_text(encoding="utf-8"))["stages"]["clips"]["status"] == "error"
+    recs = json.loads((s["repo"] / SR.RUNLOG).read_text(encoding="utf-8"))["records"]
+    assert [r["status"] for r in recs] == ["started", "error"]
+    assert recs[-1]["stages"]["clips"]["status"] == "error"
 
 
 def test_sealed_run_names_no_truth_path():
@@ -392,3 +408,232 @@ def test_sealed_run_names_no_truth_path():
 
     lits = string_literals(parse(REPO / "scripts" / "sealed_run.py"))
     assert not [x for x in lits if any(t in x for t in TRUTH_TOKENS)]
+
+
+# ------------------------------------------------------------------------------------------------ derive / clocks
+
+def test_derive_runs_the_tree_and_freeze_refusals_first(s, tmp_path):
+    write(s["repo"] / "scratch.txt", "x\n")
+    with pytest.raises(SR.Refusal, match="not clean"):
+        SR.derive(s["repo"], tmp_path / "r1", fallback=True)
+    (s["repo"] / "scratch.txt").unlink()
+    write(s["repo"] / "prereg" / "FREEZE", "ab" * 20 + "\n")
+    commit(s["repo"], "bogus", "prereg/FREEZE")
+    with pytest.raises(SR.Refusal, match="not a commit"):
+        SR.derive(s["repo"], tmp_path / "r2", fallback=True)
+    assert not (tmp_path / "r1").exists() and not (tmp_path / "r2").exists()
+
+
+def test_derive_refuses_long_after_the_freeze_commit(s, tmp_path):
+    t = SR.freeze_commit_time(s["repo"])
+    with pytest.raises(SR.Refusal, match="after the FREEZE commit"):
+        SR.derive(s["repo"], tmp_path / "late", fallback=False, fetch=fake_fetch,
+                  now=lambda: t + SR.MAX_DERIVE_LAG_S + 120.0)
+    rec = SR.derive(s["repo"], tmp_path / "ok", fallback=False, fetch=fake_fetch, now=lambda: t + 60.0)
+    rv = json.loads((tmp_path / "ok" / SR.SEEDS_FILE).read_text(encoding="utf-8"))
+    assert rec["source"] == "drand" and rv["derived_at"] == int(t + 60.0) and rv["freeze_commit_time"] == t
+
+
+def _refreeze_with_dates(s: dict, author: int, committer: int) -> None:
+    repo = s["repo"]
+    p = repo / "prereg" / "FREEZE"
+    write(p, p.read_text(encoding="utf-8") + "\n")
+    g(repo, "add", "--", "prereg/FREEZE")
+    env = dict(os.environ, GIT_AUTHOR_DATE=f"{author} +0000", GIT_COMMITTER_DATE=f"{committer} +0000")
+    subprocess.run(["git", "commit", "-q", "-m", "re-dated FREEZE"], cwd=repo, check=True, env=env)
+
+
+def test_freeze_commit_dates_must_agree(s):
+    t = SR.freeze_commit_time(s["repo"])
+    _refreeze_with_dates(s, author=t - 2 * SR.DATE_SKEW_S, committer=t)
+    with pytest.raises(SR.Refusal, match="committer date .* author date"):
+        SR.check_commit_dates(s["repo"])
+    _refreeze_with_dates(s, author=t + 5, committer=t + 10)
+    assert SR.check_commit_dates(s["repo"]) == t + 10
+
+
+def test_drand_reveal_needs_its_own_clock_in_the_window(tmp_path, monkeypatch):
+    monkeypatch.delenv(SR.SEALED_ENV, raising=False)
+    s = build(tmp_path, source="drand")
+    d = json.loads((s["root"] / SR.SEEDS_FILE).read_text(encoding="utf-8"))
+    _edit_reveal(s, derived_at=None)
+    refused(s, "needs derived_at")
+    _edit_reveal(s, derived_at=d["freeze_commit_time"] + SR.MAX_DERIVE_LAG_S + 1)
+    refused(s, "after the FREEZE commit")
+    _edit_reveal(s, derived_at=d["freeze_commit_time"] - 100)
+    refused(s, "before drand round")
+    _edit_reveal(s, derived_at=d["derived_at"])
+    assert SR.preflight(s["repo"], s["root"], fake_fetch)["seeds"]["derived_at"] == d["derived_at"]
+
+
+# ------------------------------------------------------------------------------------------------ RUNLOG append-only
+
+def _run(s: dict, runner=fake_runner) -> dict:
+    try:
+        return SR.run(s["repo"], s["root"], ["clips"], fake_fetch, runner)
+    finally:
+        os.environ.pop(SR.SEALED_ENV, None)
+
+
+def _records(s: dict) -> list[dict]:
+    return json.loads((s["repo"] / SR.RUNLOG).read_text(encoding="utf-8"))["records"]
+
+
+def test_a_second_run_appends_a_new_attempt_to_a_dirty_runlog(s):
+    r1 = _run(s)
+    first = _records(s)
+    assert g(s["repo"], "status", "--porcelain", "--untracked-files=all") == f"?? {SR.RUNLOG}"   # dirty, allowed
+    r2 = _run(s)
+    recs = _records(s)
+    assert recs[:2] == first and [(r["attempt"], r["status"]) for r in recs] == [(1, "started"), (1, "done"),
+                                                                               (2, "started"), (2, "done")]
+    assert (r1["perc_dir"], r2["perc_dir"]) == ("perc/attempt_001", "perc/attempt_002")
+    for d in ("attempt_001", "attempt_002"):
+        assert (s["root"] / "perc" / d / "tracks" / "3_te2.parquet").is_file()
+
+
+def test_a_rerun_after_a_stage_error_is_a_new_attempt(s):
+    def broken(batches):
+        raise RuntimeError("provider failure")
+
+    with pytest.raises(RuntimeError, match="provider failure"):
+        _run(s, broken)
+    assert not (s["root"] / "perc" / "attempt_001").exists()
+    r2 = _run(s)
+    assert r2["attempt"] == 2 and [(r["attempt"], r["status"]) for r in _records(s)] == [
+        (1, "started"), (1, "error"), (2, "started"), (2, "done")]
+
+
+def test_a_committed_runlog_is_allowed_and_must_only_grow(s):
+    _run(s)
+    commit(s["repo"], "RUNLOG attempt 1", SR.RUNLOG)
+    assert SR.check_diff(s["repo"], s["code"]) == sorted([SR.FREEZE, SR.SEED_COMMIT, SR.RUNLOG])
+    _run(s)                                                             # passes check_clean / check_diff, appends
+    assert len(_records(s)) == 4
+    commit(s["repo"], "RUNLOG attempt 2", SR.RUNLOG)
+    p = s["repo"] / SR.RUNLOG
+    d = json.loads(p.read_text(encoding="utf-8"))
+    d["records"] = d["records"][:2]                                     # drop committed records in the working file
+    p.write_text(json.dumps(d), encoding="utf-8")
+    refused(s, "not an append-only extension")
+
+
+def test_a_committed_rewrite_of_runlog_is_refused(s):
+    _run(s)
+    commit(s["repo"], "RUNLOG attempt 1", SR.RUNLOG)
+    p = s["repo"] / SR.RUNLOG
+    d = json.loads(p.read_text(encoding="utf-8"))
+    d["records"][0]["timestamp"] = "2000-01-01T00:00:00+00:00"          # history edited in the working file
+    p.write_text(json.dumps(d), encoding="utf-8")
+    refused(s, "not an append-only extension")
+    d["records"][1]["status"] = "started"                               # and an edit that breaks the structure
+    p.write_text(json.dumps(d), encoding="utf-8")
+    refused(s, "opens out of order")
+
+
+def test_only_runlog_may_be_dirty(s):
+    _run(s)
+    write(s["repo"] / "results" / "sealed" / "other.json", "{}\n")
+    refused(s, r"not clean:\n\?\? results/sealed/other.json")
+
+
+def test_append_refuses_when_the_file_is_not_the_known_prefix(s):
+    _run(s)
+    known = _records(s)
+    with pytest.raises(SR.Refusal, match="not a prefix"):
+        SR.append_runlog(s["repo"], known[:1], {"attempt": 2, "status": "started", "timestamp": "t", "head": "h",
+                                                "stages": ["clips"]})
+    assert _records(s) == known
+
+
+def test_runlog_must_parse_and_attempt_dirs_are_fresh(s):
+    p = s["repo"] / SR.RUNLOG
+    write(p, json.dumps({"timestamp": "x", "stages": {}}))              # the old single-record format
+    refused(s, "not a twin.sealed_runlog/2")
+    write(p, json.dumps({"contract": SR.RUNLOG_CONTRACT, "records": [{"attempt": 1, "status": "done", "timestamp": "t",
+                                                                   "head": "h", "stages": {}}]}))
+    refused(s, "before it started")
+    p.unlink()
+    (s["root"] / "perc" / "attempt_001").mkdir(parents=True)
+    with pytest.raises(SR.Refusal, match="refusing to reuse"):
+        _run(s)
+    assert not p.exists()
+
+
+# ------------------------------------------------------------------------------------------------ G2 hash record
+
+def test_g2_record_must_be_named(s, monkeypatch):
+    monkeypatch.setattr(SR, "G2_HASHES_FILE", None)
+    refused(s, "no committed G2")
+
+
+def test_g2_record_must_match_and_be_frozen(s, monkeypatch):
+    rec = SR.check_inputs(s["repo"], s["code"])
+    assert SR.check_g2_hashes(s["repo"], s["code"], rec) == {"generator": sha(b"GEN = 1\n"), "dynamics": sha(b"{}\n")}
+    bad = dict(rec, dynamics=dict(rec["dynamics"], sha256="1" * 64))
+    with pytest.raises(SR.Refusal, match="dynamics .* != G2 record"):
+        SR.check_g2_hashes(s["repo"], s["code"], bad)
+    monkeypatch.setattr(SR, "G2_HASHES_FILE", "prereg/elsewhere.json")
+    with pytest.raises(SR.Refusal, match="not in the FREEZE tree"):
+        SR.check_g2_hashes(s["repo"], s["code"], rec)
+
+
+# ------------------------------------------------------------------------------------------------ container + dry run
+
+def test_container_function_is_imported_by_name_not_serialized():
+    """Audit fix: container_ingest lives in scripts/sealed_ingest.py (a stdlib-only module Modal imports by name in the
+    container) and is registered without serialized=True, so the client Python need not match the image."""
+    spec = SR.modal_function_spec()
+    assert spec == {"module": "sealed_ingest", "qualname": "container_ingest", "serialized": False,
+                    "include_source": False, "local_python_source": "sealed_ingest"}
+    import ast
+
+    tree = ast.parse((REPO / "scripts" / "sealed_run.py").read_text(encoding="utf-8"))
+    kws = {k.arg for n in ast.walk(tree) if isinstance(n, ast.Call) for k in n.keywords}
+    assert "serialized" not in kws and "include_source" in kws
+    assert not [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "container_ingest"]
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); import sealed_ingest; "
+            "print(sorted(m for m in sys.modules if m.split('.')[0] in ('twin', 'intercycle', 'modal')))")
+    r = subprocess.run([sys.executable, "-I", "-c", code, str(REPO / "scripts")], capture_output=True, text=True,
+                       check=True)
+    assert r.stdout.strip() == "[]"                                      # importable without the repo or modal
+
+
+def test_container_batch_check_fails_closed():
+    SR.modal_function_spec()                                             # puts scripts/ on sys.path
+    import sealed_ingest as SI  # pyright: ignore[reportMissingImports]
+
+    job = {"clip_id": "0_te1", "data": b"clip zero", "sha256": sha(b"clip zero"), "split": "test"}
+    assert SI.check_batch([job]) == "test"
+    with pytest.raises(PermissionError, match="differ from MANIFEST"):
+        SI.check_batch([dict(job, data=b"other")])
+    with pytest.raises(PermissionError, match="one split"):
+        SI.check_batch([job, dict(job, split="dev")])
+    with pytest.raises(PermissionError, match="one split"):
+        SI.check_batch([dict(job, split="train")])
+
+
+def test_dev_dry_run_runs_the_clips_path_on_dev_clips_only(s, tmp_path):
+    data = tmp_path / "data"
+    for cid, d in DEV_CLIPS.items():
+        write(data / "clips" / f"{cid}.mp4", d)
+    write(data / "clips" / "0_te1.mp4", b"clip zero")
+    dev = tmp_path / "devroot"
+    seen = []
+
+    def runner(batches):
+        seen.extend(j["split"] for b in batches for j in b)
+        return fake_runner(batches)
+
+    rec = SR.dev_dry_run(s["repo"], dev, list(DEV_CLIPS), data_root=data, runner=runner)
+    st = rec["clips_stage"]
+    assert rec["dev_dry_run"] and st["n_clips"] == 1 and seen == ["dev"] and os.environ.get(SR.SEALED_ENV) is None
+    assert not (s["repo"] / SR.RUNLOG).exists()
+    man = SR.parse_sealed((dev / "MANIFEST.dev.sha256").read_text(encoding="utf-8"))
+    assert man.kind == "MANIFEST" and [f.path for f in man.files] == ["clips/4_dv1.mp4"]
+    assert (Path(st["out"]) / "tracks" / "4_dv1.parquet").read_bytes() == b"t" + DEV_CLIPS["4_dv1"]
+    with pytest.raises(SR.Refusal, match="dev clips only"):
+        SR.dev_dry_run(s["repo"], tmp_path / "d2", ["0_te1"], data_root=data, runner=fake_runner)
+    with pytest.raises(SR.Refusal, match="outside the sealed root"):
+        SR.dev_dry_run(s["repo"], SR.DEFAULT_SEALED_ROOT / "dry", list(DEV_CLIPS), data_root=data, runner=fake_runner)
+    assert not (tmp_path / "d2").exists()
