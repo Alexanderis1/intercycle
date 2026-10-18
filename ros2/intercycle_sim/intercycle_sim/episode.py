@@ -17,6 +17,12 @@ goal [x,y,psi] + timeout_s (nav), nav2 (bool), nav2_params (path inside the cont
 nav2_cmd (replaces the stock Nav2 bringup), goal_cmd (replaces send_goal.py; must write $IC_WORK/goal.json),
 max_rtf, seed, movers / mover_source (see movers.py), extra_launch (list of shell commands R2/R3 add, run in the
 ROS env after Nav2 starts).
+R-W4 (fix round 2): start_noise {world_seed, day, slot} and clutter {n, keep_clear, avoid_rects} (loc_noise.py
+apply_loc_noise): the simulator gets the TRUE start (perturbed) and the cluttered world files; the planner keeps the
+nominal "start" as its belief (send_goal --init; goal_cmd runners pass it as init) and gets the AMCL spread through
+$IC_INIT_SPREAD_XY_M / $IC_INIT_SPREAD_YAW_DEG (0 when no start noise) plus $IC_INIT_BELIEF; the draw goes in the result
+("loc_noise"). The keys depend on (world, day, slot) only, so every condition of a slot gets the same draw. A twin
+evaluation episode without both is invalid (eval_check), as is a planner whose init or spread differs from the record.
 """
 from __future__ import annotations
 
@@ -146,6 +152,14 @@ def _start_cmd(procs: "Procs", name: str, cmd, env: dict) -> None:
         procs.start(name, argv, env, cwd=ROS2_ROOT)
 
 
+def planner_env(ln: dict) -> dict:
+    """Environment for the planner process: the AMCL spread (the start-noise range when start noise was applied, else
+    0) and the belief pose (timing_planner reads the spread defaults from here)."""
+    return {"IC_INIT_SPREAD_XY_M": repr(float(ln["spread"]["xy_m"])),
+            "IC_INIT_SPREAD_YAW_DEG": repr(float(ln["spread"]["yaw_deg"])),
+            "IC_INIT_BELIEF": ",".join(repr(float(v)) for v in ln["belief"])}
+
+
 def _read_json(path: str):
     try:
         with open(path) as f:
@@ -154,12 +168,49 @@ def _read_json(path: str):
         return None
 
 
+def _world_meta(world: dict) -> dict:
+    try:
+        return json.loads(world["world.json"].decode()) if "world.json" in world else {}
+    except (ValueError, UnicodeDecodeError):
+        return {}
+
+
+def loc_noise_check(cfg: dict, res: dict) -> list[str]:
+    """R-W4 reasons an evaluation episode is invalid: a twin run without start noise and clutter, or a planner whose
+    belief (goal.json "init") or AMCL spread (goal.json "initial_pose".covariance_sent) differs from the episode's
+    loc_noise record."""
+    import math
+
+    ln = res.get("loc_noise") or {}
+    g = res.get("goal") or {}
+    out = []
+    if res.get("twin") or cfg.get("twin"):
+        if not ln.get("start_applied"):
+            out.append("twin run without R-W4 start-pose noise (cfg start_noise)")
+        if not ln.get("clutter_applied"):
+            out.append("twin run without R-W4 unmapped clutter (cfg clutter)")
+    if ln.get("start_applied") and g:
+        init = g.get("init")
+        if not (isinstance(init, list) and len(init) == 3
+                and all(abs(float(a) - float(b)) <= 1e-6 for a, b in zip(init, ln["belief"]))):
+            out.append(f"planner init {init} is not the start_noise belief {ln.get('belief')}")
+        sent = (g.get("initial_pose") or {}).get("covariance_sent") or {}
+        sp = ln.get("spread") or {}
+        want = {"xx": float(sp.get("xy_m", 0.0)) ** 2 / 3.0, "yy": float(sp.get("xy_m", 0.0)) ** 2 / 3.0,
+                "yawyaw": math.radians(float(sp.get("yaw_deg", 0.0))) ** 2 / 3.0}
+        if not all(k in sent and abs(float(sent[k]) - v) <= 1e-9 for k, v in want.items()):
+            out.append(f"planner AMCL spread {sent} does not match the start noise {sp}")
+    return out
+
+
 def eval_check(cfg: dict, res: dict) -> dict:
     """Cheat guard for evaluation episodes (DIRECTION 5.1): the no-motion gate must have come from the camera model,
-    never from the test-double stub, and the planner must have required it. cfg["eval"] marks an evaluation episode."""
+    never from the test-double stub, and the planner must have required it. cfg["eval"] marks an evaluation episode.
+    R-W4: loc_noise_check."""
     g = res.get("goal") or {}
     reasons = []
     if cfg.get("eval"):
+        reasons.extend(loc_noise_check(cfg, res))
         if res.get("error"):
             reasons.append(f"episode error: {res['error']}")
         if not g:
@@ -179,11 +230,31 @@ def eval_check(cfg: dict, res: dict) -> dict:
             "camera_sources": g.get("camera_sources")}
 
 
+def prepare_loc_noise(cfg: dict, world: dict) -> tuple[dict, dict, str | None]:
+    """(world files for the sim, loc_noise record, error or None). R-W4: true start + cluttered world for the sim,
+    the nominal start as the planner's belief. A malformed cfg is returned as the error (fail closed: the episode
+    records it and starts nothing)."""
+    nominal = [float(v) for v in cfg.get("start", [4.0, 32.0, 0.0])]
+    ln: dict = {"start_applied": False, "clutter_applied": False, "belief": nominal, "true": list(nominal),
+                "spread": {"xy_m": 0.0, "yaw_deg": 0.0}}
+    if cfg.get("start_noise") is None and cfg.get("clutter") is None:
+        return world, ln, None
+    try:
+        from intercycle_sim.loc_noise import apply_loc_noise
+
+        world2, ln = apply_loc_noise(cfg, world)
+        return world2, ln, None
+    except Exception as e:  # noqa: BLE001 - fail closed
+        return world, ln, f"loc_noise: {e!r}"
+
+
 def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
     tag = cfg["tag"]
     work = f"/tmp/ic_{tag}"
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
+    twin = bool(cfg.get("twin", False)) or bool(_world_meta(world).get("twin", False))
+    world, ln, ln_err = prepare_loc_noise(cfg, world)
     wdir = os.path.join(work, "world")
     os.makedirs(wdir)
     for name, data in world.items():
@@ -200,14 +271,16 @@ def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
     renv = ros_env(work)
     procs = Procs(logdir)
     t_start = time.time()
-    res: dict = {"tag": tag, "cfg": cfg, "phases": {}}
+    res: dict = {"tag": tag, "cfg": cfg, "phases": {}, "twin": twin, "loc_noise": ln}
 
-    run_cfg = dict(cfg, world_dir=wdir, sock=sock, out_dir=out_dir, stop_file=stop_file)
+    run_cfg = dict(cfg, world_dir=wdir, sock=sock, out_dir=out_dir, stop_file=stop_file, start=list(ln["true"]))
     cfg_path = os.path.join(work, "run_cfg.json")
     with open(cfg_path, "w") as f:
         json.dump(run_cfg, f)
 
     try:
+        if ln_err is not None:
+            raise RuntimeError(ln_err)
         procs.start("bridge", ["/usr/bin/python3", "-u", os.path.join(PKG_ROOT, "intercycle_sim", "ros_bridge_node.py"),
                                "--sock", sock, "--status-file", status], renv)
         py = "python" if sim == "isaac" else "python"
@@ -232,7 +305,7 @@ def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
             procs.start("cmdvel", ["ros2", "topic", "pub", "-r", "20", "/cmd_vel", "geometry_msgs/msg/Twist", twist],
                         renv)
         if cfg.get("nav2"):
-            icenv = dict(renv, IC_WORK=work, IC_WORLD=wdir, IC_OUT=out_dir)
+            icenv = dict(renv, IC_WORK=work, IC_WORLD=wdir, IC_OUT=out_dir, **planner_env(ln))
             if cfg.get("nav2_cmd"):                      # R2: replaces the stock bringup (e.g. a collision_monitor chain)
                 _start_cmd(procs, "nav2", cfg["nav2_cmd"], icenv)
             else:
@@ -246,7 +319,7 @@ def run_episode(cfg: dict, world: dict, vol_root: str) -> dict:
                 _start_cmd(procs, "goal", cfg["goal_cmd"], icenv)
             else:
                 g = cfg["goal"]
-                s = cfg.get("start", [4.0, 32.0, 0.0])
+                s = ln["belief"]                         # the robot's belief (= cfg start), never the true start
                 procs.start("goal", ["/usr/bin/python3", "-u",
                                      os.path.join(PKG_ROOT, "intercycle_sim", "send_goal.py"),
                                      "--init", ",".join(str(v) for v in s), "--goal",

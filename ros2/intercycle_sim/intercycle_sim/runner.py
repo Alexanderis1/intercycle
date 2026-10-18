@@ -5,7 +5,9 @@
 cfg keys: sim ("isaac" | "fake"), world_dir, sock, out_dir, seconds (sim-time limit), start [x, y, psi],
 max_rtf (pace to <= this real-time factor so Nav2 gets real compute time; 0 = free-running), seed,
 movers (scripted list) or mover_source ("pkg.mod:factory" for R3), stop_file (orchestrator ends the episode),
-log_hz (true-pose log rate, default 10).
+log_hz (true-pose log rate, default 10), twin (press-shop twin run; also taken from world_dir/world.json "twin"),
+safety_scanner (R-W13: fixed ISO 13855 protective field; default ON for a twin run and refused off there, default off
+otherwise; summary key "safety_scanner", checked by safety_scanner.assert_scanner_ran).
 
 Outputs in out_dir: sim_summary.json, truth_log.(parquet|json) with the TRUE pose at log_hz (EVALUATION ONLY: it
 never reaches ROS), contacts.json.
@@ -114,6 +116,23 @@ def main() -> None:
     if hook("attach"):
         src.attach(caster=caster, dt=be.dt)
 
+    # R-W13: plant-side safety scanner with a fixed ISO 13855 protective field; it gates the command the locomotion
+    # layer executes, from the true pose and the true people / vehicle primitives. ON by default for a twin run (cfg
+    # "twin" or world.json "twin"), refused off there; otherwise cfg "safety_scanner" (default off).
+    from intercycle_sim.safety_scanner import scanner_enabled
+
+    wmeta_p = os.path.join(wd, "world.json")
+    wmeta = json.load(open(wmeta_p)) if os.path.exists(wmeta_p) else {}
+    scanner, sc_parts, sc_idx = None, [], np.zeros(0, int)
+    if scanner_enabled(cfg, wmeta):
+        from intercycle_sim.safety_scanner import ProtectiveField, scanned_part_index
+
+        scanner = ProtectiveField()
+        sc_parts = [parts[k] for k in scanned_part_index(parts)]
+        sc_idx = np.array(scanned_part_index(parts), int)
+        print(f"[runner] safety scanner: fixed field S = {scanner.spec.s_m:.3f} m over {len(sc_parts)} mover parts",
+              flush=True)
+
     suite = SensorSuite(caster, be.dt, seed=int(cfg.get("seed", 0)), start=tuple(cfg.get("start", (0, 0, 0))))
     mounts = {"laser": list(suite.lidar.mount), "imu": [0.0, 0.0, 0.0], "camera": list(suite.camera.mount)}
     client = SimClient(cfg["sock"], timeout_s=600.0)
@@ -144,13 +163,20 @@ def main() -> None:
                 be.set_movers(pp)
                 prof["set_movers"] += time.time() - w_            # PhysX kinematic targets at 50 / mover_every Hz (sensors use every step)
             prims = src.sensor_prims(t) if hook("sensor_prims") else (M.primitives(parts, pp) if parts else None)
+            cmd_exec = cmd
+            if scanner is not None:
+                sc_prims = M.primitives(sc_parts, pp[sc_idx]) if len(sc_parts) else None
+                cmd_exec = scanner.gate(t, be.dt, float(st["pos_w"][0]), float(st["pos_w"][1]), yaw_of(st["quat_wxyz"]),
+                                        cmd, float(np.hypot(st["v_w"][0], st["v_w"][1])), sc_prims)
             w = time.time()
-            st = be.step(cmd)
+            st = be.step(cmd_exec)
             step_wall += time.time() - w
             t = (k + 1) * be.dt
             w_ = time.time()
             fr = suite.frame(t, st["pos_w"], st["quat_wxyz"], st["v_w"], st["v_b"], st["omega_b"], prims)
             prof["sensors"] += time.time() - w_
+            if hasattr(be, "set_estimate"):                  # R-W6: stand mode holds against the robot's own odometry
+                be.set_estimate(fr["odom"]["x"], fr["odom"]["y"], fr["odom"]["psi"])
             if k == 0:
                 fr["mounts"] = mounts
             if "scan" in fr:
@@ -223,6 +249,7 @@ def main() -> None:
         "min_scan_m": None if min_scan == float("inf") else round(min_scan, 3),
         "min_mover_gap_m": None if min_gap == float("inf") else round(min_gap, 3), "min_mover_gap_t": min_gap_t, "n_contact_steps": len(contacts),
         "odom_end": rows[-1] if rows else None,
+        "safety_scanner": scanner.summary() if scanner is not None else None,
     }
     summary["truth_log"] = _write_table(rows, os.path.join(out_dir, "truth_log"))
     if hook("finish"):

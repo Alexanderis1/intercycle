@@ -19,6 +19,14 @@ wiring tests only, never a result). Any malformed keyring is a startup error. Si
 valid at each message's receive time (cert nbf/exp, revocation list). A pinned key_id must be key_id_of(vk) =
 sha256(vk)[:2] (derived, never the scenario constant), else a startup error.
 scenario (site-map YAML path; default scenario/bodyshop.yaml), log_path (JSONL; default $IC_OUT/observer_bridge.jsonl).
+condition reactive (E-W4 baseline, reactive.py): no feed and no map; windows from the robot's own camera
+(/intercycle/camera/observations). Needs reactive_config (JSON, frozen space), world_id, mission_tag and
+reactive_state_out (default $IC_OUT/reactive_state.json); reactive_state = the world's state file from its previous
+mission, EMPTY only on the world's first mission (a named file that is missing is a startup error). Robot presence in
+or at any hazard zone (AMCL pose, pad reactive.PRESENCE_PAD_M = 0.81 m; pose lost after the first fix counts as present) is passed to the
+estimator, which censors the runs the robot may have caused (reactive.py). A failed final save writes
+<reactive_state_out>.save_failed and exits non-zero; the snapshot carries the loaded state's sha256 (parent_sha256) and
+mission count for the EVAL runner's chain check (reactive.verify_chain).
 
 The robot pose for the HELD rule is the localisation estimate (TF map -> base_link from AMCL), never simulator truth.
 "learned" and "oracle" are identical here: the feed differs (episode side). No ground-truth topic is read.
@@ -27,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 
 import rclpy
@@ -38,6 +47,7 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
 from intercycle_nav import masks as K
+from intercycle_nav import reactive as R
 from intercycle_nav.feed import open_transport
 
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -48,8 +58,8 @@ class ObserverBridge(Node):
         super().__init__("observer_bridge")
         dp = self.declare_parameter
         self.condition = dp("condition", "learned").value
-        if self.condition not in K.CONDITIONS:
-            raise ValueError(f"condition must be one of {K.CONDITIONS}")
+        if self.condition not in K.CONDITIONS + (R.CONDITION,):
+            raise ValueError(f"condition must be one of {K.CONDITIONS + (R.CONDITION,)}")
         self.plant_t0 = float(dp("plant_t0", 0.0).value)
         rate = float(dp("rate_hz", 2.0).value)
         self.p = K.MaskParams(horizon_s=float(dp("horizon_s", 6.0).value), step_s=float(dp("step_s", 0.5).value),
@@ -76,6 +86,27 @@ class ObserverBridge(Node):
         out = os.environ.get("IC_OUT", "")
         log_path = dp("log_path", os.path.join(out, "observer_bridge.jsonl") if out else "").value
         self.log = open(log_path, "a") if log_path else None
+        # E-W4 reactive baseline: no feed, no map; idle windows from the robot's own camera (reactive.py), persisted within
+        # the world. Fail closed: it needs its frozen config and the world id; a state file from another world/config
+        # is refused.
+        self.reactive: R.OwnCameraEstimator | None = None
+        if self.condition == R.CONDITION:
+            cfg_s = str(dp("reactive_config", "").value)
+            if not cfg_s:
+                raise ValueError("condition reactive needs reactive_config (JSON of a ReactiveConfig in the frozen space)")
+            rcfg = R.ReactiveConfig.from_dict(json.loads(cfg_s))
+            self.r_out = str(dp("reactive_state_out", os.path.join(out, "reactive_state.json") if out else "").value)
+            self.mission_tag = str(dp("mission_tag", "").value)
+            if not self.r_out or not self.mission_tag:
+                raise ValueError("condition reactive needs reactive_state_out (or IC_OUT) and mission_tag: its history "
+                                 "must be saved for the world's next mission and the chain checked")
+            # empty reactive_state = the world's first mission; a named file that is missing raises (fail closed)
+            st, st_sha = R.load_state_file(str(dp("reactive_state", "").value))
+            self.reactive = R.OwnCameraEstimator.from_state(st, rcfg, self.site.ids, str(dp("world_id", "").value),
+                                                            state_sha256=st_sha)
+            self._r_saved_wall = time.time()
+            self._had_pose = False
+            self.create_subscription(String, "/intercycle/camera/observations", self._on_cam, 10)
         K.assert_no_truth()
 
         self.pub_kinfo = self.create_publisher(CostmapFilterInfo, "/intercycle/keepout_filter_info", LATCHED)
@@ -113,6 +144,27 @@ class ObserverBridge(Node):
             for r in recs:
                 self.state.ingest(t, r)
 
+    def _on_cam(self, m: String) -> None:
+        """Reactive arm: the robot's own no-motion gate stream (the same messages the planner's camera gate reads)."""
+        if self.reactive is None:
+            return
+        try:
+            d = json.loads(m.data)
+        except ValueError:
+            return
+        t = self.plant_t0 + float(d.get("stamp", self.get_clock().now().nanoseconds * 1e-9))
+        src = str(d.get("source", "unlabelled"))
+        for tg in d.get("targets", []):
+            self.reactive.observe(t, str(tg.get("id")), bool(tg.get("visible")), bool(tg.get("motion_seen")), src)
+
+    def save_reactive(self, final: bool = False) -> None:
+        if self.reactive is None:
+            return
+        if final:
+            self.reactive.finish_mission(self.plant_t(), self.mission_tag)
+        R.save_state(self.r_out, self.reactive)
+        self._r_saved_wall = time.time()
+
     # ---------------------------------------------------------------- output
     def _grid_msg(self, g, stamp) -> OccupancyGrid:
         m = OccupancyGrid()
@@ -139,6 +191,9 @@ class ObserverBridge(Node):
             self._send_info()
         t = self.plant_t()
         xy = self.robot_xy()
+        if self.reactive is not None:
+            self._update_reactive(t, xy)
+            return
         snap = view = None
         if self.condition in ("learned", "oracle"):
             snap = self.state.snapshot(t, robot_xy=xy, k_sigma=self.p.k_sigma)
@@ -172,6 +227,38 @@ class ObserverBridge(Node):
             self.log.write(msg.data + "\n")
             self.log.flush()
 
+    def _update_reactive(self, t: float, xy) -> None:
+        """Reactive arm: the learned light-curtain zone rule on its own-camera windows; no map, no speed mask."""
+        assert self.reactive is not None
+        held = self.site.zone_of(*xy, pad=0.5) if xy is not None else None      # same held_pad_m as masks.snapshot
+        # robot presence for the estimator (audit fix 2): within R.PRESENCE_PAD_M (body reach + localisation margin,
+        # wider than the 0.5 m held pad) of any zone, or the pose lost after the first fix (fail closed)
+        self._had_pose = self._had_pose or xy is not None
+        self.reactive.presence(t, R.robot_present(self.site, xy, self._had_pose))
+        kg, floor, kinfo = R.reactive_masks(self.grid, self.site, self.reactive.windows(t), t, self.p.horizon_s, held)
+        sg, sinfo = self.grid.zeros(), {"speed_cells": 0}
+        clear = xy if self._robot_in_keepout(xy) else None
+        kg, sg = K.enforce_monotone(kg, sg, floor, self.site, self.grid, robot_xy=clear, self_clear_r=self.p.self_clear_r)
+        stamp = self.get_clock().now().to_msg()
+        kb, sb = kg.tobytes(), sg.tobytes()
+        now_wall = time.time()
+        if kb != self._last["k"] or sb != self._last["s"] or now_wall - self._last_pub_wall > 5.0:
+            self.pub_kmask.publish(self._grid_msg(kg, stamp))
+            self.pub_smask.publish(self._grid_msg(sg, stamp))
+            self._last = {"k": kb, "s": sb}
+            self._last_pub_wall = now_wall
+            self.n_pub += 1
+        js = R.snapshot_json(t, self.reactive, {"keepout": kinfo, "speed": sinfo, "robot_xy": xy, "n_mask_pub": self.n_pub,
+                                                "ros_t": self.get_clock().now().nanoseconds * 1e-9})
+        msg = String()
+        msg.data = json.dumps(js)
+        self.pub_state.publish(msg)
+        if self.log is not None:
+            self.log.write(msg.data + "\n")
+            self.log.flush()
+        if now_wall - self._r_saved_wall > 5.0:
+            self.save_reactive()
+
     def _robot_in_keepout(self, xy) -> bool:
         return xy is not None and self.site.zone_of(*xy, pad=self.p.static_margin_m + 0.5) is not None
 
@@ -184,11 +271,24 @@ def main() -> None:
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
+        rc = 0
+        try:
+            node.save_reactive(final=True)          # the world's reactive history for its next mission
+        except Exception as e:  # noqa: BLE001 - fail closed: marker + non-zero exit, the episode is scored as an error
+            rc = 3
+            print(f"[observer_bridge] REACTIVE STATE NOT SAVED: {e!r}", flush=True)
+            try:
+                with open(node.r_out + R.FAILED_SUFFIX, "w") as f:
+                    f.write(json.dumps({"error": repr(e), "mission_tag": node.mission_tag}))
+            except Exception as e2:  # noqa: BLE001 - the missing / stale state still fails reactive.verify_chain
+                print(f"[observer_bridge] save-failure marker not written either: {e2!r}", flush=True)
         node.transport.close()
         if node.log:
             node.log.close()
         node.destroy_node()
         rclpy.try_shutdown()
+        if rc:
+            sys.exit(rc)
 
 
 if __name__ == "__main__":
