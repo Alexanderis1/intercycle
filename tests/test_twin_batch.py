@@ -87,21 +87,32 @@ def test_sealed_batch_and_cli_refuse_without_the_sealed_flag(monkeypatch, tmp_pa
             RD.run_sealed(tmp_path, [1000 + i for i in range(16)], backend=be)
 
 
+def test_stub_inputs_are_refused_in_a_sealed_run(monkeypatch, tmp_path):
+    sys.path.insert(0, str(REPO / "scripts"))
+    import run_double as RD  # pyright: ignore[reportMissingImports]  (scripts/ on sys.path)
+
+    monkeypatch.setenv("INTERCYCLE_SEALED_RUN", "1")
+    with pytest.raises(RD.DoubleError, match="stub inputs in a sealed run"):
+        RD.setup(tmp_path, stubs=True)
+
+
 def test_local_batch_end_to_end_into_twin_eval(tmp_path, monkeypatch):
-    """Stub world, dev world 0, both zones, the 3 conditions on days 9-10 (12 missions, 720 s each), the observer phase
-    on SHORT 1 h days (dev-only test setting), classify_invalid per round, scored by twin_eval on the dev split."""
+    """Stub world (the whole G0 v0 stub set, forced: stubs=True), dev world 0, both zones, the 3 conditions on days
+    9-10 (12 missions, 720 s each), the observer phase on SHORT 1 h days (dev-only test setting), classify_invalid per
+    round, scored by twin_eval on the dev split with the tasks file the runs used."""
     sys.path.insert(0, str(REPO / "scripts"))
     import run_double as RD  # pyright: ignore[reportMissingImports]  (scripts/ on sys.path)
 
     monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
-    rec = RD.run_batch(tmp_path / "out", RD.dev_worlds([0]), day_s=3600.0)
-    assert rec["n_missions"] == 12 and rec["n_rounds"] == 4
+    rec = RD.run_batch(tmp_path / "out", RD.dev_worlds([0]), day_s=3600.0, stubs=True)
+    assert rec["n_missions"] == 12 and rec["n_rounds"] == 4 and rec["stub_inputs"] is True
     st = rec["observer_phase"][0]
     assert st["ticks"] > 0 and len(st["snapshot_bytes"]) == 4
     runs = Path(rec["runs_root"])
     inv = json.loads((runs / TB.INVALID_ALL).read_text(encoding="utf-8"))
     assert inv["invalid"] == []
-    tasks = REPO / "twin" / "tasks_v0.yaml"
+    tasks = RD.SL.inputs(stubs=True)["tasks"]                          # the tasks file these runs used
+    assert Path(tasks).name == "tasks_v0.yaml"
     rep = E.run_eval(runs, tasks, split="dev", invalid=runs / TB.INVALID_ALL)
     assert rep["design"]["conditions"] == ["static", "learned", "reactive"] and rep["unresolved_cells"] == []
     assert len(rep["primary_metric"]["missions"]) == 12

@@ -75,10 +75,15 @@ class DoubleError(RuntimeError):
 # ------------------------------------------------------------------------------------------------ inputs
 
 
-def setup(out: Path) -> dict:
-    """Contract files in force, compiled zones, the site-wide observer spec and the frozen M-W7 margin."""
-    paths = SL.inputs()
+def setup(out: Path, *, stubs: bool = False) -> dict:
+    """Contract files in force, compiled zones, the site-wide observer spec and the frozen M-W7 margin. `stubs` = the
+    whole G0 v0 stub set (slice.inputs(stubs=True); the stub-world end-to-end test only, never a sealed run)."""
+    if stubs and os.environ.get(SEALED_ENV) == "1":
+        raise DoubleError("the G0 stub inputs in a sealed run: refused")
+    paths = SL.inputs(stubs=stubs)
     stub = all(C.is_stub(k, paths[k]) for k in ("site", "dynamics", "tasks"))
+    if stubs and not stub:
+        raise DoubleError(f"stubs requested but the inputs are not the whole G0 stub set: {paths}")
     site, dyn = load(Site, paths["site"]), load(Dynamics, paths["dynamics"])
     compiled = C.compile_paths(paths["site"], paths["dynamics"], paths["tasks"])
     # spec only: observer_spec reads the adapter's geometry (press_ids, zone_ids, rects), never its hold; this adapter
@@ -115,6 +120,12 @@ def write_days(ctx: dict, world: TB.World, days, day_s: float, out: Path) -> tup
 # ------------------------------------------------------------------------------------------------ observer phase
 
 
+def _camera(ctx: dict, seed: int, day: int):
+    """The camera the mission plant runs on these inputs (twin/plant.py Plant: StubCameraV0 on the G0 stub site file,
+    stat_v1 otherwise), so the observer phase sees the same observation stream as the missions."""
+    return PL.make_camera(ctx["site"], seed, day, stub_site=Path(ctx["paths"]["site"]).name == PL.STUB_SITE_FILE)
+
+
 def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float]], day_s: float = TB.DAY_S,
                    scripts: dict[int, Any] | None = None) -> tuple[dict[tuple[int, str], bytes], dict]:
     """Days 1..max slot day of the robot-free plant stream through one observer; snapshot (pickle) at each slot
@@ -129,8 +140,8 @@ def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float
     t_wall = time.time()
     # the observer config follows the camera model that writes the observations (observer_live.config_for_camera, as
     # the slice and the twin broadcaster do): stat_v1's fitted motion threshold, never the 0.5 placeholder (fail closed)
-    model = PL.make_camera(ctx["site"], world.seed, 1).provenance()["model"]
-    ob = OL.ObserverLive(ctx["spec"], OL.config_for_camera(model, str(ctx["margin"])))
+    model = _camera(ctx, world.seed, 1).provenance()["model"]
+    ob = OL.ObserverLive(ctx["spec"], OL.config_for_camera(model, str(ctx["margin"]), stub_run=ctx["stub"]))
     pending = sorted(slots, key=lambda s: s[2])
     last_day = max(d for d, _, _ in pending)
     snaps: dict[tuple[int, str], bytes] = {}
@@ -140,7 +151,7 @@ def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float
         t_day = time.time()
         script = scripts[day] if scripts and day in scripts else generate_day(ctx, world.seed, day, day_s)
         eng = Engine(script, ctx["site"], ctx["dyn"])
-        cam = PL.make_camera(ctx["site"], world.seed, day)
+        cam = _camera(ctx, world.seed, day)
         # as the plant does (twin/plant.py): the camera's own per-press hold and ROI visibility (stat_v1, S3b fix2)
         ad = PL.ObsAdapter(ctx["site"], hold_s=dict(cam.hold_s_by_press), roi_vis=cam.roi_vis)
         for t in eng.tick_times():
@@ -221,12 +232,13 @@ def local_mission(ctx: dict, m: TB.Mission, script: Path, batch: Path, snapshot:
 
 def run_batch(out: Path, worlds: list[TB.World], *, backend: str = "local", zones: list[str] | None = None,
               day_s: float = TB.DAY_S, wave_size: int = TB.WAVE_SIZE,
-              classify: Callable[[Path], dict] | None = None) -> dict:
-    """Steps 1-4 of the module doc for every world; returns the batch record (also <out>/double_batch.json)."""
+              classify: Callable[[Path], dict] | None = None, stubs: bool = False) -> dict:
+    """Steps 1-4 of the module doc for every world; returns the batch record (also <out>/double_batch.json).
+    `stubs` (the stub-world end-to-end test only) runs on the whole G0 v0 stub set (setup)."""
     if backend != "local":
         raise DoubleError(f"backend {backend!r} is not wired in this build (fail closed): only the local wiring backend")
     t_wall = time.time()
-    ctx = setup(out)
+    ctx = setup(out, stubs=stubs)
     SL.BW.build(ctx["paths"]["site"], ctx["paths"]["dynamics"], ctx["paths"]["tasks"], out / "worlds")
     zs = zones or ctx["zones"]
     missions = TB.plan(worlds, zs, day_s=day_s)
