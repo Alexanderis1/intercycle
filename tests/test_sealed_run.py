@@ -384,6 +384,26 @@ def test_run_sets_the_flag_only_after_the_refusals_and_writes_runlog(s):
     assert rec["stages"]["clips"]["outputs_sha256"]["tracks/0_te1.parquet"] == sha(b"tclip zero")
 
 
+def test_double_stage_runs_after_the_refusals_with_the_test_seeds(s):
+    """The CPU-double stage (cut design) gets the 16 revealed test seeds, a fresh runs root, and the sealed flag."""
+    seen = {}
+
+    def fake_double(out, seeds):
+        seen.update(out=out, seeds=seeds, flag=os.environ.get(SR.SEALED_ENV))
+        return {"runs_root": str(out / "runs"), "invalid": str(out / "runs" / "invalid_all.json"), "n_missions": 192,
+                "usd": 0.0, "wall_s": 1.0}
+
+    try:
+        rec = SR.run(s["repo"], s["root"], ["double"], fake_fetch, fake_runner, double_runner=fake_double)
+    finally:
+        os.environ.pop(SR.SEALED_ENV, None)
+    assert seen["flag"] == "1" and len(seen["seeds"]) == 16 and all(v > 999 for v in seen["seeds"])
+    assert seen["out"] == s["repo"] / SR.DOUBLE_OUT / "attempt_001"
+    assert rec["stages"]["double"]["status"] == "done" and rec["stages"]["double"]["n_missions"] == 192
+    with pytest.raises(SR.Refusal, match="sealed flag"):
+        SR.run_double_stage(s["repo"], 9, [1000] * 16, fake_double)   # never outside an attempt
+
+
 def test_upload_check_rejects_changed_bytes():
     with pytest.raises(PermissionError, match="MANIFEST"):
         SR.verify_clip_bytes("0_te1", b"changed", sha(b"clip zero"))

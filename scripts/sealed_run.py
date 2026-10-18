@@ -56,7 +56,11 @@ is a new attempt with its own records; nothing earlier is rewritten.
   scripts/sealed_ingest.py, shipped with `add_local_python_source` and imported by name in the container (not
   cloudpickled: the client and image Pythons differ). Outputs go to a FRESH <sealed-root>/perc/attempt_<NNN>/ per
   attempt (test tracks never enter the repo); only their sha256 go into RUNLOG.
-* the CPU-double and Isaac batches belong to the EVAL runner; their stages are not wired here yet (refused).
+* `double`: the sealed CPU-double batch (USER DECISION Sun ~07:00 CEST, the CUT design: static, learned, reactive x 16
+  test worlds x days 9-10 x zones = 192 missions), launched through scripts/run_double.py `run_sealed` with the 16
+  revealed test seeds (world i = seed_ints[i]) after every refusal passed (so after the robot FREEZE), into a FRESH
+  <repo>/out/sealed_double/attempt_<NNN>/ (the twin_eval runs root is its runs/). run_double refuses unless the
+  sealed flag is set. Isaac stays outside sealed_run (descriptive only; refused here).
 
 `dev-dry-run` exercises the clips stage end to end on DEV clips before the sealed run: it copies the named clips (each
 must be a `dev` row of the active split) from $INTERCYCLE_DATA/clips into a scratch dev root (never the sealed root),
@@ -120,7 +124,8 @@ INGEST_CONTAINER_MODULE = "sealed_ingest"         # scripts/sealed_ingest.py: th
 PERC_IMAGE_MODULE = "cloud/modal_perc.py"   # the dev batch: its image (detector weights, tracker, versions) is reused
 DRAND_URL = "https://api.drand.sh"
 CLIPS_PER_CALL = 16                         # one detector load per call; 126 clips -> 8 calls
-STAGES = ("clips",)
+STAGES = ("clips", "double")
+DOUBLE_OUT = "out/sealed_double"            # the CPU-double runs root per attempt (gitignored; the EVAL runner scores it)
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SHA64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -650,8 +655,29 @@ def _now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
+def run_double_stage(repo: Path, attempt: int, seed_ints: list[int],
+                     double_runner: Callable[[Path, list[int]], dict] | None = None) -> dict:
+    """The sealed CPU-double stage: a fresh runs root per attempt, then run_double.run_sealed (16 test seeds)."""
+    out = repo / DOUBLE_OUT / f"attempt_{attempt:03d}"
+    if out.exists():
+        raise Refusal(f"{out} exists; every attempt writes to a fresh one")
+    if os.environ.get(SEALED_ENV) != "1":
+        raise Refusal("the double stage runs only after every refusal passed (sealed flag not set)")
+    if double_runner is None:
+        scripts = str(REPO / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import run_double  # scripts/run_double.py (an orchestrator)
+
+        double_runner = run_double.run_sealed
+    rec = double_runner(out, list(seed_ints))
+    return {"out": str(out), "runs_root": rec.get("runs_root"), "invalid": rec.get("invalid"),
+            "n_missions": rec.get("n_missions"), "usd": rec.get("usd"), "wall_s": rec.get("wall_s")}
+
+
 def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str], dict] = drand_fetch,
-        runner: Callable[[list[list[dict]]], list[dict]] | None = None) -> dict:
+        runner: Callable[[list[list[dict]]], list[dict]] | None = None,
+        double_runner: Callable[[Path, list[int]], dict] | None = None) -> dict:
     """One sealed attempt: refusals, then a `started` RUNLOG record, the stages, and the closing record."""
     bad = sorted(set(stages) - set(STAGES))
     if bad or not stages:
@@ -670,12 +696,18 @@ def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str],
                  stages=list(stages), sealed_flag=SEALED_ENV + "=1", perc_dir=perc_rel)
     known = append_runlog(repo, known, start)
     results: dict[str, dict] = {}
+    cur = ""
     try:
         if "clips" in stages:
+            cur = "clips"
             results["clips"] = dict(run_clips(sealed_root, jobs, runner or modal_runner, sealed_root / perc_rel),
                                     status="done")
+        if "double" in stages:
+            cur = "double"
+            results["double"] = dict(run_double_stage(repo, attempt, rec["seeds"]["seed_ints"], double_runner),
+                                     status="done")
     except Exception as e:  # noqa: BLE001 - recorded, then re-raised
-        results["clips"] = {"status": "error", "error": repr(e)}
+        results[cur] = {"status": "error", "error": repr(e)}
         append_runlog(repo, known, {"attempt": attempt, "status": "error", "timestamp": _now_iso(),
                                     "head": rec["head"], "stages": results})
         raise

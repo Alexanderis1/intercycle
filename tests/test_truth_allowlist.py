@@ -28,7 +28,7 @@ STAND_INS = {"twin/camera_v0.py": "twin/camera.py"}
 PRODUCERS = ("twin/daygen.py", "twin/daygen_stub.py", "twin/engine.py", "twin/plant.py",
              "ros2/intercycle_eval/intercycle_eval/plant.py")
 # Launchers that may import truth modules to start the plant / generator; they never open truth.
-ORCHESTRATORS = ("scripts/slice.py", "scripts/sealed_run.py")
+ORCHESTRATORS = ("scripts/slice.py", "scripts/sealed_run.py", "scripts/run_double.py")
 
 # Pre-existing violations, each with its owner; the strict xfail below turns red once fixed, so the entry is removed.
 KNOWN = {
