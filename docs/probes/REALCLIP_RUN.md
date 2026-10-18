@@ -23,6 +23,7 @@ $py = 'F:\intercycle\.venv\Scripts\python.exe'      # the Modal client is instal
 
 ```powershell
 git -C F:\intercycle worktree add --detach C:\intercycle_rc <RCW>
+git config --global --add safe.directory C:/intercycle_rc   # only if git refuses the worktree (dubious ownership)
 cd C:\intercycle_rc
 $env:PYTHONPATH = 'C:\intercycle_rc;C:\intercycle_rc\ros2\intercycle_nav;C:\intercycle_rc\ros2\intercycle_eval'
 git rev-parse HEAD                                  # must print <RCW>
@@ -61,7 +62,7 @@ Expected last line: `sealed_run: attempt 1 done; results/sealed/RUNLOG.json appe
 & $py scripts\sealed_run.py score
 ```
 
-It re-runs C1-C4, takes the last `done` clips attempt of RUNLOG, re-hashes its PERC tables against the RUNLOG
+It re-runs C1-C4, takes the first `done` clips attempt of RUNLOG, re-hashes its PERC tables against the RUNLOG
 `outputs_sha256`, reads the test labels ONLY from `C:\intercycle_sealed\labels\` as listed in `sealed/LABELS.sha256`
 (each file re-hashed), builds the scored test set (`twin.dev_labels.load_scored_test`, dev status rules, reserves by
 list order) and runs the dev scorer `intercycle.eval.realclip.run` with split `test` (pixel adapter + watchdog on the
