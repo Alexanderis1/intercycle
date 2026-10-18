@@ -53,6 +53,17 @@ def _models_patch(path: str):
     return d
 
 
+def load_scenario(cfg: dict):
+    """(Scenario, path) of the episode: run_cfg["scenario"] (twin mode: the compiled twin scenario; relative = inside
+    world_dir), else the body-shop default (path None). The robot side gets the same path as a ROS parameter
+    (intercycle_nav.masks.scenario_ros_arg), never by reading run_cfg."""
+    from intercycle import scenario as S
+    from intercycle_nav.masks import run_cfg_scenario
+
+    sp = run_cfg_scenario(cfg)
+    return (S.load(sp) if sp else S.load()), sp
+
+
 class OracleFeed:
     def __init__(self, scn, world):
         from intercycle.sim.observer_learned import true_models
@@ -99,14 +110,13 @@ def main() -> None:
     pcfg = cfg.get("plant") or {}
     log = open(os.path.join(out_dir, "broadcaster.jsonl"), "a")
 
-    from intercycle import scenario as S
     from intercycle.observer import mapping as M
     from intercycle.sim.world import Freeze, World
     from intercycle.types import DAY0_UNIX
     from intercycle_nav.broadcast import Broadcaster, pack_map_for_key
     from intercycle_nav.feed import FeedWriter
 
-    scn = S.load()
+    scn, scn_path = load_scenario(cfg)
     seed, t0 = int(pcfg["seed"]), float(pcfg["plant_t0"])
     T = float(cfg.get("seconds", 600.0))
     world = World(scn, seed, t0, t0 + T + 120.0)
@@ -118,7 +128,8 @@ def main() -> None:
     lm = M.LayeredMap.load(os.path.join(wdir, a.map))
     bundle = pack_map_for_key(lm, key, version=1, issue_time=DAY0_UNIX + t0 - 60.0)
     info = {"t_wall": time.time(), "condition": a.condition, "seed": seed, "plant_t0": t0,
-            "map": a.map, "map_bytes": bundle.stats.get("compressed_bytes"), "verify_key": vk}
+            "map": a.map, "map_bytes": bundle.stats.get("compressed_bytes"), "verify_key": vk,
+            "scenario": scn_path or "default"}
     if a.condition == "learned":
         from intercycle.sim.observer_learned import LearnedObserver
 
