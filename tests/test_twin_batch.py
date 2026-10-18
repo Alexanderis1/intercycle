@@ -102,6 +102,34 @@ def test_local_batch_end_to_end_into_twin_eval(tmp_path, monkeypatch):
     assert rep["design"]["conditions"] == ["static", "learned", "reactive"] and rep["unresolved_cells"] == []
     assert len(rep["primary_metric"]["missions"]) == 12
     assert {m["condition"] for m in rep["primary_metric"]["missions"]} == {"static", "learned", "reactive"}
-    learned = [json.loads(p.read_text(encoding="utf-8")) for p in runs.glob("round*/w0_*_learned.json")]
-    assert len(learned) == 4 and all(r["observer"]["t_last"] < 9 * 86400 + 1e9 for r in learned)
+    t0s = {c["run_id"]: c["t0"] for b in runs.glob("round*/batch.json")
+           for c in json.loads(b.read_text(encoding="utf-8"))["cfgs"]}
+    learned = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in runs.glob("round*/w0_*_learned.json")}
+    assert len(learned) == 4 and set(learned) <= set(t0s)
+    for rid, r in learned.items():                                       # every snapshot predates its mission start
+        assert r["observer"]["t_last"] < t0s[rid]
+        assert r["observer"]["t_last"] > t0s[rid] - 5.0                  # ... and is the state AT the start
     assert os.path.exists(tmp_path / "out" / "costs.json")
+
+
+def test_slots_of_a_world_day_never_overlap_and_first_draws_are_kept():
+    """The reactive chain crosses zones: no two slots of a world-day closer than one mission (twin_batch doc)."""
+    n_moved = 0
+    for seed in range(400):
+        for d in (9, 10):
+            sl = TB.day_slots(seed, d, ["z9", "z14"])
+            assert abs(sl["z9"] - sl["z14"]) >= 720
+            assert sl["z9"] == TB.slot_t0(seed, d, "z9")                  # the first zone is the first draw
+            n_moved += sl["z14"] != TB.slot_t0(seed, d, "z14")
+    assert 0 < n_moved < 40                                              # only the overlapping world-days redraw
+    ms = TB.plan([TB.World(i, s, "test") for i, s in enumerate(range(400))], ["z9", "z14"])
+    for chain in TB.reactive_chains(ms).values():
+        assert all(b.t0 >= a.t0 + 720 for a, b in zip(chain, chain[1:]))
+
+
+def test_rounds_refuse_an_overlapping_chain():
+    w = TB.World(0, 0, "test")
+    ms = [TB.Mission(w, 9, z, c, 9 * 86400.0 + (0 if z == "z9" else 100)) for z in ("z9", "z14")
+          for c in ("static", "learned", "reactive")]
+    with pytest.raises(TB.BatchError, match="overlap"):
+        TB.rounds(ms)
