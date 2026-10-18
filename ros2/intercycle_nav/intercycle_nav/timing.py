@@ -1,8 +1,10 @@
 """Timing layer (pure logic, no ROS): WHEN to depart / wait and WHICH inspection target is next. Used by `timing_planner`.
 
 Method: Safe Interval Path Planning (SIPP; Phillips & Likhachev, ICRA 2011), reused from `intercycle.robot.sipp`, on
-the robot's provisioned topological site graph (`intercycle.robot.sitegraph`, public site map) extended with one
-"inside" node per machine target (the inspection pose inside the hazard zone). Only inside nodes carry safe intervals:
+the robot's provisioned topological site graph (body shop: `intercycle.robot.sitegraph`, public site map; twin: the
+zone's `intercycle.robot.twin_sitegraph.TwinSiteGraph` from tasks.yaml; `intercycle.robot.twin_sitegraph.site_graph`
+picks it from the run's scenario path) extended with one "inside" node per machine target (the inspection pose inside
+the hazard zone; node IN_<target id>). Only inside nodes carry safe intervals:
 the observer's predicted idle windows (from the verified broadcast, via `observer_bridge`). Edge durations are graph
 distance / nominal speed; Nav2 computes and executes the real paths, MPPI + the collision monitor handle residual
 dynamics. SIPP is the standard method; nothing here is claimed as novel.
@@ -19,9 +21,26 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from intercycle.robot import sipp
-from intercycle.robot.sitegraph import SiteGraph, Target
+from intercycle.robot.sitegraph import Target
+from intercycle.scenario import Scenario
+from intercycle.robot.twin_sitegraph import ray_exit, site_graph
+
+
+class SiteGraphLike(Protocol):
+    """The site graph interface the timing layer uses (body-shop SiteGraph, twin TwinSiteGraph)."""
+    @property
+    def scn(self) -> Scenario: ...
+
+    pos: dict[str, tuple[float, float]]
+    adj: dict[str, dict[str, float]]
+    targets: list[Target]
+
+    def inspect_pose(self, target: Target) -> tuple[float, float]: ...
+
+    def mission(self) -> list[Target]: ...
 
 
 @dataclass
@@ -38,7 +57,7 @@ class TargetPlan:
 
 @dataclass
 class TimingCore:
-    graph: SiteGraph
+    graph: SiteGraphLike
     speed: float = 0.5                     # nominal walking speed for edge durations (m/s)
     dwell_s: float = 4.0
     margin_s: float = 1.0
@@ -50,8 +69,14 @@ class TimingCore:
     _tg_of: dict = field(default_factory=dict)
 
     @classmethod
-    def from_scenario(cls, scn, **kw) -> TimingCore:
-        core = cls(SiteGraph(scn), **kw)
+    def from_scenario(cls, scn, scenario_path: str | None = None, **kw) -> TimingCore:
+        """Core on the run's site graph: `site_graph(scn, scenario_path)` (twin zone graph from the scenario path's
+        compiled inputs; the body-shop graph only for the body-shop scenario; fail closed otherwise)."""
+        return cls.from_graph(site_graph(scn, scenario_path), **kw)
+
+    @classmethod
+    def from_graph(cls, graph: SiteGraphLike, **kw) -> TimingCore:
+        core = cls(graph, **kw)
         core._build()
         return core
 
@@ -63,17 +88,22 @@ class TimingCore:
             ix, iz = g.inspect_pose(tg)
             wx, wz = g.pos[tg.node]
             m = g.scn.machine(tg.machine)
-            if abs(iz - wz) > 1e-6:                      # push the wait pose out along the entry line
+            if abs(ix - wx) < 1e-6 and abs(iz - wz) > 1e-6:      # push the wait pose out along the entry line
                 edge = m.rect[1] if iz > wz else m.rect[3]
                 g.pos[tg.node] = (wx, edge - math.copysign(self.wait_offset_m, iz - wz))
-            n = f"IN_{tg.machine}"
+            elif abs(ix - wx) > 1e-6:                           # any other approach normal (twin targets)
+                L = math.hypot(wx - ix, wz - iz)
+                ux, uz = (wx - ix) / L, (wz - iz) / L
+                t = ray_exit(ix, iz, ux, uz, m.rect) + self.wait_offset_m
+                g.pos[tg.node] = (ix + ux * t, iz + uz * t)
+            n = f"IN_{tg.id}"                                   # = IN_<machine> in the body shop (target id = machine)
             g.pos[n] = (ix, iz)
             g.adj.setdefault(n, {})
             wx, wz = g.pos[tg.node]
             d = math.hypot(ix - wx, iz - wz) / self.speed
             g.adj[tg.node][n] = d
             g.adj[n][tg.node] = d
-            self.inside[tg.machine] = n
+            self.inside[tg.id] = n
             self._tg_of[n] = tg
         # re-time every edge at the nominal speed (the site graph is built at the scenario's 1 m/s); the wait -> inside
         # edge takes the measured entry time
@@ -85,7 +115,7 @@ class TimingCore:
                     nb[b] = self.enter_s
 
     def inside_travel_s(self, tg: Target) -> float:
-        n = self.inside.get(tg.machine)
+        n = self.inside.get(tg.id)
         return 0.0 if n is None else self.graph.adj[tg.node][n]
 
     def enter_time(self, tg: Target) -> float:
@@ -103,6 +133,9 @@ class TimingCore:
                    key=lambda n: math.hypot(self.graph.pos[n][0] - x, self.graph.pos[n][1] - y))
 
     def face_psi(self, tg: Target) -> float:
+        cap = getattr(self.graph, "capture_psi", None)
+        if cap is not None:                              # twin: the checkpoint's capture yaw (tasks.yaml)
+            return float(cap(tg))
         wx, wz = self.graph.pos[tg.node]
         if tg.machine is not None:
             m = self.graph.scn.machine(tg.machine)
@@ -117,7 +150,7 @@ class TimingCore:
         start = self.nearest_node(*xy)
         t_start = t0 + math.hypot(g.pos[start][0] - xy[0], g.pos[start][1] - xy[1]) / self.speed
         hazard = tg.kind == "machine" and condition != "static"
-        goal = self.inside[tg.machine] if hazard else tg.node
+        goal = self.inside[tg.id] if hazard else tg.node
         need = self.need_s(tg) - self.enter_time(tg) if hazard else self.dwell_s
 
         def safe(n: str):
@@ -125,7 +158,7 @@ class TimingCore:
                 return None
             if condition == "none":
                 return None
-            w = windows.get(n[3:])
+            w = windows.get(self._tg_of[n].machine)
             if condition == "reactive" and not w:
                 # reactive: its windows only ever cover the CURRENT still run, never a future one, so "no window now"
                 # (never seen, stale, moving, or too little history: None or []) is planned like an unseen machine:

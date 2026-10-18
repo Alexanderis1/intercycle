@@ -70,7 +70,9 @@ class Planner:
         self.entry_slack = float(dp("entry_slack_s", 3.0).value)       # entry deadline = enter_s + slack        # exit speed (m/s); 0 = exit with a NavigateToPose goal
         sp = dp("scenario", "").value
         scn = S.load(sp) if sp else S.load()
-        self.core = TimingCore.from_scenario(scn, speed=float(dp("speed_mps", 0.5).value),
+        # twin mode: the zone's TwinSiteGraph from the compiled inputs next to the scenario (tasks.yaml mission order);
+        # body shop: its SiteGraph (intercycle.robot.twin_sitegraph.site_graph, fail closed in between)
+        self.core = TimingCore.from_scenario(scn, scenario_path=sp or None, speed=float(dp("speed_mps", 0.5).value),
                                              enter_s=float(dp("enter_s", 5.0).value), exit_s=float(dp("exit_s", 6.5).value),
                                              wait_offset_m=float(dp("wait_offset_m", 1.05).value),
                                              dwell_s=float(dp("dwell_s", scn.inspection.dwell_s).value),
@@ -78,7 +80,8 @@ class Planner:
         self.cam = CameraGate(confirm_n=int(dp("camera_confirm_n", 2).value),
                               min_span_s=float(dp("camera_span_s", scn.inspection.local_check_latency_s).value))
         by_id = {t.id: t for t in self.core.graph.targets}
-        ids = [s.strip() for s in tl.split(",") if s.strip()] or [t.id for t in self.core.graph.mission() if t.kind == "machine"]
+        # default: every mission target but the body shop's data-hall racks (twin: machine AND point checkpoints)
+        ids = [s.strip() for s in tl.split(",") if s.strip()] or [t.id for t in self.core.graph.mission() if t.kind != "rack"]
         self.targets = [by_id[i] for i in ids]
         assert_no_truth()
         self.obs: dict | None = None
