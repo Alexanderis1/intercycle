@@ -1,3 +1,4 @@
 sealed/* text eol=lf
 prereg/*.csv text eol=lf
 prereg/ACTIVE_SPLIT text eol=lf
+labels/** text eol=lf
