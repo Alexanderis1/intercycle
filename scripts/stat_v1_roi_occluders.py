@@ -34,7 +34,7 @@ if str(ROOT) not in sys.path:
 
 from intercycle import esk  # noqa: E402
 from intercycle.observer.occlusion import ROI_PAD_FRAC, box_hits_roi  # noqa: E402
-from twin.camera import CamGeom  # noqa: E402
+from twin.cam_geom import HEIGHT_M, CamGeom, circle_prism  # noqa: E402
 from twin.schemas import load  # noqa: E402
 from twin.schemas.site import Site, point_in_polygon  # noqa: E402
 
@@ -63,39 +63,53 @@ def _q(a, qs=(5, 25, 50, 75, 95)):
     return [round(float(np.percentile(a, q)), 2) for q in qs] if len(a) else None
 
 
-def twin_replay(site: Site, world: int = 7) -> dict:
+def twin_replay(site: Site) -> dict:
     """The twin camera's geometry on the DAYGEN v1 path library ($INTERCYCLE_DATA/dyn/path_library_v1.npz: the
     TRAIN tracks the generated days resample, projected to the plan floor): per press, the share of (clip, 0.5 s)
-    stamps at which a library person / forklift, placed exactly where its track says, has a box (true camera of
-    `world`, TWIN heights) over the press's ROI in the ROI's framing, plus the share of library points on the visible
-    floor and inside a press footprint (where the real zone-9 occluders stand)."""
-    from twin.camera import HEIGHT_M, CameraStatV1, _circle_prism
-
+    stamps at which a library person / forklift, placed exactly where its track says, has a box (TWIN heights, the
+    stat_v1 prisms) over the press's first ROI (the one stat_v1 reads) in that ROI's framing. Through the NOMINAL
+    camera and through each of the 200 CAL v1 joint draws (twin/cal/h_draws_v1.json; a world's TRUE camera is one
+    draw): quantiles over the draws. Plus the number of library points inside a press footprint (where the real
+    zone-9 occluders stand)."""
     lib = np.load(esk.data_root() / "dyn" / "path_library_v1.npz")
-    cam = CameraStatV1(site, world, 1)
+    hd = json.loads((ROOT / "twin" / "cal" / "h_draws_v1.json").read_text(encoding="utf-8"))
+    fr = {f.id: f for f in site.framings}
     t = np.round((lib["unit_t0"] + lib["seg_t_off"] + lib["dt"]) * 2.0) / 2.0
-    out: dict = {"world": world, "library_points": int(len(t)), "presses": {}}
+    out: dict = {"library_points": int(len(t)), "n_draws": int(hd["n"]), "presses": {}}
     for p in site.presses:
-        if p.id not in cam.roi:
+        if not p.ram_roi.value:
             continue
-        fid, (r0, s0, r1, s1) = cam.roi[p.id]
+        r = p.ram_roi.value[0]
+        fid = r.framing
+        poly = np.asarray(r.polygon_px, float)
+        r0, s0, r1, s1 = float(poly[:, 0].min()), float(poly[:, 1].min()), float(poly[:, 0].max()), float(poly[:, 1].max())
         sel = np.flatnonzero(lib["zone"] == p.zone)
-        stamps, hit = set(), set()
-        in_fp = 0
-        for i in sel:
-            x, z, cls = float(lib["x"][i]), float(lib["z"][i]), str(lib["cls"][i])
-            key = (str(lib["clip_id"][i]), float(t[i]))
-            stamps.add(key)
-            in_fp += any(point_in_polygon(x, z, q.footprint.value) for q in site.presses if q.zone == p.zone)
-            b = cam._box(fid, _circle_prism(x, z, 0.3 if cls == "person" else 1.0, HEIGHT_M.get(cls, 1.75)))
-            if b is None:
-                continue
-            pu, pv = ROI_PAD_FRAC * (b[2] - b[0]), ROI_PAD_FRAC * (b[3] - b[1])
-            if b[0] - pu <= r1 and b[2] + pu >= r0 and b[1] - pv <= s1 and b[3] + pv >= s0:
-                hit.add(key)
-        out["presses"][p.id] = {"framing": fid, "stamps": len(stamps),
-                                "twin_hit_share_unheld": round(len(hit) / max(len(stamps), 1), 4),
-                                "library_points_in_a_press_footprint": int(in_fp)}
+        keys = np.array([f"{c}@{tt}" for c, tt in zip(lib["clip_id"][sel], t[sel])])
+        uk, inv = np.unique(keys, return_inverse=True)
+        prisms = np.stack([circle_prism(float(lib["x"][i]), float(lib["z"][i]),
+                                        0.3 if str(lib["cls"][i]) == "person" else 1.0,
+                                        HEIGHT_M.get(str(lib["cls"][i]), 1.75)) for i in sel])     # (n, 16, 3)
+        n, m = prisms.shape[0], prisms.shape[1]
+        in_fp = int(sum(any(point_in_polygon(float(lib["x"][i]), float(lib["z"][i]), q.footprint.value)
+                            for q in site.presses if q.zone == p.zone) for i in sel))
+
+        def share(g: CamGeom) -> float:
+            raw, ok = g.project(prisms.reshape(-1, 3))
+            raw, ok = raw.reshape(n, m, 2), ok.reshape(n, m).all(1)
+            u0, v0, u1, v1 = raw[..., 0].min(1), raw[..., 1].min(1), raw[..., 0].max(1), raw[..., 1].max(1)
+            pu, pv = ROI_PAD_FRAC * (u1 - u0), ROI_PAD_FRAC * (v1 - v0)
+            hit = ok & (u0 - pu <= r1) & (u1 + pu >= r0) & (v0 - pv <= s1) & (v1 + pv >= s0)
+            hk = np.zeros(len(uk), bool)
+            np.logical_or.at(hk, inv, hit)
+            return float(hk.mean()) if len(uk) else float("nan")
+
+        K = np.asarray(fr[fid].K.value, float)
+        nom = share(CamGeom(fid, K, float(fr[fid].k1.value), np.asarray(fr[fid].H_img_to_floor.value, float)))
+        draws = np.array([share(CamGeom.from_rec(fid, K, rec)) for rec in hd["framings"][fid]["draws"]])
+        out["presses"][p.id] = {"framing": fid, "stamps": int(len(uk)), "twin_hit_share_unheld_nominal": round(nom, 4),
+                                "twin_hit_share_unheld_draws_q5_50_95": _q(draws, (5, 50, 95)),
+                                "draws_with_zero_hits": int((draws == 0).sum()),
+                                "library_points_in_a_press_footprint": in_fp}
     return out
 
 
