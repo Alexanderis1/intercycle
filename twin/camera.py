@@ -28,9 +28,10 @@ ASSUMED (a stated value, no data).
    person, forklift; the robot uses the person value, ASSUMED), stay-in-miss probability from the DEV track gaps and
    re-births per camera. Occlusion is an extra miss on top of the chain (keyed uniform), never a change of the chain.
 5. **Foot-point noise (FITTED + SHIM).** Pixel error from DEV labels vs DEV tracks: median bias and robust sigma per
-   axis, AR(1) in time with rho per camera (DEV tracks). The noisy raw pixel is read through the nominal H; then an
-   isotropic floor AR(1) term tops the per-axis floor sigma (local Jacobian of the nominal map times the pixel sigma)
-   up to MEASURED_SHIM's 0.285 m wherever the projected pixel error is smaller (sigma >= 0.285 m everywhere).
+   axis, AR(1) in time with rho per camera (DEV tracks). The noisy raw pixel is read through the nominal H; then a
+   floor AR(1) term tops the floor covariance S (local Jacobian of the nominal map times the pixel sigma) up in S's
+   eigenbasis (`floor_topup`): every eigen-direction with sigma < MEASURED_SHIM's 0.285 m is raised to 0.285 m, so
+   sigma >= 0.285 m in every direction (per axis included) at every point.
 6. **Gross errors (SHIM + ASSUMED persistence).** MEASURED_SHIM's gross_p (stationary share 0.15) and radial
    U(5, 20) m offset, on every class, as persistent episodes (mean GROSS_MEAN_S = 6 s, M-W2 "2-10 s"; ASSUMED): the
    offset is drawn when an episode starts and kept while it lasts.
@@ -294,6 +295,16 @@ def _poly_prism(poly, hgt: float) -> np.ndarray:
     return np.vstack([np.column_stack([p, np.zeros(len(p))]), np.column_stack([p, np.full(len(p), hgt)])])
 
 
+def floor_topup(S: np.ndarray, sigma_min: float) -> np.ndarray:
+    """Top-up matrix T (2x2) for a floor covariance S, in S's eigenbasis: S = V diag(l) V^T,
+    T = V diag(sqrt(max(sigma_min^2 - l_i, 0))) V^T, so S + T T^T = V diag(max(l_i, sigma_min^2)) V^T has
+    sigma >= sigma_min in EVERY direction (per axis included). Applied as T @ e with e ~ N(0, I_2)."""
+    S = 0.5 * (np.asarray(S, float) + np.asarray(S, float).T)
+    lam, V = np.linalg.eigh(S)
+    add = np.sqrt(np.maximum(sigma_min ** 2 - lam, 0.0))
+    return V @ np.diag(add) @ V.T
+
+
 def _quantile_sample(q: list[float], u: float) -> float:
     qq = np.asarray(q, float)
     return float(np.interp(u, np.linspace(0.0, 1.0, len(qq)), qq))
@@ -472,16 +483,16 @@ class CameraStatV1:
         tk.k_last = k
         return tk
 
-    def _floor_sigma(self, fid: str, raw: np.ndarray) -> float:
-        """Per-axis RMS floor sigma (m) of the pixel noise at this pixel through the nominal map (local Jacobian)."""
+    def _floor_cov(self, fid: str, raw: np.ndarray) -> np.ndarray:
+        """2x2 floor covariance (m^2, plan x / z) of the pixel noise at this pixel through the nominal map (local
+        Jacobian of the nominal lens + H times the camera's pixel sigma)."""
         nom = self.nominal[fid]
         d = 1.0
         p0 = nom.floor_of(raw)[0]
         pu = nom.floor_of(raw + np.array([d, 0.0]))[0]
         pv = nom.floor_of(raw + np.array([0.0, d]))[0]
         J = np.column_stack([(pu - p0) / d, (pv - p0) / d])
-        S = J @ np.diag(self.sig_px ** 2) @ J.T
-        return math.sqrt(max(float(np.trace(S)) / 2.0, 0.0))
+        return J @ np.diag(self.sig_px ** 2) @ J.T
 
     # ---------------------------------------------------------------- one tick
     def observe(self, tick: RealisedTick) -> Detections:
@@ -555,9 +566,9 @@ class CameraStatV1:
             if not _in_image(noisy)[0]:
                 noisy = np.clip(noisy, [0.0, 0.0], [IMG_W - 1.0, IMG_H - 1.0])
             x, z = self.nominal[fid].floor_of(noisy)[0]
-            s_fl = self._floor_sigma(fid, noisy)
-            top = math.sqrt(max(SIGMA_MIN_M ** 2 - s_fl ** 2, 0.0))
-            x, z = float(x + top * tk.e_fl[0]), float(z + top * tk.e_fl[1])
+            T = floor_topup(self._floor_cov(fid, noisy), SIGMA_MIN_M)
+            dxz = T @ tk.e_fl
+            x, z = float(x + dxz[0]), float(z + dxz[1])
             if tk.gross:
                 self.stats["gross"] += 1
                 x, z = m.x + tk.off[0], m.z + tk.off[1]

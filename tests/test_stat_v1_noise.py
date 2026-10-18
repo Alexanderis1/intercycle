@@ -84,22 +84,46 @@ def test_median_position_error_at_least_measured_shim():
     assert med >= float(np.median(e0))
 
 
-def test_per_axis_sigma_at_least_shim_without_gross():
-    """Non-gross errors, demeaned per mover (the world's calibration bias is a constant per point): the per-axis
-    sigma of the fluctuating part is >= 0.285 m up to sampling error."""
-    cam = CAM.CameraStatV1(SITE, WORLD, 1, h_mode="fixed_scale")
-    cam.err_log = []
-    pts = visible_points(cam, "z9", 8, seed=3)
-    run_static(cam, pts, "z9", 1500)
-    by: dict[str, list[tuple[float, float]]] = {}
-    for mid, dx, dz in cam.err_log:
-        if math.hypot(dx, dz) < 4.0:                       # gross offsets are >= 5 m
-            by.setdefault(mid, []).append((dx, dz))
-    for mid, v in by.items():
-        a = np.asarray(v)
-        assert len(a) > 300
-        sd = float(np.sqrt(((a - a.mean(0)) ** 2).mean(0).mean()))
-        assert sd >= 0.285 * 0.85, (mid, sd)               # AR(1) samples: allow the sampling error of ~300 ticks
+def test_floor_covariance_min_eigen_at_least_shim():
+    """The model's floor covariance (pixel noise through the nominal map + the floor top-up) has its SMALLEST
+    eigenvalue >= 0.285^2 at every visible point of both zones: sigma >= 0.285 m in every direction, so per axis
+    (x and z) too. Analytic, 2000 points per zone."""
+    cam = CAM.CameraStatV1(SITE, WORLD, 1)
+    for zone in ("z9", "z14"):
+        for x, z in visible_points(cam, zone, 2000, seed=11):
+            fo = cam._framing_of(zone, x, z)
+            assert fo is not None
+            fid, raw = fo
+            S = cam._floor_cov(fid, raw)
+            T = CAM.floor_topup(S, CAM.SIGMA_MIN_M)
+            tot = S + T @ T.T
+            lmin = float(np.linalg.eigvalsh(tot)[0])
+            assert lmin >= CAM.SIGMA_MIN_M ** 2 * (1 - 1e-9), (zone, x, z, math.sqrt(max(lmin, 0.0)))
+            assert min(tot[0, 0], tot[1, 1]) >= CAM.SIGMA_MIN_M ** 2 * (1 - 1e-9)
+
+
+def test_per_axis_and_minor_axis_sigma_at_least_shim_without_gross():
+    """Empirical: non-gross errors, demeaned per mover (the world's calibration bias is a constant per point). The
+    sd along x, along z and along the minor eigen-direction of each point's error covariance is >= 0.285 m up to
+    sampling error (AR(1) samples, 4000 ticks per point: about 4 sd of the estimate below 0.285 m allowed)."""
+    for zone in ("z9", "z14"):
+        cam = CAM.CameraStatV1(SITE, WORLD, 1, h_mode="fixed_scale")
+        cam.err_log = []
+        pts = visible_points(cam, zone, 6, seed=3)
+        run_static(cam, pts, zone, 4000)
+        by: dict[str, list[tuple[float, float]]] = {}
+        for mid, dx, dz in cam.err_log:
+            if math.hypot(dx, dz) < 4.0:                   # gross offsets are >= 5 m
+                by.setdefault(mid, []).append((dx, dz))
+        assert len(by) == len(pts)
+        for mid, v in by.items():
+            a = np.asarray(v)
+            assert len(a) > 1000
+            c = np.cov((a - a.mean(0)).T)
+            sd_x, sd_z = math.sqrt(c[0, 0]), math.sqrt(c[1, 1])
+            sd_minor = math.sqrt(float(np.linalg.eigvalsh(c)[0]))
+            for name, sd in (("x", sd_x), ("z", sd_z), ("minor", sd_minor)):
+                assert sd >= 0.285 * 0.88, (zone, mid, name, sd)
 
 
 # ------------------------------------------------------------------------------------------------ geometry / CAL
