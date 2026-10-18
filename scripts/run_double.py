@@ -98,12 +98,14 @@ def generate_day(ctx: dict, seed: int, day: int, day_s: float):
     return DG.generate_day(seed, day, inputs=ctx["dg_inputs"], duration_s=day_s)
 
 
-def write_days(ctx: dict, world: TB.World, days, day_s: float, out: Path) -> dict[int, Path]:
-    """The world's day scripts (plant-only files), written by the generator's own write_day."""
+def write_days(ctx: dict, world: TB.World, days, day_s: float, out: Path) -> tuple[dict[int, Path], dict[int, Any]]:
+    """The world's day scripts (plant-only files), written by the generator's own write_day; returns (paths, the
+    generated script objects): the observer phase consumes the SAME objects the plant files were written from."""
     from twin import daygen_stub as DGS
     from twin import daygen as DG
     w = DGS.write_day if ctx["stub"] else DG.write_day
-    return {d: w(generate_day(ctx, world.seed, d, day_s), out / f"w{world.index}_d{d}{FILE_SUFFIX}") for d in days}
+    objs = {d: generate_day(ctx, world.seed, d, day_s) for d in days}
+    return {d: w(objs[d], out / f"w{world.index}_d{d}{FILE_SUFFIX}") for d in days}, objs
 
 
 # ------------------------------------------------------------------------------------------------ observer phase
@@ -112,7 +114,14 @@ def write_days(ctx: dict, world: TB.World, days, day_s: float, out: Path) -> dic
 def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float]], day_s: float = TB.DAY_S,
                    scripts: dict[int, Any] | None = None) -> tuple[dict[tuple[int, str], bytes], dict]:
     """Days 1..max slot day of the robot-free plant stream through one observer; snapshot (pickle) at each slot
-    (day, zone, t0): the state after every observation delivered by t0 (obs.t <= t0). Returns (snapshots, stats)."""
+    (day, zone, t0): the state after exactly the observations the plant would have written to obs_v2.jsonl by t0.
+    The plant's _deliver is a FIFO in CAPTURE order (popleft while the head's delivery time obs.t = t_cap + latency
+    <= T), so what is out by t0 is the longest capture-order prefix whose every obs.t <= t0; the loop below takes that
+    prefix (it snapshots at the first capture-order observation with obs.t > t0). Capture order is also what
+    observer_live.ingest requires (t_cap strictly increasing). DISCLOSED: observations captured before t0 and not
+    out by t0 are in no snapshot and in no mission stream (the mission plant writes from t0): a one-latency gap at
+    the mission start, the same for all three conditions. `scripts` = the generated day objects the plant files were
+    written from (write_days); a day missing there is generated here. Returns (snapshots, stats)."""
     t_wall = time.time()
     ob = OL.ObserverLive(ctx["spec"], OL.ObserverLiveConfig(margin_path=str(ctx["margin"])))
     pending = sorted(slots, key=lambda s: s[2])
@@ -221,10 +230,10 @@ def run_batch(out: Path, worlds: list[TB.World], *, backend: str = "local", zone
     snaps: dict[tuple[int, int, str], bytes] = {}
     phase_stats = []
     for w in worlds:
-        sp = write_days(ctx, w, range(1, max(SCORED_DAYS) + 1), day_s, days_dir)
+        sp, objs = write_days(ctx, w, range(1, max(SCORED_DAYS) + 1), day_s, days_dir)
         scripts.update({(w.index, d): p for d, p in sp.items()})
         slots = sorted({(m.day, m.zone, m.t0) for m in missions if m.world == w})
-        s, st = observer_phase(ctx, w, list(slots), day_s)
+        s, st = observer_phase(ctx, w, list(slots), day_s, scripts=objs)
         snaps.update({(w.index, d, z): b for (d, z), b in s.items()})
         phase_stats.append(st)
         costs.append({"what": f"observer_phase w{w.index}", "wall_s": st["wall_s"],

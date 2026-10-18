@@ -7,9 +7,14 @@ Design (twin_design.SEALED_CONDITIONS x worlds x days 9, 10 x the tasks.yaml zon
 condition), CRN-paired: the three conditions of a (world, day, zone) cell run on the SAME day script, the same mission
 start `slot_t0` and the same plant draws (the plant keys its draws by (world seed, day, plant_t0)).
 
-Mission start (`slot_t0`, LANE INTERPRETATION, to be hashed into PREREG): one slot per (world, day, zone), drawn
+Mission start (`day_slots`, LANE INTERPRETATION, to be hashed into PREREG): one slot per (world, day, zone), drawn
 uniformly on the 2 Hz grid of the day from twin.rng.keyed_rng(world_seed, day, "mission_slot", zone) inside
-[SLOT_PAD_S, day_s - MISSION_T_S - SLOT_PAD_S]; a new key, so no other draw of the world changes (W-W1).
+[SLOT_PAD_S, day_s - MISSION_T_S - SLOT_PAD_S]; a new key, so no other draw of the world changes (W-W1). NO OVERLAP:
+the zones of a world-day are drawn in the given (tasks.yaml) order and a later zone redraws from its OWN keyed stream
+until its slot is >= MISSION_T_S away from every earlier zone's slot of that day (the reactive state is per world,
+across zones, so an overlapping slot would load own-camera history from after its own start); the first zone's slot,
+and every slot that did not overlap, is exactly the first draw. rounds() re-checks that each reactive chain step
+starts at or after the previous step's t0 + MISSION_T_S.
 
 Order (`rounds`): the reactive arm persists its own-camera history within the world (intercycle_nav.reactive: each
 mission loads the state its previous mission saved), so a world's reactive missions are a CHAIN in time order (day,
@@ -96,14 +101,37 @@ def day_t0(day: int) -> float:
     return (day - 1) * DAY_S
 
 
-def slot_t0(world_seed: int, day: int, zone: str, *, day_s: float = DAY_S, pad_s: float = SLOT_PAD_S) -> float:
-    """Absolute mission start of (world, day, zone) on the 2 Hz grid (module doc). day_s = the generated day's
-    length (DAY_S; a shorter dev-only day in the tests)."""
+MAX_SLOT_DRAWS = 10_000
+
+
+def _slot_draws(world_seed: int, day: int, zone: str, day_s: float, pad_s: float):
+    """The keyed stream of candidate starts of (world, day, zone) on the 2 Hz grid."""
     lo, hi = pad_s, day_s - MISSION_T_S - pad_s
     if hi < lo:
         raise BatchError(f"a {day_s} s day has no room for a {MISSION_T_S} s mission and {pad_s} s pads")
-    u = float(keyed_rng(world_seed, day, "mission_slot", zone).uniform(lo, hi))
-    return day_t0(day) + math.floor(u * TICK_HZ) / TICK_HZ
+    rng = keyed_rng(world_seed, day, "mission_slot", zone)
+    for _ in range(MAX_SLOT_DRAWS):
+        yield day_t0(day) + math.floor(float(rng.uniform(lo, hi)) * TICK_HZ) / TICK_HZ
+
+
+def slot_t0(world_seed: int, day: int, zone: str, *, day_s: float = DAY_S, pad_s: float = SLOT_PAD_S) -> float:
+    """The FIRST draw of (world, day, zone) (module doc); day_slots applies the no-overlap rule on top of it."""
+    return next(_slot_draws(world_seed, day, zone, day_s, pad_s))
+
+
+def day_slots(world_seed: int, day: int, zones: Sequence[str], *, day_s: float = DAY_S,
+              pad_s: float = SLOT_PAD_S) -> dict[str, float]:
+    """zone -> absolute mission start of one world-day, no two slots closer than MISSION_T_S (module doc). day_s =
+    the generated day's length (DAY_S; a shorter dev-only day in the tests)."""
+    out: dict[str, float] = {}
+    for z in zones:
+        t0 = next((t for t in _slot_draws(world_seed, day, z, day_s, pad_s)
+                   if all(abs(t - u) >= MISSION_T_S for u in out.values())), None)
+        if t0 is None:
+            raise BatchError(f"no non-overlapping slot for world seed {world_seed} day {day} zone {z} "
+                             f"in {MAX_SLOT_DRAWS} draws")
+        out[str(z)] = t0
+    return out
 
 
 def plan(worlds: Sequence[World], zones: Sequence[str], *, days: Sequence[int] = TEST_DAYS,
@@ -120,9 +148,9 @@ def plan(worlds: Sequence[World], zones: Sequence[str], *, days: Sequence[int] =
     out = []
     for w in worlds:
         for d in days:
+            slots = day_slots(w.seed, int(d), list(zones), day_s=day_s)
             for z in zones:
-                t0 = slot_t0(w.seed, d, z, day_s=day_s)
-                out += [Mission(w, int(d), str(z), c, t0) for c in conditions]
+                out += [Mission(w, int(d), str(z), c, slots[str(z)]) for c in conditions]
     return out
 
 
@@ -142,6 +170,10 @@ def rounds(missions: Sequence[Mission], wave_size: int = WAVE_SIZE) -> list[list
     n = max((len(c) for c in chains.values()), default=1)
     if len({len(c) for c in chains.values()}) > 1:
         raise BatchError("worlds have reactive chains of different lengths")
+    for w, c in chains.items():
+        for a, b in zip(c, c[1:]):
+            if b.t0 < a.t0 + MISSION_T_S - 1e-9:
+                raise BatchError(f"world {w}: chain step {b.run_id} starts before {a.run_id} ends (overlap)")
     out: list[list[Mission]] = [[c[r] for c in chains.values()] for r in range(n)] if chains else [[]]
     indep = sorted((m for m in missions if m.condition != "reactive"), key=lambda m: (m.t0, m.world.index, m.zone,
                                                                                       m.condition))
@@ -222,6 +254,6 @@ def mission_records(missions: Iterable[Mission]) -> dict[str, dict]:
     return {m.run_id: m.record() for m in missions}
 
 
-__all__ = ["BatchError", "DAY_S", "DEV_WORLD_SEEDS", "INVALID_ALL", "MAX_ATTEMPTS", "Mission", "OBSERVER_DAYS", "World",
-           "asdict", "container_usd", "day_t0", "merge_invalid", "mission_records", "plan", "projection",
+__all__ = ["BatchError", "DAY_S", "DEV_WORLD_SEEDS", "INVALID_ALL", "MAX_ATTEMPTS", "MAX_SLOT_DRAWS", "Mission",
+           "OBSERVER_DAYS", "World", "asdict", "day_slots", "container_usd", "day_t0", "merge_invalid", "mission_records", "plan", "projection",
            "reactive_chains", "reruns", "rounds", "run_id", "scored_attempt", "slot_t0", "write_json"]
