@@ -27,18 +27,25 @@ bins carry no information: the twin uses bins (0, STOP_BIN) only. The M-W4 chang
 `change_detect_l1.L1ChangeDetector` (ChangeLayer per press grid; observed = floor_ok_of(obs) and zone_vis >= vis_min)
 with the LEAD DECISION: fail closed, i.e. every cell of a press grid not learned yet in bin 0 or STOP_BIN is UNKNOWN
 (`availability()` reports the cost). The M-W7 margin is read ONLY from the frozen JSON through
-`intercycle.margin_inflate.load_margin` and applied with `margin_inflate.inflate`: per press grid, pred = the envelope
-union of the twin bins OR the detector's UNKNOWN cells, inflated by the margin; the inflated set is broadcast as
-UNKNOWN boxes (`map_snapshot`). The margin's cell_m must equal the L1 grid cell (env_res) and margin_m must fit in the
-grid's margin around the zone, else ValueError (fail closed: re-calibrate on this grid).
-DISCLOSED, LEAD DECISION PENDING (audit S6 #3): unknown_rects apply to every bin and slice, so the inflated union of the
-bin-0 and STOP_BIN envelopes makes the running envelope of every press UNKNOWN to the robot at all times; neither the
-fast layer (idle windows, phase) nor a learned STOP_BIN envelope can open any of those cells. Conservative, but in the
-press grids the "learned" condition then behaves like a static keep-out, which limits what the learned-vs-reactive
-comparison can show there. The alternative (inflate each bin's envelope separately and send it through the L1 per-bin
-boxes, keeping only the detector's UNKNOWN / fail-closed cells in unknown_rects) needs the robot-side fix of audit S6 #4
-first (masks.py ANDON vote, mapping.predicted_bins for off-line machines) and S7b's dev recorder to score pred = the
-per-bin envelope the robot looks up. `tags["m7_application"]` carries this into every run's diagnostics.
+`intercycle.margin_inflate.load_margin` and applied with `margin_inflate.inflate`, PER BIN (LEAD DECISION, audit S6
+#3, option B): the broadcast copy of the map (`map_snapshot`, a `TwinMapSnapshot`) overrides `envelope()` so that
+`pack_map` sends, for every running phase bin 0..N_PHASE-1, the M-W7-inflated envelope of bin 0 (the twin learns only
+bin 0 and STOP_BIN, `twin_bin`; the robot never meets an unlearned bin and never falls back to the union rule), and for
+STOP_BIN the inflated STOP_BIN envelope. unknown_rects carry only the live map's own UNKNOWN rects plus the detector's
+UNKNOWN cells (CUSUM alarms and the fail-closed unlearned cells), inflated by the same margin (the frozen rule inflates
+"occupied OR UNKNOWN"). The robot (intercycle_nav.masks, Site.own_stop) looks up, over its keep-out horizon
+[t, t + H] (H = 6 s), STOP_BIN for a press whose own fast entry is a confident STOPPED (confidence >= 4) that stays
+inside its TTL over the WHOLE horizon, bin 0 while it cycles, and the union of all bins for anything else (UNKNOWN,
+missing, low confidence, a stop expiring inside the horizon, a fast layer older than 30 s: fail closed).
+`robot_bins` / `calibration_pred` give S7b's dev recorder exactly that lookup, un-inflated, from what the robot HOLDS
+at its lookup time: the slow and fast layers last broadcast to it (quantised as the wire does: the TTL in 2 s steps
+rounded down, the issue time to the ms) and the map version it completed (`HeldMap`: the un-inflated per-twin-bin
+envelopes, the detector's UNKNOWN cells and the map period, frozen when that map was packed; never this observer's
+current map, detector or models, which keep changing after the broadcast). Then inflate(calibration_pred) == the held
+map's broadcast per-bin envelope OR its broadcast UNKNOWN cells, i.e. what the robot gets, so the certified margin
+applies to it. The margin's cell_m must
+equal the L1 grid cell (env_res) and margin_m must fit in the grid's margin around the zone, else ValueError (fail
+closed: re-calibrate on this grid). `tags["m7_application"]` carries this into every run's diagnostics.
 
 Time of day (P2: the real clips carry no timing information): any time-of-day / shift structure the map's L2/L3
 slices learn comes from the generated days, i.e. from the generator's ASSUMED structure. `tags` says so and is part of
@@ -46,14 +53,17 @@ slices learn comes from the generated days, i.e. from the generator's ASSUMED st
 
 Signing (C-W5): `sign_layers(key, t, keyring_now)` encodes slow / fast / map under key_id_of(key) and refuses to sign
 when that key is not in the keyring valid now (the robot would reject it: never broadcast unverifiable layers);
-`verify_blob` is the receiver's check against an explicit keyring and fails closed.
+`verify_blob` is the receiver's check against an explicit keyring and fails closed. sign_layers also returns `held`:
+the decoded slow and fast layers and the `HeldMap` of that bundle (what a robot holds once it has them). The robot's
+MapReceiver keeps the first map it completes for a version and ignores a later bundle of the same version with another
+sha, so the recorder must keep the HeldMap whose (version, sha) the robot completed (MapReceiver.manifest).
 """
 from __future__ import annotations
 
-import copy
 import json
 import math
 import os
+import zlib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -61,7 +71,8 @@ import numpy as np
 from nacl.signing import SigningKey
 
 from intercycle.codec import maplayer as ML
-from intercycle.codec.layout import FAST, SLOW, decode_fast, decode_slow, encode_fast, encode_slow, peek_header
+from intercycle.codec.layout import (FAST, SLOW, decode_fast, decode_slow, encode_fast, encode_slow, peek_header,
+                                     quantize_fast, quantize_model, quantize_now, quantize_slow)
 from intercycle.codec.sign import Keyring, sign, verify
 from intercycle.codec.trust import TrustError, key_id_of
 from intercycle.margin_inflate import Margin, inflate, load_margin
@@ -76,9 +87,122 @@ TWIN_BINS = (0, M.STOP_BIN)
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 TOD_TAG = ("ASSUMED: no hour-of-day structure is observed in the real clips (probe P2: no timing information); "
            "any time-of-day or shift structure in the map's slices comes from the generated days")
-M7_TAG = ("DISCLOSED (lead decision pending, audit S6 #3): the M-W7-inflated union of the bin-0 and STOP_BIN envelopes "
-          "is broadcast as UNKNOWN boxes valid in every bin and slice, so each press's running envelope is always "
-          "UNKNOWN to the robot; the fast layer cannot open it (press grids behave like a static keep-out)")
+# the robot's lookup parameters (intercycle_nav.masks MaskParams.horizon_s / step_s and ObserverState.fast_max_age_s
+# defaults, = observer_bridge's horizon_s / step_s defaults; tests/test_observer_live.py pins the equality)
+ROBOT_HORIZON_S = 6.0
+ROBOT_STEP_S = 0.5
+ROBOT_FAST_MAX_AGE_S = 30.0
+M7_TAG = ("LEAD DECISION (audit S6 #3, option B): per-bin M-W7 inflation. Every running phase bin is broadcast as the "
+          "inflated bin-0 envelope and STOP_BIN as the inflated STOP_BIN envelope; only the change detector's UNKNOWN "
+          "and fail-closed unlearned cells (inflated) are broadcast as UNKNOWN boxes. The robot opens a press's STOP_BIN "
+          "envelope only on its own confident STOPPED (confidence >= 4) that stays inside its TTL over the whole "
+          "keep-out horizon [t, t + 6 s] (audit S6-optB fix 1: a stop expiring inside the horizon reads the union); "
+          "UNKNOWN, missing or low confidence reads the union of both bins (fail closed). The robot decodes the TTL in "
+          "2 s steps rounded down, so the STOP_BIN envelope opens only when the encoded TTL >= horizon + lag (6 s + "
+          "the lookup lag), i.e. learner TTL >= 8 s (the learner's STOPPED TTL is min(ttl_s, 10 s), floor 2 s); no "
+          "bounded stop validity is in use (none decided). A running press reads bin 0 only while the held map has "
+          "a learned period, else the union. S7b's calibration pred = calibration_pred(slow, fast, map_held, t), the "
+          "same lookup un-inflated, from the layers the robot holds at its lookup time t (quantised as decoded) and "
+          "the map version it holds (HeldMap), never the observer's live map")
+
+
+def twin_bin(b: int) -> int:
+    """The twin bin whose envelope serves map phase bin b: STOP_BIN for STOP_BIN, 0 for every running bin 0..N_PHASE-1
+    (a 1.2-3 s press period is 2.4-6 ticks at 2 Hz, so the twin learns bins (0, STOP_BIN) only). Anything else raises."""
+    b = int(b)
+    if b == M.STOP_BIN:
+        return M.STOP_BIN
+    if 0 <= b < M.N_PHASE:
+        return 0
+    raise ValueError(f"phase bin {b} outside 0..{M.STOP_BIN}")
+
+
+def robot_bins(model: MachineModel | None, now: MachineNow | None, issue_t: float, t: float, map_period: float,
+               horizon_s: float = ROBOT_HORIZON_S, step_s: float = ROBOT_STEP_S,
+               fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S) -> tuple[int, ...]:
+    """The twin bins the robot looks up for one press (intercycle_nav.masks.machine_bins for an off-line press with
+    Site.own_stop, not held) at plant time t over its keep-out horizon [t, t + horizon_s], from the slow model and the
+    fast entry it holds, the fast layer issued at plant time issue_t, and the press's period in the map it holds
+    (`map_period` = HeldMap.period[i], NaN when the map had none). model, now and issue_t are quantised as the wire
+    does first (layout.quantize_model / quantize_now: the TTL in 2 s steps rounded down; the issue time to the ms), so
+    an un-encoded entry gives the lookup the robot makes after decoding it (a 6.51 s TTL is 6 s on the robot):
+      * missing, UNKNOWN, low confidence (fast or slow < MIN_CONF), a fast layer older than fast_max_age_s, an entry
+        past its TTL at t -> TWIN_BINS, the union (fail closed);
+      * a confident STOPPED -> (STOP_BIN,) only while the entry stays inside its TTL at every step of the horizon grid
+        (np.arange(0, horizon_s, step_s), as machine_bins), else TWIN_BINS (the press may restart once it expires);
+      * a confident ACTIVE / IDLE with a usable slow period (own_phase) AND a learned map period (predicted_bins
+        cycling: every running phase bin reads bin 0) -> (0,); without a map period the robot reads the union."""
+    if model is None or now is None:
+        return TWIN_BINS
+    model, now = quantize_model(model), quantize_now(now)
+    sec, ms = divmod(round((DAY0_UNIX + float(issue_t)) * 1000), 1000)      # layout._split_ms: the decoded issue time
+    issue_unix = sec + ms / 1000
+    if now.confidence < LC.MIN_CONF or model.confidence < LC.MIN_CONF:
+        return TWIN_BINS
+    if DAY0_UNIX + t - issue_unix > fast_max_age_s:                          # the robot drops the whole fast layer
+        return TWIN_BINS
+    left = issue_unix - DAY0_UNIX + now.ttl_s - t                            # masks.ObserverState.snapshot stop_left
+    if left < 0:
+        return TWIN_BINS
+    if now.state == State.STOPPED:
+        last = float(np.arange(0.0, horizon_s + 1e-9, step_s)[-1])
+        return (M.STOP_BIN,) if last <= left else TWIN_BINS
+    if now.state in (State.ACTIVE, State.IDLE) and math.isfinite(model.period_s) and model.period_s > 0 \
+            and math.isfinite(map_period) and map_period > 0:
+        return (0,)
+    return TWIN_BINS
+
+
+@dataclass(frozen=True, eq=False)
+class HeldMap:
+    """The map part of what the robot holds: one packed map (version, sha of its compressed payload), frozen at packing
+    time. Per press (zone order): `env[i][b]` the UN-inflated envelope of twin bin b (0, STOP_BIN) on the L1 grid, as
+    TwinMapSnapshot inflated and packed it; `unknown[i]` the detector's UNKNOWN cells (CUSUM + fail-closed unlearned),
+    un-inflated, as broadcast (inflated) in unknown_rects; `period[i]` the map period the robot decodes (NaN: none)."""
+    version: int
+    sha: bytes
+    ids: tuple
+    env: tuple
+    unknown: tuple
+    period: np.ndarray
+
+    def pred(self, i: int, bins) -> np.ndarray:
+        """Press i's M-W7 `pred` for a lookup of map bins `bins`: the held envelope union over their twin bins OR the
+        held UNKNOWN cells (before inflation)."""
+        tb = sorted({twin_bin(b) for b in bins})
+        if not tb:
+            raise ValueError("empty bin lookup")
+        out = self.unknown[i].copy()
+        for b in tb:
+            out |= self.env[i][b]
+        return out
+
+
+class TwinMapSnapshot(M.LayeredMap):
+    """The broadcast copy of the twin's live map (built by `ObserverLive.map_snapshot`, packed by `pack_map`):
+    envelope(machine, b) is the M-W7-inflated envelope of twin_bin(b). It shares the live map's count arrays, so pack
+    it right away (as sign_layers does); its box-cover cache is its own."""
+
+    _margin: Margin
+    _infl_cache: dict
+
+    @classmethod
+    def of(cls, live: M.LayeredMap, margin: Margin, unknown_rects: list) -> TwinMapSnapshot:
+        m2 = cls.__new__(cls)
+        m2.__dict__.update(live.__dict__)
+        m2.__dict__.pop("_hot_cache", None)
+        m2._cover_cache = {}
+        m2._infl_cache = {}
+        m2._margin = margin
+        m2.unknown_rects = list(unknown_rects)
+        return m2
+
+    def envelope(self, machine_id: str, phase_bin: int, p_min: float = 0.05) -> np.ndarray:
+        key = (machine_id, twin_bin(phase_bin), float(p_min))
+        if key not in self._infl_cache:
+            env = super().envelope(machine_id, key[1], p_min)
+            self._infl_cache[key] = inflate(env, self._margin, cell_m=float(self.spec["env_res"]))
+        return self._infl_cache[key].copy()
 
 
 # ------------------------------------------------------------------------------------------------ spec
@@ -297,37 +421,83 @@ class ObserverLive:
                                   consts=self.consts[i]))
         return FastLayer(self.spec["site_id"], self.spec["key_id"], DAY0_UNIX + t, self.seq, out)
 
-    def pred_l1(self, i: int) -> np.ndarray:
-        """Press i's L1 grid [nx, nz]: what the map marks occupied (envelope union over the twin bins) OR UNKNOWN (the
-        change detector, fail-closed unlearned cells included). This is the M-W7 `pred` on the cell_m = env_res grid."""
-        env = self.map.envelope_union(self.ids[i], TWIN_BINS, self.det.cfg.p_min)
+    def pred_l1(self, i: int, bins=TWIN_BINS) -> np.ndarray:
+        """Press i's L1 grid [nx, nz] for a lookup of map bins `bins` on the LIVE map: what it marks occupied (envelope
+        union over the twin bins of `bins`) OR UNKNOWN (the change detector, fail-closed unlearned cells included), on
+        the cell_m = env_res grid, before inflation. Default: the union of both twin bins (the fail-closed lookup).
+        For diagnostics (availability) only: the M-W7 calibration pred is `calibration_pred`, from the HELD map."""
+        tb = sorted({twin_bin(b) for b in bins})
+        if not tb:
+            raise ValueError("empty bin lookup")
+        env = self.map.envelope_union(self.ids[i], tb, self.det.cfg.p_min)
         return np.asarray(env, bool) | self.det.unknown_mask(self.ids[i])
 
-    def inflated_l1(self, i: int) -> np.ndarray:
-        return inflate(self.pred_l1(i), self.margin, cell_m=float(self.spec["env_res"]))
+    def inflated_l1(self, i: int, bins=TWIN_BINS) -> np.ndarray:
+        """What the robot gets for that lookup: pred_l1 inflated by the frozen margin (= the broadcast per-bin envelopes
+        of `bins` OR the broadcast UNKNOWN cells of the press grid)."""
+        return inflate(self.pred_l1(i, bins), self.margin, cell_m=float(self.spec["env_res"]))
 
-    def map_snapshot(self) -> M.LayeredMap:
-        """A copy of the live map whose unknown_rects also cover every margin-inflated cell of every press grid."""
-        m2 = copy.copy(self.map)
+    def unknown_l1(self, i: int) -> np.ndarray:
+        """Press i's broadcast UNKNOWN cells: the detector's UNKNOWN (CUSUM + fail-closed unlearned), inflated."""
+        return inflate(self.det.unknown_mask(self.ids[i]), self.margin, cell_m=float(self.spec["env_res"]))
+
+    def calibration_pred(self, slow: SlowLayer, fast: FastLayer, map_held: HeldMap, t: float,
+                         horizon_s: float = ROBOT_HORIZON_S, step_s: float = ROBOT_STEP_S,
+                         fast_max_age_s: float = ROBOT_FAST_MAX_AGE_S) -> list[np.ndarray]:
+        """S7b's dev recorder: per press, the un-inflated pred of the lookup the robot makes at plant time t over its
+        keep-out horizon (`robot_bins`), computed ONLY from what the robot holds at t: the slow and fast layers last
+        broadcast to it (quantised here as the robot decodes them) and the map version it completed (`map_held`, from
+        sign_layers()["held"]["map"] / `hold`, whose (version, sha) is the robot's MapReceiver.manifest). Never this
+        observer's current map, detector or models. inflate(pred) is then the held map's broadcast per-bin envelope
+        OR its broadcast UNKNOWN cells for that lookup, i.e. what the robot gets."""
+        if tuple(map_held.ids) != tuple(self.ids):
+            raise ValueError(f"held map presses {map_held.ids} != observer presses {self.ids}")
+        slow, fast = quantize_slow(slow), quantize_fast(fast)
+        models = {m.index: m for m in slow.machines}
+        nows = {m.index: m for m in fast.machines}
+        issue_t = float(fast.issue_time) - DAY0_UNIX
+        return [map_held.pred(i, robot_bins(models.get(i), nows.get(i), issue_t, t, float(map_held.period[i]),
+                                            horizon_s, step_s, fast_max_age_s))
+                for i in range(self.M)]
+
+    def hold(self, bundle: ML.MapBundle) -> HeldMap:
+        """The HeldMap of a bundle packed from this observer's map NOW (call it right after pack_map, as sign_layers
+        does: the envelopes and UNKNOWN cells are copied from the live state, the period is decoded from the bundle)."""
+        man = bundle.manifest
+        decoded = ML.decode_payload(zlib.decompress(b"".join(bundle.chunks[:man.n_chunks])))
+        if [d["id"] for d in decoded.spec["machines"]] != self.ids:
+            raise ValueError("bundle presses differ from this observer's")
+        p_min = self.det.cfg.p_min
+        env = tuple({b: np.asarray(self.map.envelope(pid, b, p_min), bool).copy() for b in TWIN_BINS} for pid in self.ids)
+        unknown = tuple(np.asarray(self.det.unknown_mask(pid), bool).copy() for pid in self.ids)
+        return HeldMap(int(man.version), bytes(man.sha), tuple(self.ids), env, unknown, np.array(decoded.period, float))
+
+    def map_snapshot(self) -> TwinMapSnapshot:
+        """The broadcast copy of the live map: per-bin inflated envelopes (`TwinMapSnapshot.envelope`), and
+        unknown_rects = the live map's own plus a safe box cover of every press grid's inflated detector UNKNOWN."""
         boxes = list(self.map.unknown_rects)
         res = float(self.spec["env_res"])
         for i in range(self.M):
-            U = self.inflated_l1(i)
+            U = self.unknown_l1(i)
             if not U.any():
                 continue
             x0, z0 = float(self.map.l1_x0[i]), float(self.map.l1_z0[i])
             for i0, j0, i1, j1 in M.safe_box_cover(U, 12):
                 boxes.append((x0 + i0 * res, z0 + j0 * res, x0 + i1 * res, z0 + j1 * res))
-        m2.unknown_rects = boxes
-        return m2
+        return TwinMapSnapshot.of(self.map, self.margin, boxes)
 
     def availability(self) -> dict:
         """What failing closed costs: share of press-grid cells UNKNOWN only because a twin bin is not learned yet
-        (M-W4 lead decision), and share of press-grid cells the robot gets as UNKNOWN after the M-W7 inflation."""
-        infl = [self.inflated_l1(i) for i in range(self.M)]
-        n = sum(int(a.size) for a in infl)
+        (M-W4 lead decision); share of press-grid cells broadcast UNKNOWN after the M-W7 inflation; and per lookup
+        (running = bin 0, stopped = STOP_BIN, union = fail-closed) the share of press-grid cells the robot gets closed."""
+        def share(grids: list[np.ndarray]) -> float:
+            n = sum(int(a.size) for a in grids)
+            return float(sum(int(a.sum()) for a in grids) / n) if n else 0.0
+
         return dict(unlearned=self.det.availability_cost(),
-                    inflated_unknown_share=float(sum(int(a.sum()) for a in infl) / n) if n else 0.0,
+                    inflated_unknown_share=share([self.unknown_l1(i) for i in range(self.M)]),
+                    closed_share={k: share([self.inflated_l1(i, b) for i in range(self.M)])
+                                  for k, b in (("running", (0,)), ("stopped", (M.STOP_BIN,)), ("union", TWIN_BINS))},
                     margin_m=self.margin.margin_m)
 
     def diagnostics(self) -> dict:
@@ -341,20 +511,23 @@ class ObserverLive:
 
     # ---------------------------------------------------------------- signing (C-W5)
     def sign_layers(self, key: SigningKey, t: float, keyring_now: Keyring, map_version: int = 1) -> dict:
-        """Signed slow and fast blobs and the map bundle, all under key_id_of(key). Refuses (TrustError) when that key is
-        not the one the keyring valid now holds under that id: the robot would drop everything (fail closed)."""
+        """Signed slow and fast blobs and the map bundle, all under key_id_of(key), and `held`: the decoded slow and
+        fast layers and the bundle's HeldMap (`hold`), what a robot holds once it has them (calibration_pred's
+        inputs). Refuses (TrustError) when that key is not the one the keyring valid now holds under that id: the
+        robot would drop everything (fail closed)."""
         kid = key_id_of(key.verify_key)
         vk = keyring_now.get(kid)
         if vk is None or vk.encode() != key.verify_key.encode():
             raise TrustError(f"signing key {kid} is not in the keyring valid now: refusing to broadcast")
         s = self.slow(t)
         f = self.fast(t)
-        slow = sign(encode_slow(SlowLayer(s.site_id, kid, s.issue_time, s.traffic, s.machines)), key)
-        fast = sign(encode_fast(FastLayer(f.site_id, kid, f.issue_time, f.seq, f.machines)), key)
+        s_pay = encode_slow(SlowLayer(s.site_id, kid, s.issue_time, s.traffic, s.machines))
+        f_pay = encode_fast(FastLayer(f.site_id, kid, f.issue_time, f.seq, f.machines))
         m2 = self.map_snapshot()
         m2.spec = dict(m2.spec, key_id=kid)
-        bundle = ML.pack_map(m2, key, map_version, issue_time=DAY0_UNIX + t)
-        return dict(slow=slow, fast=fast, map=bundle, key_id=kid)
+        bundle = ML.pack_map(m2, key, map_version, issue_time=DAY0_UNIX + t, p_min=self.det.cfg.p_min)
+        held = dict(slow=decode_slow(s_pay), fast=decode_fast(f_pay), map=self.hold(bundle))
+        return dict(slow=sign(s_pay, key), fast=sign(f_pay, key), map=bundle, key_id=kid, held=held)
 
 
 def verify_blob(blob: bytes, keyring: Keyring):
