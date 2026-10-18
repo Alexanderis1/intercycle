@@ -330,21 +330,114 @@ def _framing(H: np.ndarray, K: np.ndarray):
                                  "H_img_to_floor": fr.H_img_to_floor.model_copy(update={"value": H.tolist()})})
 
 
+def _K(f: float) -> np.ndarray:
+    return np.array([[f, 0, 960], [0, f, 540], [0, 0, 1.0]])
+
+
+def _cam_H(f: float, Cw, tilt_deg: float, pan_deg: float = 0.0) -> np.ndarray:
+    """H_img_to_floor of a pinhole camera at Cw (floor frame x, z_plan, height), panned and tilted down."""
+    t, p = math.radians(tilt_deg), math.radians(pan_deg)
+    fwd = np.array([math.sin(p) * math.cos(t), math.cos(p) * math.cos(t), -math.sin(t)])
+    xc = np.array([math.cos(p), -math.sin(p), 0.0])
+    R = np.stack([xc, np.cross(fwd, xc), fwd])                       # world -> camera (rows: camera axes)
+    H = np.linalg.inv(_K(f) @ np.column_stack([R[:, 0], R[:, 1], -R @ np.asarray(Cw, float)]))
+    return H / H[2, 2]
+
+
+CAM = (7.0, 2.0, 4.0)
+
+
+def test_f_range_is_the_p6_range():
+    from intercycle import framing
+    assert C.F_RANGE_PX == framing.F_RANGE and C.F_RANGE_WIDTH_PX == framing.W
+
+
 def test_perspective_camera_centre_is_recovered():
-    K = np.array([[1330.0, 0, 960], [0, 1330.0, 540], [0, 0, 1]])
-    Cw = np.array([3.0, 4.0, 4.0])                                   # floor frame (x, z_plan, height)
-    tilt = math.radians(35)
-    # camera looks along +z_plan, tilted down; columns of R_wc are the camera axes in the floor frame
-    xc = np.array([1.0, 0, 0])
-    zc = np.array([0, math.cos(tilt), -math.sin(tilt)])
-    yc = np.cross(zc, xc)
-    R = np.stack([xc, yc, zc])                                       # world -> camera
-    t = -R @ Cw
-    Hinv = K @ np.column_stack([R[:, 0], R[:, 1], t])
-    H = np.linalg.inv(Hinv)
-    assert np.allclose(C.camera_floor_xz(_framing(H / H[2, 2], K)), Cw[:2], atol=1e-6)
+    H = _cam_H(1330.0, (3.0, 4.0, 4.0), 35)
+    assert np.allclose(C.camera_floor_xz(_framing(H, _K(1330.0))), (3.0, 4.0), atol=1e-6)
     skew = H.copy()
     skew[0, 1] += 0.5 * abs(H[0, 0]) + 0.01
     skew[2, 0] += 1e-3
-    with pytest.raises(C.CompileError, match="pinhole"):
-        C.camera_floor_xz(_framing(skew, K))
+    with pytest.raises(C.CompileError, match="pinhole|focal"):
+        C.camera_floor_xz(_framing(skew, _K(1330.0)))
+
+
+@pytest.mark.parametrize("ratio", [0.80, 0.85, 0.90, 1.0, 1.05, 1.075])
+@pytest.mark.parametrize("tilt, pan", [(45, 0), (45, 30), (30, -20), (60, 10)])
+def test_f_is_fitted_from_H_when_the_prior_is_off(ratio, tilt, pan):
+    """K holds the P6 prior f = 1330; the true f differs. The camera centre and f are recovered exactly (1e-6 m) as
+    long as the true f is in the pre-registered 1020-1430 px."""
+    f_true = 1330.0 * ratio
+    fit = C.camera_fit(_framing(_cam_H(f_true, CAM, tilt, pan), _K(1330.0)))
+    assert fit.f_source == "fitted" and fit.f_px == pytest.approx(f_true, rel=1e-9)
+    assert np.allclose(fit.xz, CAM[:2], atol=1e-6) and fit.height_m == pytest.approx(CAM[2], abs=1e-6)
+    assert fit.residual < 1e-9
+
+
+@pytest.mark.parametrize("ratio", [0.85, 1.15])
+def test_f_off_by_15_percent_inside_the_range_is_recovered(ratio):
+    """Prior 1230 px, true f +-15 % (1045.5 / 1414.5 px, both inside 1020-1430 px)."""
+    fit = C.camera_fit(_framing(_cam_H(1230.0 * ratio, CAM, 45, 30), _K(1230.0)))
+    assert fit.f_px == pytest.approx(1230.0 * ratio, rel=1e-9)
+    assert np.allclose(fit.xz, CAM[:2], atol=1e-6)
+
+
+@pytest.mark.parametrize("ratio", [0.75, 1.10, 1.15, 1.25])
+def test_f_outside_the_p6_range_fails_closed(ratio):
+    with pytest.raises(C.CompileError, match="outside the pre-registered 1020-1430 px"):
+        C.camera_fit(_framing(_cam_H(1330.0 * ratio, CAM, 45, 30), _K(1330.0)))
+
+
+def test_f_range_scales_with_the_image_width():
+    fr = _framing(_cam_H(1330.0 * 1.10 / 2, CAM, 45, 30), _K(1330.0))
+    half = fr.model_copy(update={"image_size_px": fr.image_size_px.model_copy(update={"value": (960, 540)})})
+    # a 960 px wide frame: range 510-715 px; f = 731.5 px is outside, f = 0.9 * 665 inside
+    with pytest.raises(C.CompileError, match="outside the pre-registered 510-715 px"):
+        C.camera_fit(half)
+    K2 = np.array([[665.0, 0, 960], [0, 665.0, 540], [0, 0, 1.0]])
+    ok = half.model_copy(update={"K": half.K.model_copy(update={"value": K2.tolist()}),
+                                 "H_img_to_floor": half.H_img_to_floor.model_copy(
+                                     update={"value": _cam_H(665.0 * 0.9, CAM, 45, 30).tolist()})})
+    assert C.camera_fit(ok).f_px == pytest.approx(598.5)
+
+
+def _dlt(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    A = []
+    for (u, v), (x, z) in zip(src, dst):
+        A += [[u, v, 1, 0, 0, 0, -x * u, -x * v, -x], [0, 0, 0, u, v, 1, -z * u, -z * v, -z]]
+    H = np.linalg.svd(np.array(A))[2][-1].reshape(3, 3)
+    return H / H[2, 2]
+
+
+@pytest.mark.parametrize("ratio", [0.85, 1.0])
+def test_four_noisy_clicks_place_the_camera_within_15_cm(ratio):
+    """CAL v0 fits H from 4 clicked floor points. With 1 px click noise (sigma) and the true f 15 % below the prior,
+    the camera nadir is within 0.15 m in 95 % of 100 draws (probe: p95 0.08 m at 45 deg tilt)."""
+    H = _cam_H(1330.0 * ratio, CAM, 45, 30)
+    img = np.array([[300.0, 700.0], [1600.0, 700.0], [1700.0, 1000.0], [200.0, 1000.0]])
+    flo = np.array([(p[:2] / p[2]) for p in (H @ np.c_[img, np.ones(4)].T).T])
+    rng = np.random.default_rng(7)
+    err = [math.dist(C.camera_fit(_framing(_dlt(img + rng.normal(0, 1.0, img.shape), flo), _K(1330.0))).xz, CAM[:2])
+           for _ in range(100)]
+    assert np.percentile(err, 95) < 0.15
+
+
+def test_near_affine_H_uses_the_prior_f():
+    fit = C.camera_fit(_framing(_cam_H(1330.0, CAM, 89.5, 0), _K(1330.0)))
+    assert fit.f_source == "prior" and fit.f_px == 1330.0
+    assert np.allclose(fit.xz, CAM[:2], atol=1e-3)
+
+
+def test_skewed_K_is_refused():
+    K = _K(1330.0)
+    K[0, 1] = 5.0
+    with pytest.raises(C.CompileError, match="K must be"):
+        C.camera_fit(_framing(_cam_H(1330.0, CAM, 45), K))
+
+
+def test_compiled_zones_record_the_camera_fits(v0):
+    for zid, cz in v0.items():
+        z = next(z for z in SITE0["zones"] if z["id"] == zid)
+        assert list(cz.cameras) == z["framings"]
+        assert [c.xz for c in cz.cameras.values()] == cz.scenario.cameras
+        assert all(c.f_source == "affine" for c in cz.cameras.values())          # the site_v0 placeholder H
