@@ -576,27 +576,27 @@
    "n_windows": 20,
    "n_windows_no_machines_file": 0,
    "n_gt_strokes": 79,
-   "n_pred_strokes": 52,
-   "tp": 0,
-   "precision": 0.0,
-   "recall": 0.0,
-   "f1": 0.0,
+   "n_pred_strokes": 53,
+   "tp": 53,
+   "precision": 1.0,
+   "recall": 0.6708860759493671,
+   "f1": 0.803030303030303,
    "count_error": {
     "n_windows": 20,
-    "mean_signed": -1.35,
-    "mean_abs": 1.35
+    "mean_signed": -1.3,
+    "mean_abs": 1.3
    },
    "occlusion_to_missing": {
     "n_windows_with_hidden": 6,
     "observation_ticks": {
      "n": 35,
-     "missing": 32,
-     "rate": 0.9142857142857143
+     "missing": 31,
+     "rate": 0.8857142857142857
     },
     "base_nonhidden_observation_ticks": {
      "n": 292,
-     "missing": 283,
-     "rate": 0.9691780821917808,
+     "missing": 145,
+     "rate": 0.4965753424657534,
      "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
     },
     "perc_samples": {
@@ -606,11 +606,11 @@
     }
    },
    "diagnostic_offset_label_minus_pred_s": {
-    "n": 57,
-    "median": 0.7600142334282225,
+    "n": 53,
+    "median": -0.00031502016129031363,
     "iqr": [
-     0.6443817962142573,
-     0.8400264335095571
+     -0.08001220008133281,
+     0.04000610004066729
     ],
     "note": "label stroke minus nearest PERC stroke within 1.5 s; diagnostic, not a score"
    }
@@ -620,15 +620,15 @@
     "n_windows": 10,
     "n_windows_no_machines_file": 0,
     "n_gt_strokes": 39,
-    "n_pred_strokes": 31,
-    "tp": 0,
-    "precision": 0.0,
-    "recall": 0.0,
-    "f1": 0.0,
+    "n_pred_strokes": 33,
+    "tp": 33,
+    "precision": 1.0,
+    "recall": 0.8461538461538461,
+    "f1": 0.9166666666666666,
     "count_error": {
      "n_windows": 10,
-     "mean_signed": -0.8,
-     "mean_abs": 0.8
+     "mean_signed": -0.6,
+     "mean_abs": 0.6
     },
     "occlusion_to_missing": {
      "n_windows_with_hidden": 1,
@@ -639,8 +639,8 @@
      },
      "base_nonhidden_observation_ticks": {
       "n": 156,
-      "missing": 156,
-      "rate": 1.0,
+      "missing": 62,
+      "rate": 0.3974358974358974,
       "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
      },
      "perc_samples": {
@@ -650,11 +650,11 @@
      }
     },
     "diagnostic_offset_label_minus_pred_s": {
-     "n": 35,
-     "median": 0.8000203334688898,
+     "n": 33,
+     "median": 0.0,
      "iqr": [
-      0.7192126298960833,
-      0.8940117934119561
+      -0.04000610004066685,
+      0.0806730378202527
      ],
      "note": "label stroke minus nearest PERC stroke within 1.5 s; diagnostic, not a score"
     }
@@ -663,27 +663,27 @@
     "n_windows": 10,
     "n_windows_no_machines_file": 0,
     "n_gt_strokes": 40,
-    "n_pred_strokes": 21,
-    "tp": 0,
-    "precision": 0.0,
-    "recall": 0.0,
-    "f1": 0.0,
+    "n_pred_strokes": 20,
+    "tp": 20,
+    "precision": 1.0,
+    "recall": 0.5,
+    "f1": 0.6666666666666666,
     "count_error": {
      "n_windows": 10,
-     "mean_signed": -1.9,
-     "mean_abs": 1.9
+     "mean_signed": -2.0,
+     "mean_abs": 2.0
     },
     "occlusion_to_missing": {
      "n_windows_with_hidden": 5,
      "observation_ticks": {
       "n": 34,
-      "missing": 31,
-      "rate": 0.9117647058823529
+      "missing": 30,
+      "rate": 0.8823529411764706
      },
      "base_nonhidden_observation_ticks": {
       "n": 136,
-      "missing": 127,
-      "rate": 0.9338235294117647,
+      "missing": 83,
+      "rate": 0.6102941176470589,
       "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
      },
      "perc_samples": {
@@ -693,11 +693,11 @@
      }
     },
     "diagnostic_offset_label_minus_pred_s": {
-     "n": 22,
-     "median": 0.685168850806452,
+     "n": 20,
+     "median": -0.04063760080645196,
      "iqr": [
-      0.6141763995167131,
-      0.7557333669354838
+      -0.0805477245267821,
+      -0.00031502016129029975
      ],
      "note": "label stroke minus nearest PERC stroke within 1.5 s; diagnostic, not a score"
     }
@@ -709,10 +709,10 @@
     "n_windows_no_machines_file": 0,
     "n_gt_strokes": 19,
     "n_pred_strokes": 12,
-    "tp": 0,
-    "precision": 0.0,
-    "recall": 0.0,
-    "f1": 0.0,
+    "tp": 12,
+    "precision": 1.0,
+    "recall": 0.631578947368421,
+    "f1": 0.7741935483870968,
     "count_error": {
      "n_windows": 6,
      "mean_signed": -1.1666666666666667,
@@ -722,13 +722,13 @@
      "n_windows_with_hidden": 3,
      "observation_ticks": {
       "n": 25,
-      "missing": 25,
-      "rate": 1.0
+      "missing": 24,
+      "rate": 0.96
      },
      "base_nonhidden_observation_ticks": {
       "n": 74,
-      "missing": 74,
-      "rate": 1.0,
+      "missing": 39,
+      "rate": 0.527027027027027,
       "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
      },
      "perc_samples": {
@@ -739,10 +739,10 @@
     },
     "diagnostic_offset_label_minus_pred_s": {
      "n": 12,
-     "median": 0.7612270204059254,
+     "median": -0.07996136640910878,
      "iqr": [
-      0.720008133387556,
-      0.8100218584790564
+      -0.09000101667344373,
+      -0.030004575030499803
      ],
      "note": "label stroke minus nearest PERC stroke within 1.5 s; diagnostic, not a score"
     }
@@ -751,15 +751,15 @@
     "n_windows": 14,
     "n_windows_no_machines_file": 0,
     "n_gt_strokes": 60,
-    "n_pred_strokes": 40,
-    "tp": 0,
-    "precision": 0.0,
-    "recall": 0.0,
-    "f1": 0.0,
+    "n_pred_strokes": 41,
+    "tp": 41,
+    "precision": 1.0,
+    "recall": 0.6833333333333333,
+    "f1": 0.8118811881188119,
     "count_error": {
      "n_windows": 14,
-     "mean_signed": -1.4285714285714286,
-     "mean_abs": 1.4285714285714286
+     "mean_signed": -1.3571428571428572,
+     "mean_abs": 1.3571428571428572
     },
     "occlusion_to_missing": {
      "n_windows_with_hidden": 3,
@@ -770,8 +770,8 @@
      },
      "base_nonhidden_observation_ticks": {
       "n": 218,
-      "missing": 209,
-      "rate": 0.9587155963302753,
+      "missing": 106,
+      "rate": 0.48623853211009177,
       "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
      },
      "perc_samples": {
@@ -781,11 +781,11 @@
      }
     },
     "diagnostic_offset_label_minus_pred_s": {
-     "n": 45,
-     "median": 0.7254914314516125,
+     "n": 41,
+     "median": -8.881784197001252e-16,
      "iqr": [
-      0.604107933950865,
-      0.8792965627497997
+      -0.04063760080645196,
+      0.040007560483870996
      ],
      "note": "label stroke minus nearest PERC stroke within 1.5 s; diagnostic, not a score"
     }
@@ -2293,17 +2293,16 @@
    "unsafe": true,
    "n_gt": 2,
    "n_pred": 1,
-   "tp": 0,
+   "tp": 1,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 8,
-   "nonhidden_missing_ticks": 8,
+   "nonhidden_missing_ticks": 6,
    "machines_found": true,
    "offsets_s": [
-    -1.1999999999999997,
-    0.7200000000000002
+    -0.040000000000000036
    ]
   },
   {
@@ -2315,18 +2314,18 @@
    "unsafe": true,
    "n_gt": 4,
    "n_pred": 3,
-   "tp": 0,
+   "tp": 3,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 20,
-   "nonhidden_missing_ticks": 20,
+   "nonhidden_missing_ticks": 9,
    "machines_found": true,
    "offsets_s": [
-    1.0160126067507116,
-    1.0160126067507114,
-    0.8940117934119565
+    0.16200691337942263,
+    0.16200691337942263,
+    0.0806730378202527
    ]
   },
   {
@@ -2338,17 +2337,17 @@
    "unsafe": true,
    "n_gt": 2,
    "n_pred": 2,
-   "tp": 0,
+   "tp": 2,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 7,
-   "nonhidden_missing_ticks": 7,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": [
-    0.7184252597921662,
-    0.9182653876898481
+    -0.12090327737809758,
+    0.03896882494004794
    ]
   },
   {
@@ -2359,21 +2358,21 @@
    "group": "c9_a004",
    "unsafe": true,
    "n_gt": 5,
-   "n_pred": 4,
-   "tp": 0,
+   "n_pred": 5,
+   "tp": 5,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 20,
-   "nonhidden_missing_ticks": 20,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": [
-    -0.9360004066693779,
-    0.8940117934119558,
-    0.8940117934119565,
-    0.9346787311915419,
-    0.8940117934119556
+    0.20267385115900777,
+    0.08067303782025181,
+    0.04000610004066729,
+    -0.0006608377389181186,
+    0.04000610004066729
    ]
   },
   {
@@ -2385,20 +2384,20 @@
    "unsafe": false,
    "n_gt": 5,
    "n_pred": 5,
-   "tp": 0,
+   "tp": 5,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 20,
-   "nonhidden_missing_ticks": 20,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": [
-    0.799816998779992,
-    0.7200081333875556,
-    0.8400264335095562,
-    0.8400264335095571,
-    0.7600142334282225
+    -0.07996136640910922,
+    -0.11996746644977652,
+    0.0,
+    -0.040006100040666404,
+    -0.08001220008133281
    ]
   },
   {
@@ -2410,17 +2409,17 @@
    "unsafe": false,
    "n_gt": 2,
    "n_pred": 2,
-   "tp": 0,
+   "tp": 2,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 8,
-   "nonhidden_missing_ticks": 8,
+   "nonhidden_missing_ticks": 6,
    "machines_found": true,
    "offsets_s": [
-    0.4414125200642055,
-    0.7624398073836274
+    0.0,
+    -0.1605136436597112
    ]
   },
   {
@@ -2431,20 +2430,19 @@
    "group": "c9_a001",
    "unsafe": true,
    "n_gt": 4,
-   "n_pred": 4,
-   "tp": 0,
+   "n_pred": 3,
+   "tp": 3,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 13,
-   "nonhidden_missing_ticks": 13,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": [
-    0.8061365927419355,
-    0.5238785282258065,
-    0.7254914314516125,
-    0.685168850806452
+    0.040007560483870996,
+    -0.04063760080645196,
+    -0.04063760080645107
    ]
   },
   {
@@ -2456,19 +2454,19 @@
    "unsafe": true,
    "n_gt": 4,
    "n_pred": 4,
-   "tp": 0,
+   "tp": 4,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 13,
-   "nonhidden_missing_ticks": 13,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": [
-    0.36258820564516125,
-    0.7658140120967742,
-    0.725491431451613,
-    0.685168850806452
+    -0.00031502016129031363,
+    0.040007560483870996,
+    -0.00031502016129003607,
+    -0.08096018145161299
    ]
   },
   {
@@ -2480,19 +2478,19 @@
    "unsafe": true,
    "n_gt": 4,
    "n_pred": 4,
-   "tp": 0,
+   "tp": 4,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 13,
-   "nonhidden_missing_ticks": 13,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": [
-    0.7658140120967741,
-    0.765814012096774,
-    0.765814012096774,
-    0.765814012096774
+    -0.0003150201612902581,
+    -0.00031502016129048016,
+    -0.04063760080645196,
+    -0.08096018145161299
    ]
   },
   {
@@ -2504,21 +2502,21 @@
    "unsafe": true,
    "n_gt": 6,
    "n_pred": 6,
-   "tp": 0,
+   "tp": 6,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 20,
-   "nonhidden_missing_ticks": 20,
+   "nonhidden_missing_ticks": 3,
    "machines_found": true,
    "offsets_s": [
-    -1.0068465565847766,
-    0.6846556584776478,
-    0.7249295207410391,
-    0.6443817962142573,
-    0.604107933950865,
-    0.6443817962142582
+    -0.08054772452678205,
+    -0.08054772452678227,
+    -0.08054772452678183,
+    -0.16109544905356454,
+    -0.12082158679017319,
+    -0.08054772452678094
    ]
   },
   {
@@ -2549,18 +2547,18 @@
    "unsafe": true,
    "n_gt": 4,
    "n_pred": 3,
-   "tp": 0,
+   "tp": 3,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 14,
-   "nonhidden_missing_ticks": 14,
+   "nonhidden_missing_ticks": 6,
    "machines_found": true,
    "offsets_s": [
-    0.7993605115907274,
-    0.8393285371702639,
-    0.8792965627497997
+    0.0,
+    0.11990407673860926,
+    0.039968025579535826
    ]
   },
   {
@@ -2572,20 +2570,20 @@
    "unsafe": false,
    "n_gt": 5,
    "n_pred": 5,
-   "tp": 0,
+   "tp": 5,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 20,
-   "nonhidden_missing_ticks": 20,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": [
-    -0.9200386335908908,
-    0.879981699877999,
-    0.7200081333875561,
-    0.7600142334282234,
-    0.8000203334688898
+    0.1199674664497763,
+    -0.04000610004066685,
+    -0.15997356649044292,
+    -0.07996136640910922,
+    -0.07996136640910834
    ]
   },
   {
@@ -2596,21 +2594,20 @@
    "group": "c9_a012",
    "unsafe": true,
    "n_gt": 5,
-   "n_pred": 3,
-   "tp": 0,
+   "n_pred": 4,
+   "tp": 4,
    "hidden_ticks": 0,
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 20,
-   "nonhidden_missing_ticks": 20,
+   "nonhidden_missing_ticks": 4,
    "machines_found": true,
    "offsets_s": [
-    -0.8946726311508741,
-    0.976006506710045,
-    -1.0980073200488008,
-    0.8540056933712883,
-    0.9353395689304591
+    0.20333468889792594,
+    0.12200081333875579,
+    -8.881784197001252e-16,
+    0.08133387555917082
    ]
   },
   {
@@ -2622,18 +2619,18 @@
    "unsafe": true,
    "n_gt": 5,
    "n_pred": 3,
-   "tp": 0,
+   "tp": 3,
    "hidden_ticks": 1,
    "hidden_missing_ticks": 1,
    "hidden_perc_samples": 15,
    "hidden_perc_missing": 0,
    "nonhidden_ticks": 19,
-   "nonhidden_missing_ticks": 19,
+   "nonhidden_missing_ticks": 11,
    "machines_found": true,
    "offsets_s": [
-    0.5199776331842213,
-    0.9199877999186663,
-    0.4000101667344449
+    0.08001220008133392,
+    0.04000610004066685,
+    0.0
    ]
   },
   {
@@ -2647,11 +2644,11 @@
    "n_pred": 0,
    "tp": 0,
    "hidden_ticks": 5,
-   "hidden_missing_ticks": 5,
+   "hidden_missing_ticks": 4,
    "hidden_perc_samples": 49,
    "hidden_perc_missing": 49,
    "nonhidden_ticks": 13,
-   "nonhidden_missing_ticks": 13,
+   "nonhidden_missing_ticks": 10,
    "machines_found": true,
    "offsets_s": []
   },
@@ -2702,7 +2699,7 @@
    "unsafe": true,
    "n_gt": 4,
    "n_pred": 3,
-   "tp": 0,
+   "tp": 3,
    "hidden_ticks": 5,
    "hidden_missing_ticks": 2,
    "hidden_perc_samples": 58,
@@ -2711,10 +2708,9 @@
    "nonhidden_missing_ticks": 6,
    "machines_found": true,
    "offsets_s": [
-    0.5235602094240837,
-    -1.0873942811115578,
-    0.6443817962142573,
-    0.7249295207410391
+    -0.08054772452678183,
+    -0.04027386226339136,
+    0.0
    ]
   },
   {

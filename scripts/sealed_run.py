@@ -1,12 +1,35 @@
 """The sealed test run (PLAN_TWIN §5 "Sealed-test enforcement", §4 FREEZE row). Run by the CUSTODIAN only, on the laptop.
 
-    python scripts/sealed_run.py check   [--sealed-root C:\\intercycle_sealed]    # the refusals only; writes nothing
-    python scripts/sealed_run.py derive  [--sealed-root ...] [--fallback]        # custodian: seeds after FREEZE
+    python scripts/sealed_run.py check --stages clips [--sealed-root C:\\intercycle_sealed]  # refusals only; no writes
+    python scripts/sealed_run.py derive  [--sealed-root ...] [--fallback]        # custodian: seeds after the ROBOT FREEZE
     python scripts/sealed_run.py run --stages clips [--sealed-root ...]         # refusals, RUNLOG, then the stages
     python scripts/sealed_run.py dev-dry-run --dev-root D --clips 0_dv1,3_dv2   # the clips stage on DEV clips only
 
-Refusals (every one fails closed, before INTERCYCLE_SEALED_RUN=1 is set and before anything is read from the sealed
-root apart from the hash checks):
+SPLIT FREEZE (USER DECISION, Sun ~07:00 CEST). There are two freezes and each stage checks its own:
+
+* the REAL-CLIP freeze `prereg/FREEZE_REALCLIP` (08:30; the sha of the commit whose code runs the real-clip test). The
+  `clips` stage checks ONLY it (no G2 files, no seeds: the real-clip test uses none):
+  C1. the tree is clean (as 1 below);
+  C2. prereg/FREEZE_REALCLIP holds a 40-hex commit sha, and that commit is an ancestor of HEAD;
+  C3. `git diff --name-only --no-renames <FREEZE_REALCLIP> HEAD` lists nothing but prereg/FREEZE_REALCLIP and
+      results/sealed/** (so prereg/FREEZE, TEST_SEED_COMMIT and every later robot commit are refused);
+  C3b. RUNLOG append-only from the FREEZE_REALCLIP tree (as 3b);
+  C4. MANIFEST and LABELS are tracked in the FREEZE_REALCLIP tree and the working files hash to those blobs, then the
+      clip and label files of the sealed root are checked against them exactly as in 4.
+  The 09:15 real-clip run is therefore made from a DETACHED WORKTREE at the commit that wrote prereg/FREEZE_REALCLIP
+  (`git worktree add --detach <dir> <that commit>`, then `run --stages clips` from <dir>), never from main once the
+  robot work has moved on (docs/probes/CUSTODIAN_STEPS.md, "Real-clip run at 09:15").
+* the ROBOT freeze `prereg/FREEZE` (~10:15), checked by the robot stages (`double`, `isaac`) by refusals 1-4 below
+  as before, plus TEST_SEED_COMMIT, plus:
+  5. prereg/FREEZE_REALCLIP exists, names a commit that is an ancestor of the FREEZE commit, and NO real-clip input
+     differs between FREEZE_REALCLIP and FREEZE: the static import closure of the clips stage (CLIPS_STAGE_ROOTS and
+     every repo module they import, at either commit, with their parent packages), the labels schema, every file
+     under sealed/, the active split (prereg/ACTIVE_SPLIT and the split csv it names) and the press ROI file
+     (REALCLIP_DATA_PATHS). The robot stages run from scripts/sealed_robot.py (ROBOT_MODULE, outside that closure,
+     so wiring them does not touch a frozen real-clip file); without it they are refused ("not wired").
+
+Refusals of the robot stages (every one fails closed, before INTERCYCLE_SEALED_RUN=1 is set and before anything is
+read from the sealed root apart from the hash checks):
 
 1. the tree is clean (`git status --porcelain --untracked-files=all` is empty, except results/sealed/RUNLOG.json,
    which every attempt appends to and the custodian may commit);
@@ -95,12 +118,14 @@ from twin.schemas.prereg import SealedHashes, active_split_path, camera_class_of
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 DEFAULT_SEALED_ROOT = Path(r"C:\intercycle_sealed")
 FREEZE = "prereg/FREEZE"
+FREEZE_REALCLIP = "prereg/FREEZE_REALCLIP"   # the real-clip freeze (split freeze, USER DECISION Sun ~07:00)
 SEED_COMMIT = "prereg/TEST_SEED_COMMIT"
 RUNLOG = "results/sealed/RUNLOG.json"
 RUNLOG_CONTRACT = "twin.sealed_runlog/2"
 RUNLOG_STATUS = ("started", "done", "error")
 ALLOWED_DIRTY = (RUNLOG,)                  # the only path that may be dirty / untracked (each attempt appends to it)
 ALLOWED_AFTER_FREEZE = (FREEZE, SEED_COMMIT, RUNLOG)
+ALLOWED_AFTER_FREEZE_REALCLIP = (FREEZE_REALCLIP, RUNLOG)
 RESULTS_SEALED = "results/sealed/"         # sealed_run's own outputs: exempt from the FREEZE..HEAD diff rule (re-runs)
 INPUTS = {"manifest": "sealed/MANIFEST.sha256", "labels": "sealed/LABELS.sha256",
           "generator": "twin/daygen.py", "dynamics": "twin/dynamics.json", "engine": "twin/engine.py",
@@ -120,7 +145,19 @@ INGEST_CONTAINER_MODULE = "sealed_ingest"         # scripts/sealed_ingest.py: th
 PERC_IMAGE_MODULE = "cloud/modal_perc.py"   # the dev batch: its image (detector weights, tracker, versions) is reused
 DRAND_URL = "https://api.drand.sh"
 CLIPS_PER_CALL = 16                         # one detector load per call; 126 clips -> 8 calls
-STAGES = ("clips",)
+CLIP_STAGES = ("clips",)
+ROBOT_STAGES = ("double", "isaac")
+STAGES = CLIP_STAGES + ROBOT_STAGES
+ROBOT_MODULE = "sealed_robot"               # scripts/sealed_robot.py: run_stage(stage, record) -> dict (not yet written)
+# Robot check 5: the real-clip inputs that must be byte-identical between FREEZE_REALCLIP and FREEZE. The import closure
+# is walked from these roots (static `import` / `from` statements, also inside functions; a root missing from a tree is
+# skipped: an added or removed file shows in the diff anyway). esk_ingest is a root because the container imports it by
+# name (importlib), sealed_ingest because sealed_run imports it by name, modal_perc because it is loaded by file path.
+CLIPS_STAGE_ROOTS: tuple[str, ...] = ("scripts/sealed_run.py", "scripts/sealed_ingest.py", PERC_IMAGE_MODULE,
+                                      "intercycle/perception/esk_ingest.py")
+LABELS_SCHEMA = "twin/schemas/labels.py"
+REALCLIP_DATA_PATHS: tuple[str, ...] = (LABELS_SCHEMA, "prereg/ACTIVE_SPLIT", "docs/probes/S3a-P4_rois.json")
+SEALED_DIR = "sealed/"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SHA64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -166,34 +203,39 @@ def check_clean(repo: Path) -> None:
         raise Refusal("the tree is not clean:\n" + "\n".join(dirty))
 
 
-def read_freeze(repo: Path) -> str:
-    p = repo / FREEZE
+def read_freeze(repo: Path, rel: str = FREEZE) -> str:
+    """The commit sha a freeze file (prereg/FREEZE or prereg/FREEZE_REALCLIP) names; refused unless it is a commit."""
+    p = repo / rel
     if not p.is_file():
-        raise Refusal(f"{FREEZE} does not exist")
+        raise Refusal(f"{rel} does not exist")
     try:
         sha = first_value(p.read_text(encoding="utf-8")).lower()
     except Refusal as e:
-        raise Refusal(f"{FREEZE}: {e}") from None
+        raise Refusal(f"{rel}: {e}") from None
     if not SHA40.match(sha):
-        raise Refusal(f"{FREEZE} must hold a full 40-hex commit sha, got {sha!r}")
+        raise Refusal(f"{rel} must hold a full 40-hex commit sha, got {sha!r}")
     got = git(repo, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}", ok_codes=(0, 1))
     if got.returncode != 0 or got.stdout.decode().strip() != sha:
-        raise Refusal(f"{FREEZE} names {sha}, which is not a commit of this repo")
+        raise Refusal(f"{rel} names {sha}, which is not a commit of this repo")
     return sha
 
 
-def check_ancestor(repo: Path, sha: str) -> None:
-    p = git(repo, "merge-base", "--is-ancestor", sha, "HEAD", ok_codes=(0, 1))
+def check_ancestor(repo: Path, sha: str, of: str = "HEAD", what: str = "FREEZE") -> None:
+    p = git(repo, "merge-base", "--is-ancestor", sha, of, ok_codes=(0, 1))
     if p.returncode != 0:
-        raise Refusal(f"the FREEZE commit {sha} is not an ancestor of HEAD")
+        raise Refusal(f"the {what} commit {sha} is not an ancestor of {of}")
 
 
-def check_diff(repo: Path, sha: str) -> list[str]:
-    names = [n for n in git(repo, "diff", "--name-only", "--no-renames", sha, "HEAD").stdout.decode("utf-8").splitlines()
-             if n]
-    extra = sorted(n for n in set(names) if n not in ALLOWED_AFTER_FREEZE and not n.startswith(RESULTS_SEALED))
+def _diff_names(repo: Path, a: str, b: str) -> list[str]:
+    return [n for n in git(repo, "diff", "--name-only", "--no-renames", a, b).stdout.decode("utf-8").splitlines() if n]
+
+
+def check_diff(repo: Path, sha: str, allowed: tuple[str, ...] = ALLOWED_AFTER_FREEZE, what: str = "FREEZE") -> list[str]:
+    names = _diff_names(repo, sha, "HEAD")
+    extra = sorted(n for n in set(names) if n not in allowed and not n.startswith(RESULTS_SEALED))
     if extra:
-        raise Refusal(f"files changed since FREEZE besides {[FREEZE, SEED_COMMIT]} and {RESULTS_SEALED}**: {extra}")
+        named = [a for a in allowed if a != RUNLOG]
+        raise Refusal(f"files changed since {what} besides {named} and {RESULTS_SEALED}**: {extra}")
     return names
 
 
@@ -221,10 +263,13 @@ def check_commit_dates(repo: Path) -> int:
     return ct
 
 
-def check_inputs(repo: Path, sha: str) -> dict[str, dict]:
-    """Every input is tracked in the FREEZE tree and the working file hashes to the FREEZE blob (LF-normalised)."""
+def check_inputs(repo: Path, sha: str, keys: Iterable[str] | None = None) -> dict[str, dict]:
+    """Every input is tracked in the FREEZE tree and the working file hashes to the FREEZE blob (LF-normalised).
+    `keys` (the clips stage: manifest, labels) checks only those inputs and skips the G2 record."""
     out = {}
-    for name, rel in INPUTS.items():
+    names = list(INPUTS) if keys is None else list(keys)
+    for name in names:
+        rel = INPUTS[name]
         work = repo / rel
         if not work.is_file():
             raise Refusal(f"input {name} ({rel}) does not exist")
@@ -235,7 +280,8 @@ def check_inputs(repo: Path, sha: str) -> dict[str, dict]:
         if h_work != h_frozen:
             raise Refusal(f"input {name} ({rel}) hash {h_work[:16]} != FREEZE {h_frozen[:16]}")
         out[name] = {"path": rel, "sha256": h_work}
-    check_g2_hashes(repo, sha, out)
+    if keys is None:
+        check_g2_hashes(repo, sha, out)
     return out
 
 
@@ -458,11 +504,129 @@ def check_seeds(repo: Path, sealed_root: Path, t_freeze: int, fetch: Callable[[s
             **src}
 
 
+# ------------------------------------------------------------------------------------------------ real-clip closure
+
+def _blob_text(repo: Path, rev: str, rel: str) -> str | None:
+    b = git(repo, "cat-file", "blob", f"{rev}:{rel}", ok_codes=(0, 128))
+    return b.stdout.decode("utf-8", "replace") if b.returncode == 0 else None
+
+
+def _tree_files(repo: Path, rev: str) -> set[str]:
+    return {n for n in git(repo, "ls-tree", "-r", "--name-only", rev).stdout.decode("utf-8").splitlines() if n}
+
+
+def _module_candidates(mod: str) -> list[str]:
+    base = mod.replace(".", "/")
+    return [f"{base}.py", f"{base}/__init__.py"]
+
+
+def import_closure(repo: Path, rev: str, roots: Iterable[str] = ()) -> set[str]:
+    """The repo files the clips stage executes at commit `rev`: the roots, every repo module they import statically
+    (`import a.b`, `from a.b import c` incl. c as a submodule, relative imports, imports inside functions; a top-level
+    name is also resolved next to the importing file, as `import sealed_ingest` from scripts/), transitively, plus the
+    parent packages' __init__.py. Non-repo modules (stdlib, numpy, modal, ...) are ignored. A file that does not parse
+    is refused (fail closed)."""
+    import ast
+
+    files = _tree_files(repo, rev)
+    todo = [r for r in (tuple(roots) or CLIPS_STAGE_ROOTS) if r in files]
+    seen: set[str] = set()
+
+    def add_module(mod: str, here: str) -> None:
+        parts = mod.split(".")
+        for k in range(1, len(parts) + 1):                   # parent packages execute their __init__.py
+            for cand in _module_candidates(".".join(parts[:k])):
+                if cand in files:
+                    todo.append(cand)
+        local = str(Path(here).parent.as_posix())
+        if local not in ("", "."):
+            for cand in _module_candidates(f"{local}/{mod}".replace("/", ".")):
+                if cand in files:
+                    todo.append(cand)
+
+    while todo:
+        rel = todo.pop()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        if not rel.endswith(".py"):
+            continue
+        text = _blob_text(repo, rev, rel)
+        if text is None:
+            continue
+        try:
+            tree = ast.parse(text, filename=rel)
+        except SyntaxError as e:
+            raise Refusal(f"{rev[:12]}:{rel} does not parse ({e}); the real-clip import closure cannot be checked") \
+                from None
+        pkg = rel.rsplit("/", 1)[0].replace("/", ".") if "/" in rel else ""
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    add_module(a.name, rel)
+            elif isinstance(n, ast.ImportFrom):
+                if n.level:
+                    up = pkg.split(".")[: len(pkg.split(".")) - (n.level - 1)] if pkg else []
+                    base = ".".join(up + ([n.module] if n.module else []))
+                else:
+                    base = n.module or ""
+                if base:
+                    add_module(base, rel)
+                for a in n.names:
+                    if a.name != "*":
+                        add_module(f"{base}.{a.name}" if base else a.name, rel)
+    return seen
+
+
+def realclip_inputs(repo: Path, rev: str) -> set[str]:
+    """Every real-clip input path at commit `rev`: the clips stage's import closure, REALCLIP_DATA_PATHS, the split csv
+    prereg/ACTIVE_SPLIT names, and every file under sealed/."""
+    out = import_closure(repo, rev) | set(REALCLIP_DATA_PATHS)
+    act = _blob_text(repo, rev, "prereg/ACTIVE_SPLIT")
+    if act is not None and act.strip():
+        out.add(f"prereg/{act.strip().splitlines()[0].strip()}")
+    out |= {f for f in _tree_files(repo, rev) if f.startswith(SEALED_DIR)}
+    return out
+
+
+def check_realclip_unchanged(repo: Path, freeze_sha: str) -> dict:
+    """Robot check 5: prereg/FREEZE_REALCLIP names an ancestor of the FREEZE commit and no real-clip input path (at
+    either commit) differs between the two."""
+    rc = read_freeze(repo, FREEZE_REALCLIP)
+    check_ancestor(repo, rc, of=freeze_sha, what="FREEZE_REALCLIP")
+    guarded = realclip_inputs(repo, rc) | realclip_inputs(repo, freeze_sha)
+    changed = sorted(n for n in _diff_names(repo, rc, freeze_sha) if n in guarded)
+    if changed:
+        raise Refusal(f"real-clip inputs differ between FREEZE_REALCLIP {rc[:12]} and FREEZE {freeze_sha[:12]}: "
+                      f"{changed}")
+    return {"freeze_realclip_sha": rc, "n_realclip_inputs": len(guarded)}
+
+
 # ------------------------------------------------------------------------------------------------ preflight
 
+def preflight_clips(repo: Path, sealed_root: Path) -> dict:
+    """The clips stage's refusals C1-C4 against prereg/FREEZE_REALCLIP (no G2 files, no seeds). Same return shape as
+    preflight (freeze_sha = the FREEZE_REALCLIP sha)."""
+    check_clean(repo)
+    sha = read_freeze(repo, FREEZE_REALCLIP)
+    check_ancestor(repo, sha, what="FREEZE_REALCLIP")
+    changed = check_diff(repo, sha, ALLOWED_AFTER_FREEZE_REALCLIP, "FREEZE_REALCLIP")
+    runlog = check_runlog(repo, sha)
+    inputs = check_inputs(repo, sha, keys=("manifest", "labels"))
+    man = load_sealed(repo, "manifest", "MANIFEST")
+    lab = load_sealed(repo, "labels", "LABELS")
+    jobs = check_manifest_files(repo, sealed_root, man)
+    check_label_files(sealed_root, lab)
+    head = git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+    return {"head": head, "freeze": FREEZE_REALCLIP, "freeze_sha": sha, "changed_since_freeze": changed,
+            "inputs": inputs, "manifest_aggregate": man.aggregate, "labels_aggregate": lab.aggregate,
+            "n_clips": len(jobs), "jobs": jobs, "runlog": runlog}
+
+
 def preflight(repo: Path, sealed_root: Path, fetch: Callable[[str], dict] = drand_fetch) -> dict:
-    """Every PLAN §5 refusal, in order. Returns the RUNLOG record (without stages) plus the current RUNLOG records
-    ("runlog") and the clip jobs ("jobs"); raises Refusal."""
+    """The robot stages' refusals (PLAN §5, 1-4, then 5: the real-clip inputs are unchanged since FREEZE_REALCLIP),
+    in order. Returns the RUNLOG record (without stages) plus the current RUNLOG records ("runlog") and the clip jobs
+    ("jobs"); raises Refusal."""
     check_clean(repo)
     sha = read_freeze(repo)
     check_ancestor(repo, sha)
@@ -476,10 +640,12 @@ def preflight(repo: Path, sealed_root: Path, fetch: Callable[[str], dict] = dran
     t_freeze = check_commit_dates(repo)
     seeds = check_seeds(repo, sealed_root, t_freeze, fetch)
     inputs["test_seed_commit"] = {"path": SEED_COMMIT, "sha256": seeds["test_seed_commit"]}
+    realclip = check_realclip_unchanged(repo, sha)
     head = git(repo, "rev-parse", "HEAD").stdout.decode().strip()
-    return {"head": head, "freeze_sha": sha, "freeze_commit_time": t_freeze, "changed_since_freeze": changed,
-            "inputs": inputs, "manifest_aggregate": man.aggregate, "labels_aggregate": lab.aggregate,
-            "n_clips": len(jobs), "seeds": seeds, "jobs": jobs, "runlog": runlog}
+    return {"head": head, "freeze": FREEZE, "freeze_sha": sha, "freeze_commit_time": t_freeze,
+            "changed_since_freeze": changed, "inputs": inputs, "manifest_aggregate": man.aggregate,
+            "labels_aggregate": lab.aggregate, "n_clips": len(jobs), "seeds": seeds, "realclip_freeze": realclip,
+            "jobs": jobs, "runlog": runlog}
 
 
 # ------------------------------------------------------------------------------------------------ RUNLOG (append-only)
@@ -652,36 +818,61 @@ def _now_iso() -> str:
 
 def run(repo: Path, sealed_root: Path, stages: list[str], fetch: Callable[[str], dict] = drand_fetch,
         runner: Callable[[list[list[dict]]], list[dict]] | None = None) -> dict:
-    """One sealed attempt: refusals, then a `started` RUNLOG record, the stages, and the closing record."""
+    """One sealed attempt: refusals, then a `started` RUNLOG record, the stages, and the closing record. The clips
+    stage checks prereg/FREEZE_REALCLIP (preflight_clips); the robot stages check prereg/FREEZE (preflight); one
+    attempt never mixes them (they are frozen at different commits)."""
     bad = sorted(set(stages) - set(STAGES))
     if bad or not stages:
         raise Refusal(f"stages {bad or stages} are not wired in sealed_run.py (known: {list(STAGES)})")
-    rec = preflight(repo, sealed_root, fetch)
+    robot = [s for s in stages if s in ROBOT_STAGES]
+    if robot and len(robot) != len(stages):
+        raise Refusal(f"stages {stages} mix the real-clip stage (FREEZE_REALCLIP) and robot stages (FREEZE): run them "
+                      "separately")
+    robot_mod = _robot_module() if robot else None
+    rec = preflight(repo, sealed_root, fetch) if robot else preflight_clips(repo, sealed_root)
     known = rec.pop("runlog")
     jobs = rec.pop("jobs")
     attempt = 1 + sum(r["status"] == "started" for r in known)
     perc_rel = f"perc/attempt_{attempt:03d}"
-    if (sealed_root / perc_rel).exists():
+    if not robot and (sealed_root / perc_rel).exists():
         raise Refusal(f"{sealed_root / perc_rel} exists but RUNLOG has {attempt - 1} attempts: refusing to reuse it")
     os.environ[SEALED_ENV] = "1"                     # only after every refusal passed
-    for s in rec["seeds"]["seed_ints"]:
+    for s in (rec["seeds"]["seed_ints"] if robot else []):
         check_world_seed(s)                          # the generator's own guard now admits the test seeds
     start = dict(rec, contract=RUNLOG_CONTRACT, attempt=attempt, status="started", timestamp=_now_iso(),
-                 stages=list(stages), sealed_flag=SEALED_ENV + "=1", perc_dir=perc_rel)
+                 stages=list(stages), sealed_flag=SEALED_ENV + "=1", perc_dir=None if robot else perc_rel)
     known = append_runlog(repo, known, start)
     results: dict[str, dict] = {}
+    cur = stages[0]
     try:
         if "clips" in stages:
             results["clips"] = dict(run_clips(sealed_root, jobs, runner or modal_runner, sealed_root / perc_rel),
                                     status="done")
+        for st in robot:
+            cur = st
+            assert robot_mod is not None
+            results[st] = dict(robot_mod.run_stage(st, dict(start)), status="done")
     except Exception as e:  # noqa: BLE001 - recorded, then re-raised
-        results["clips"] = {"status": "error", "error": repr(e)}
+        results[cur] = {"status": "error", "error": repr(e)}
         append_runlog(repo, known, {"attempt": attempt, "status": "error", "timestamp": _now_iso(),
                                     "head": rec["head"], "stages": results})
         raise
     known = append_runlog(repo, known, {"attempt": attempt, "status": "done", "timestamp": _now_iso(),
                                         "head": rec["head"], "stages": results})
-    return {"attempt": attempt, "perc_dir": perc_rel, "stages": results, "records": known}
+    return {"attempt": attempt, "perc_dir": None if robot else perc_rel, "stages": results, "records": known}
+
+
+def _robot_module():
+    """scripts/sealed_robot.py (ROBOT_MODULE), imported by name; refused when it does not exist yet."""
+    if not (REPO / "scripts" / f"{ROBOT_MODULE}.py").is_file():
+        raise Refusal(f"the robot stages are not wired: scripts/{ROBOT_MODULE}.py (run_stage(stage, record)) does not "
+                      "exist")
+    scripts = str(REPO / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import importlib
+
+    return importlib.import_module(ROBOT_MODULE)
 
 
 def derive(repo: Path, sealed_root: Path, fallback: bool, fetch: Callable[[str], dict] = drand_fetch,
@@ -771,9 +962,15 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     try:
         if a.command == "check":
-            rec = preflight(REPO, a.sealed_root)
+            st = [s for s in a.stages.split(",") if s]
+            if not st or sorted(set(st) - set(STAGES)):
+                raise Refusal(f"check --stages {a.stages!r}: known {list(STAGES)}")
+            robot = any(s in ROBOT_STAGES for s in st)
+            if robot and not all(s in ROBOT_STAGES for s in st):
+                raise Refusal("check: the clips stage and the robot stages are frozen separately; check them apart")
+            rec = preflight(REPO, a.sealed_root) if robot else preflight_clips(REPO, a.sealed_root)
             rec.pop("jobs")
-            print(json.dumps({k: rec[k] for k in ("head", "freeze_sha", "inputs", "n_clips")}, indent=1))
+            print(json.dumps({k: rec[k] for k in ("head", "freeze", "freeze_sha", "inputs", "n_clips")}, indent=1))
             print(f"sealed_run: every refusal passed ({len(rec['runlog'])} RUNLOG records so far)")
         elif a.command == "derive":
             d = derive(REPO, a.sealed_root, a.fallback)
