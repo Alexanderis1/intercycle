@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -166,6 +167,10 @@ def limits(res: dict) -> list[str]:
     press = json.loads((ROOT / "twin" / "dyn" / "press_v1.json").read_text(encoding="utf-8"))["presses"]
     cov = res["floor_coverage"].get("train", {})
     rows = {r["stat"]: r for r in res["speeds"] + res["intervals"]}
+    m = re.search(r"scored\.json sha256\(LF\) ([0-9a-f]{64}) from (.+?)\)\.", s["zone.z9.walker_rate_per_h"]["note"])
+    if not m:
+        raise ValueError("dynamics.json walker_rate note does not record the DEV labels' sha256 and source")
+    labels = {"sha": m.group(1), "src": m.group(2)}
     out = [
         "- **Floor coverage.** Only track rows on the zone's traced floor polygon (twin/site.yaml) enter the library "
         "and the statistics (the twin models only that floor; the rest is a wall). Train share of rows on it: "
@@ -173,9 +178,22 @@ def limits(res: dict) -> list[str]:
         + ". Operators standing beside the presses mostly fall outside the traced camera-9 floor, and on camera 14 "
         "the floor polygon keeps very few person rows; S2 owns the polygon.",
         f"- **Zone-14 people.** {rows.get('z14/person', {}).get('n_train', 0)} train and "
-        f"{rows.get('z14/person', {}).get('n_dev', 0)} dev person pieces: the speed row is uninformative at this n, "
-        "and the twin's zone-14 people come from "
-        f"{o.get('person.z14.path_library', {}).get('n', 0)} resampling units only.",
+        f"{rows.get('z14/person', {}).get('n_dev', 0)} dev person pieces from "
+        f"{o.get('person.z14.path_library', {}).get('n', 0)} train resampling units: the row has little power at "
+        "this n. The FAIL of the first report (KS 0.921, twin median 1.78 m/s) came from the generator, not from "
+        "the data or the floor polygon: DAYGEN v1 picked a unit uniformly inside the day's layout state, so a unit "
+        "weighed P(state) / units in the state; unit 3_tr6:person:0 (1.81 m/s), the only zone-14 person unit of the "
+        "dominant bright state, carried about 61 % of the zone-14 person arrivals (effective 2.3 of 9 units; the "
+        "audit's simulation over seeds 900-963: 64 %, 2.1). Fix round 1: state-specific rates (each state's train "
+        "units per clip-hour / recall), so every unit of a lighting class is resampled equally often, and the "
+        "validation anchors (proportional to arrivals, train lighting mix, anchor unit only) weight every train "
+        "unit equally.",
+        "- **Generated days vs validation days.** Inside a lighting class every unit is equally likely, but the "
+        "lighting periods of a generated day follow the ASSUMED site-wide night share "
+        f"({s['site.night_share']['value']:.3f}), not each zone's train dim share: in zone 14, 78 % of the person "
+        "units come from dim states, so the 2 bright zone-14 person units carry about 62 % of a generated day's "
+        "zone-14 person arrivals (effective 4.8 of 9 units; zone-14 forklifts 27 of 48, zone-9 persons 625 of 643). "
+        "The validation removes this time-of-day weighting by drawing its anchors with the train lighting mix.",
         "- **Camera-14 presses** never ran in a judged train clip (P4): P(running) is the Beta posterior of 0 running "
         "clips (mean " + ", ".join(f"{p} {o[f'press.{p}.p_running']['value']:.3f}" for p in ("P14a", "P14b", "P14c", "P14d"))
         + "), the stroke period is the v0 prior (ASSUMED, grey); no dev strokes exist to compare.",
@@ -185,19 +203,25 @@ def limits(res: dict) -> list[str]:
         + ") is censored at the clip end or at MISSING; it is left to the ASSUMED W-W3 long-stop process.",
         "- **Stroke impulse** (FWHM of the ROI |flow_v| around a stroke): "
         + ", ".join(f"{p} {o[f'press.{p}.stroke_impulse_s']['value']:.2f} s" for p in ("P9a", "P9b"))
-        + "; it reaches the +-0.8 s window, so the ROI moves through the whole cycle and this is not a resolved impulse.",
+        + "; it reaches the +-0.8 s window, so the ROI moves through the whole cycle and this is not a resolved impulse. "
+        "The engine's shared ram impulse `press.stroke_impulse_s` (the v0 contract key, read by twin/engine.py) "
+        f"therefore stays the v0 prior {s['press.stroke_impulse_s']['value']} s (ASSUMED, sweep "
+        f"{s['press.stroke_impulse_s']['sweep']['lo']}-{s['press.stroke_impulse_s']['sweep']['hi']} s).",
         "- **Arrival rates are ASSUMED** and follow the plan's rule (train footage rate / recall): persons z9 "
         f"{s['zone.z9.walker_rate_per_h']['value']:.0f}/h, z14 {s['zone.z14.walker_rate_per_h']['value']:.0f}/h, "
         f"forklifts z14 {s['zone.z14.forklift_rate_per_h']['value']:.0f}/h, z9 0/h (no vehicles observed in zone-9 "
         "train clips). The clips are event-selected, so these reproduce the crowding the clips show, not an average "
-        "hour. Person recall comes from the DEV labels (independent Claude-agent labels) against the DEV tracks; "
-        "forklift recall from the P5 agent check (8/13).",
+        "hour. Person recall comes from the DEV labels (independent Claude-agent labels) against the DEV tracks "
+        f"(labels/dev/scored.json sha256 `{labels['sha']}` from `{labels['src']}`, pinned in scripts/dyn_fit.py; "
+        "the fit fails on other labels); forklift recall from the P5 agent check (8/13). Each day spreads the zone "
+        "rate over the layout states (each state's train units per clip-hour / recall).",
         f"- **Selection rule and the violation share.** The generated days draw unsafe-behaviour units at the ASSUMED "
         f"share {s['person.violation_share']['value']}; the validation days draw them at the train footage share "
         f"({res['twin'].get('footage_unsafe_share', float('nan')):.3f}), because the dataset's clips are selected by "
         "behaviour class. The first trial run (16 worlds, assumed share) failed the zone-9 speed row; the share fix and "
-        "64 worlds (each day uses only one bright and one dim layout state per zone) were the only changes, no "
-        "dynamics parameter was tuned on dev.",
+        "64 worlds (each day uses only one bright and one dim layout state per zone) were the changes before the first "
+        "report. Fix round 1 (audit) changed the generator's unit weighting and the validation's anchor rule (above) "
+        "and nothing else; no dynamics parameter was tuned on dev in either round.",
         "- **Not tested here:** arrival rates, staffing, stops, lighting / time of day and layout-state frequencies "
         "(all ASSUMED or not comparable on short clips), and paths beyond speed. Time of day is ASSUMED: night = the "
         f"dim-luma share ({s['site.night_share']['value']:.3f}) of the 24 h, centred on midnight (P2: no timing signal).",
@@ -235,13 +259,18 @@ def render(res: dict) -> str:
          "between them.", "",
          "## Twin side", "",
          f"- World seeds {tw['seeds'][0]}-{tw['seeds'][-1]} (dev range; NOT the dev worlds 0-3, which PLAN §4 generates "
-         f"only after PREREG v1), day {tw['day']}, full 24 h days, {tw['windows_per_day']} windows per zone and per "
-         f"press per day; windows kept: {tw['n_windows']}.",
-         "- Selection rule (event-selected clips): a mover window is anchored at a random arrival of the zone and "
-         "reproduces its source clip (start = arrival - the unit's offset in its clip, length = that clip's duration, "
-         "framing = that clip's framing); every mover in the zone during the window is filmed; the window is kept "
-         "when the camera returns at least one track row. A press window takes a random TRAIN clip of the press "
-         "(its frame grid and MISSING mask) at a uniform time of the generated day.",
+         f"only after PREREG v1), day {tw['day']}, full 24 h days, on average {tw['windows_per_day']} windows per "
+         f"(zone, class) and exactly {tw['windows_per_day']} per press per day; windows kept: {tw['n_windows']}.",
+         "- Selection rule (event-selected clips, each of their tracks counted once): a mover window is anchored at "
+         "an arrival and reproduces its source clip (start = arrival - the unit's offset in its clip, length = that "
+         "clip's duration, framing = that clip's framing); the anchor's unit (a group whole) is filmed and the window "
+         "is kept when the camera returns at least one track row. Anchors are an independent thinning of each day's "
+         "arrivals per (zone, class): an arrival in lighting class L is kept with probability windows x share_L / "
+         "E[arrivals in L per day], share_L = the train units' share in L, so anchors are proportional to arrivals "
+         "and every train unit anchors equally often. Other movers inside the window are not counted (counting them "
+         "would weight the units of dense layout states by their co-presence). The validation days pick units "
+         "uniformly inside the day's state (the train footage unsafe share). A press window takes a random TRAIN "
+         "clip of the press (its frame grid and MISSING mask) at a uniform time of the generated day.",
          "- Camera: **validation camera `twin.dynfit.PixelCamera`, not stat_v1** (twin/camera.py, lane S3b, was not "
          "merged when this ran). Floor -> pixels through the inverse CAL v1 H and k1 -> foot-point jitter and a "
          "two-state miss chain fitted on TRAIN tracks (`twin/dyn/valcam_v1.json`) -> back to the floor through the "

@@ -7,10 +7,15 @@ A day draws, in this order and each from its own keyed stream `twin.rng.keyed_rn
    the observed dim-luma share of the train footage, the mapping to hours is assumed (P2: no timing signal).
 2. **Layout state** per zone (OBSERVED): one bright and one dim session cluster of the train clips
    (`layout.<zone>.states`, weighted by clip-seconds; a zone without a state of one lighting class uses the other).
-   People resampled while it is night come from the dim state, by day from the bright state.
+   Movers resampled while it is night come from the dim state, by day from the bright state.
 3. **Assumed rates**: staffing factor U(0.8, 1.2) per (world, day) on the walker rates; Poisson arrivals per zone
-   and class at `zone.<z>.walker_rate_per_h` / `forklift_rate_per_h`; `person.violation_share` of the person
-   arrivals draw from unsafe-behaviour clips.
+   and class. The ASSUMED zone rate (`zone.<z>.walker_rate_per_h` / `forklift_rate_per_h`, train units per
+   footage hour / recall) is spread over the layout states so that each state keeps its own train density:
+   rate(state) = zone rate x (state's units / zone units) / (state's clip-seconds / zone clip-seconds), i.e. the
+   state's units per clip-hour / recall (`state_rate_per_h`). Every train unit of a lighting class is therefore
+   resampled equally often in the long run (a uniform pick inside the day's state alone would weight a unit by
+   P(state) / units in the state). `person.violation_share` of the person arrivals draw from unsafe-behaviour
+   units of the state (the state is kept and the flag dropped when the state has no unit with that flag).
 4. **Resampled segments** (OBSERVED): each arrival replays one resampling unit of the path library whole (a group
    of people that moved together in one train clip, or one forklift pass), at the real speed (speed_scale 1).
 5. **Presses**: P(running) per press is drawn once per WORLD from its Beta posterior (key day 0). The day alternates
@@ -21,7 +26,8 @@ A day draws, in this order and each from its own keyed stream `twin.rng.keyed_rn
 
 The output is a `DayScript` (twin/schemas/dayscript.py), which is TRUTH; this module is a truth producer
 (twin/truth_guard.py). Seeds: dev world seeds 0..999 only; any other seed is refused unless INTERCYCLE_SEALED_RUN=1
-(`twin.rng.check_world_seed`). The path library lives in $INTERCYCLE_DATA (tracks never enter the repo); its sha256
+(`twin.rng.check_world_seed`, called by every public draw helper too: `world_p_running`, `day_states`, `staffing`,
+`press_events`, `arrivals`, `generate_day`). The path library lives in $INTERCYCLE_DATA (tracks never enter the repo); its sha256
 is checked against twin/dynamics.json before use (fail closed).
 
 DYN validation (PLAN §5): `python -m twin.daygen --validate OUT.json` runs generated days through the validation
@@ -86,13 +92,18 @@ class Library:
 
     def pool(self, zone: str, cls: str, state: str | None, unsafe: bool | None) -> list[Unit]:
         """Units of (zone, cls), narrowed to the layout state and the safe/unsafe flag; a narrowing that leaves
-        nothing is dropped (unsafe flag first, then the state)."""
+        nothing is dropped (unsafe flag first; the state only when it has no unit of the class at all, which the
+        generator never asks for: such a state has rate 0)."""
         base = [u for u in self.units if u.zone == zone and u.cls == cls]
         for st, us in ((state, unsafe), (state, None), (None, unsafe), (None, None)):
             p = [u for u in base if (st is None or u.group_id == st) and (us is None or u.unsafe == us)]
             if p:
                 return p
         return []
+
+    def count(self, zone: str, cls: str, state: str | None = None) -> int:
+        """Units of (zone, cls), of one layout state when `state` is given."""
+        return sum(1 for u in self.units if u.zone == zone and u.cls == cls and (state is None or u.group_id == state))
 
 
 def _lib_ref_sha(dyn: Dynamics) -> str:
@@ -158,6 +169,9 @@ class Inputs:
     dyn: Dynamics
     tables: dict
     lib: Library
+    # DYN validation only: the dataset's clips are selected by behaviour class, so the validation days pick a unit
+    # uniformly inside the state (its train footage unsafe share) instead of at the ASSUMED violation share
+    footage_violation: bool = False
 
 
 def load_inputs(site: Site | None = None, dynamics: Dynamics | None = None, tables: dict | None = None,
@@ -180,6 +194,7 @@ def is_night(t_day: float, night_share: float) -> bool:
 
 def world_p_running(world_seed: int, press: str, dyn: Dynamics) -> float:
     """P(running) of a press, drawn once per world from its Beta posterior (key day 0)."""
+    check_world_seed(world_seed)
     p = dyn.get(f"press.{press}.p_running")
     if p.dist is None or p.dist.family != "beta":
         return float(p.value)
@@ -187,21 +202,50 @@ def world_p_running(world_seed: int, press: str, dyn: Dynamics) -> float:
     return float(rng.beta(p.dist.params["a"], p.dist.params["b"]))
 
 
+LIGHTING = ("bright", "dim")
+
+
+def lighting_states(zone: str, lum: str, tables: dict) -> tuple[list[str], np.ndarray]:
+    """The layout states a day may draw for one lighting class of a zone and their probabilities (train
+    clip-seconds); a zone without a state of that class draws from all its states."""
+    st = tables["layout_states"][zone]
+    ids = sorted(g for g, s in st.items() if s["lum_class"] == lum) or sorted(st)
+    w = np.array([st[g]["clip_seconds"] for g in ids], float)
+    return ids, w / w.sum()
+
+
 def day_states(world_seed: int, day: int, zone: str, tables: dict) -> dict[str, str]:
     """{"bright": group id, "dim": group id} of a zone for one day (weighted by train clip-seconds)."""
-    st = tables["layout_states"][zone]
+    check_world_seed(world_seed)
     rng = keyed_rng(world_seed, day, f"layout:{zone}", "states")
     u = rng.random(2)
     out = {}
-    for k, cls in enumerate(("bright", "dim")):
-        ids = sorted(g for g, s in st.items() if s["lum_class"] == cls) or sorted(st)
-        w = np.array([st[g]["clip_seconds"] for g in ids], float)
-        c = np.cumsum(w / w.sum())
-        out[cls] = ids[min(int(np.searchsorted(c, u[k], side="right")), len(ids) - 1)]
+    for k, lum in enumerate(LIGHTING):
+        ids, w = lighting_states(zone, lum, tables)
+        c = np.cumsum(w)
+        out[lum] = ids[min(int(np.searchsorted(c, u[k], side="right")), len(ids) - 1)]
     return out
 
 
+def state_rate_per_h(zone: str, cls: str, state: str, inp: Inputs) -> float:
+    """ASSUMED arrival rate (1/h, before staffing) of (zone, cls) while the zone is in layout `state`: the zone rate
+    times (state's units / zone units) / (state's clip-seconds / zone clip-seconds). The zone rate is the zone's
+    train units per footage hour / recall, so this is the state's train units per clip-hour / recall, and its
+    clip-second-weighted mean over the states is the zone rate."""
+    name = f"zone.{zone}.{RATE_NAME[cls]}"
+    if name not in inp.dyn.assumed:
+        return 0.0
+    n_all = inp.lib.count(zone, cls)
+    if n_all == 0:
+        return 0.0
+    st = inp.tables["layout_states"][zone]
+    h_all = sum(float(s["clip_seconds"]) for s in st.values())
+    h_s = float(st[state]["clip_seconds"])
+    return float(inp.dyn.get(name).value) * (inp.lib.count(zone, cls, state) / n_all) / (h_s / h_all)
+
+
 def staffing(world_seed: int, day: int, dyn: Dynamics) -> float:
+    check_world_seed(world_seed)
     p = dyn.get("staff.staffing_factor")
     rng = keyed_rng(world_seed, day, "staff", "factor")
     return float(rng.uniform(p.sweep.lo, p.sweep.hi))
@@ -224,6 +268,7 @@ def _period_draw(rng: np.random.Generator, press: str, dyn: Dynamics, tables: di
 
 
 def press_events(world_seed: int, day: int, press: str, inp: Inputs, duration: float) -> list[PressEvent]:
+    check_world_seed(world_seed)
     dyn, tables = inp.dyn, inp.tables
     rng = keyed_rng(world_seed, day, f"press:{press}", "schedule")
     p = min(max(world_p_running(world_seed, press, dyn), 1e-6), 1 - 1e-6)
@@ -278,28 +323,54 @@ class Arrival:
 
 def arrivals(world_seed: int, day: int, zone: str, cls: str, inp: Inputs, duration: float,
              day_t0: float = 0.0) -> list[Arrival]:
-    """Poisson arrivals of resampling units of (zone, cls); unit draw per arrival from its own key."""
+    """Poisson arrivals of resampling units of (zone, cls) at the rate of the day's layout state of each lighting
+    period (`state_rate_per_h` x staffing; a non-homogeneous Poisson process drawn by thinning a homogeneous one at
+    the larger of the two rates); unit draw per arrival from its own key."""
+    check_world_seed(world_seed)
     name = f"zone.{zone}.{RATE_NAME[cls]}"
-    if name not in inp.dyn.assumed:
+    if name not in inp.dyn.assumed or not inp.lib.count(zone, cls):
         return []
-    rate = inp.dyn.get(name).value * (staffing(world_seed, day, inp.dyn) if cls == "person" else 1.0)
-    if rate <= 0 or not inp.lib.pool(zone, cls, None, None):
-        return []
-    ra = keyed_rng(world_seed, day, f"arrivals:{zone}:{cls}", "times")
-    n = int(ra.poisson(rate * duration / 3600.0))
-    times = np.sort(ra.uniform(0.0, duration, n))
+    scale = staffing(world_seed, day, inp.dyn) if cls == "person" else 1.0
     states = day_states(world_seed, day, zone, inp.tables)
+    rates = {lum: state_rate_per_h(zone, cls, states[lum], inp) * scale for lum in LIGHTING}
+    r_max = max(rates.values())
+    if r_max <= 0:
+        return []
     ns = inp.dyn.get("site.night_share").value
+    ra = keyed_rng(world_seed, day, f"arrivals:{zone}:{cls}", "times")
+    n = int(ra.poisson(r_max * duration / 3600.0))
+    times = np.sort(ra.uniform(0.0, duration, n))
+    keep_u = ra.random(n)
     vshare = inp.dyn.get("person.violation_share").value
     out = []
-    for k, ta in enumerate(times):
+    k = 0
+    for ta, uk in zip(times, keep_u):
+        lum = "dim" if is_night(day_t0 + float(ta), ns) else "bright"
+        if not uk < rates[lum] / r_max:
+            continue
         rng = keyed_rng(world_seed, day, f"{cls}:{zone}:{k:06d}", "unit")
         u_v, u_pick = rng.random(), rng.random()
-        state = states["dim" if is_night(day_t0 + float(ta), ns) else "bright"]
-        unsafe = bool(u_v < vshare) if cls == "person" else None
-        pool = inp.lib.pool(zone, cls, state, unsafe)
+        unsafe = bool(u_v < vshare) if cls == "person" and not inp.footage_violation else None
+        pool = inp.lib.pool(zone, cls, states[lum], unsafe)
         out.append(Arrival(zone=zone, cls=cls, k=k, t=float(ta), unit=pool[min(int(u_pick * len(pool)), len(pool) - 1)]))
+        k += 1
     return out
+
+
+def expected_arrivals(zone: str, cls: str, lum: str, inp: Inputs, seconds: float) -> float:
+    """Long-run mean number of arrivals of (zone, cls) in `seconds` of lighting `lum` (over the day's state draw
+    and the staffing draw, whose mean is the middle of its sweep)."""
+    ids, w = lighting_states(zone, lum, inp.tables)
+    sw = inp.dyn.get("staff.staffing_factor").sweep
+    staff = 0.5 * (sw.lo + sw.hi) if cls == "person" else 1.0
+    return staff * float(sum(wi * state_rate_per_h(zone, cls, g, inp) for g, wi in zip(ids, w))) * seconds / 3600.0
+
+
+def train_lighting_share(zone: str, cls: str, inp: Inputs) -> dict[str, float]:
+    """Share of the train units of (zone, cls) whose layout state the generator files under each lighting class."""
+    c = {lum: sum(inp.lib.count(zone, cls, g) for g in lighting_states(zone, lum, inp.tables)[0]) for lum in LIGHTING}
+    tot = sum(c.values())
+    return {lum: (v / tot if tot else 0.0) for lum, v in c.items()}
 
 
 # ------------------------------------------------------------------------------------------------ the day
@@ -381,66 +452,95 @@ def cameras(site: Site, valcam: dict) -> dict[str, DF.PixelCamera]:
     return out
 
 
+def anchor_probs(inp: Inputs, windows_per_day: int) -> dict[tuple[str, str, str], float]:
+    """{(zone, cls, lighting): probability that an arrival anchors a validation window}: windows_per_day x the
+    train units' share in that lighting class / the long-run arrivals per day in it."""
+    ns = float(inp.dyn.get("site.night_share").value)
+    lum_seconds = {"dim": ns * DAY_S, "bright": (1.0 - ns) * DAY_S}
+    out: dict[tuple[str, str, str], float] = {}
+    for zone in [z.id for z in inp.site.zones]:
+        for cls in CLASSES:
+            share = train_lighting_share(zone, cls, inp)
+            for lum in LIGHTING:
+                e = expected_arrivals(zone, cls, lum, inp, lum_seconds[lum])
+                if share[lum] > 0 and e <= 0:
+                    raise ValueError(f"{zone}/{cls}: train units in {lum} states but no {lum} arrivals")
+                f = windows_per_day * share[lum] / e if e > 0 else 0.0
+                if f > 1.0:
+                    raise ValueError(f"{zone}/{cls}/{lum}: {windows_per_day} windows per day exceed the arrivals")
+                out[(zone, cls, lum)] = f
+    return out
+
+
+def anchors(world_seed: int, day: int, zone: str, cls: str, arr: list[Arrival],
+            keep_p: dict[tuple[str, str, str], float], inp: Inputs) -> tuple[list[Arrival], np.random.Generator]:
+    """The day's arrivals of (zone, cls) that anchor a validation window (independent thinning, `anchor_probs`) and
+    the window stream the camera then draws from."""
+    rng = keyed_rng(world_seed, day, f"validation:{zone}:{cls}", "windows")
+    za = [a for a in arr if a.zone == zone and a.cls == cls]
+    if not za:
+        return [], rng
+    half = 0.5 * float(inp.dyn.get("site.night_share").value) * DAY_S
+    ta = np.array([a.t for a in za]) % DAY_S
+    dim = (ta < half) | (ta >= DAY_S - half)
+    p = np.where(dim, keep_p[(zone, cls, "dim")], keep_p[(zone, cls, "bright")])
+    return [za[int(i)] for i in np.nonzero(rng.random(len(za)) < p)[0]], rng
+
+
 def validation_sample(press_clips: dict[str, list[tuple[np.ndarray, np.ndarray]]], *, seeds=VALIDATION_SEEDS,
                       day: int = 1, windows_per_day: int = 40, inputs: Inputs | None = None) -> dict:
     """Twin side of the DYN validation (PLAN §5): generated days -> validation camera -> tracks -> statistics.
 
-    Selection rule (the dataset's clips are event-selected short windows): a mover window is anchored at a random
-    arrival of the zone and reproduces its source clip (start = arrival - the unit's offset in its clip, length =
-    that clip's duration, framing = that clip's framing); every mover of the zone inside the window is filmed and
-    the window is kept when it yields at least one observed track row. A press window takes a random TRAIN clip of
-    that press (``press_clips``: its frame times and MISSING mask) at a uniform time of the day.
+    Selection rule (the dataset's clips are event-selected short windows, each of their tracks counted once):
+    a mover window is anchored at an arrival and reproduces its source clip (start = arrival - the unit's offset in
+    its clip, length = that clip's duration, framing = that clip's framing); the anchor's unit (a group whole) is
+    filmed and the window is kept when the camera returns at least one track row. Anchors are drawn per
+    (zone, class) by thinning the day's arrivals: an arrival of lighting class L is kept with probability
+    windows_per_day x share_L / E[arrivals in L per day], share_L = the train units' share in L
+    (`train_lighting_share`), so anchors are proportional to arrivals (no per-day quota, which would weight a unit
+    by P(state) / units in the state again) and every train unit is equally likely to anchor, as in the dataset.
+    Other movers inside the window are not counted: counting them would weight the units of dense layout states by
+    their co-presence. The days pick units uniformly inside the state (`Inputs.footage_violation`: the dataset's
+    clips are selected by behaviour class, so the validation uses the footage unsafe share, not the ASSUMED one).
+    A press window takes a random TRAIN clip of that press (``press_clips``: its frame times and MISSING mask) at a
+    uniform time of the day.
     Returns {"speeds": {"<zone>/<cls>": [...]}, "intervals": {press: [...]}, "n_windows": {...}} (no truth).
     """
     inp = inputs or load_inputs()
-    # the dataset's clips are also selected by behaviour class: the validation days draw unsafe-behaviour units at
-    # the share the train footage has, not at the ASSUMED violation share of the generated days
     pu = [u for u in inp.lib.units if u.cls == "person"]
     footage_unsafe = float(np.mean([u.unsafe for u in pu])) if pu else 0.0
-    dyn = inp.dyn.model_copy(deep=True)
-    dyn.assumed["person.violation_share"].value = footage_unsafe
-    inp = Inputs(site=inp.site, dyn=dyn, tables=inp.tables, lib=inp.lib)
+    inp = Inputs(site=inp.site, dyn=inp.dyn, tables=inp.tables, lib=inp.lib, footage_violation=True)
     valcam = json.loads(VALCAM.read_text(encoding="utf-8"))
     cams = cameras(inp.site, valcam)
     polys = {z.id: z.floor_polygon.value for z in inp.site.zones}
+    keep_p = anchor_probs(inp, windows_per_day)
     speeds: dict[str, list[float]] = {}
     ivs: dict[str, list[float]] = {}
     nwin: dict[str, int] = {}
     for ws in seeds:
         ds, arr = _generate(int(ws), day, inp, DAY_S, None)
-        segs = {s.id: s for s in ds.segments}
-        by_zone: dict[str, list[MoverIntent]] = {}
-        for m in ds.mover_intents:
-            by_zone.setdefault(m.zone, []).append(m)
         for zone in polys:
-            za = [a for a in arr if a.zone == zone]
-            if not za:
-                continue
-            ints = by_zone.get(zone, [])
-            starts = np.array([m.t_start for m in ints])
-            ends = np.array([m.t_start + segs[m.segment].duration_s for m in ints])
-            rng = keyed_rng(int(ws), day, f"validation:{zone}", "windows")
-            for _ in range(windows_per_day):
-                a = za[int(rng.integers(len(za)))]
-                w0 = a.t - a.unit.unit_t0
-                w1 = w0 + a.unit.clip_dur
-                cam = cams[a.unit.framing]
-                grid = w0 + np.arange(0.0, a.unit.clip_dur, 1.0 / cam.fps)
-                rows = 0
-                found: list[tuple[str, float]] = []
-                for i in np.nonzero((starts < w1) & (ends > w0))[0]:
-                    m = ints[i]
-                    g, x, z = _positions(segs[m.segment], m.t_start, grid)
-                    to, xo, zo = cam.observe(rng, g, x, z)
-                    rows += len(to)
-                    for pc in DF.observed_pieces(to, xo, zo, polys[zone], m.cls, DF.MIN_STAT_S):
-                        found.append((m.cls, DF.track_speed(*pc)))
-                if rows == 0:
-                    continue
-                nwin[zone] = nwin.get(zone, 0) + 1
-                for cls, v in found:
-                    if math.isfinite(v):
-                        speeds.setdefault(f"{zone}/{cls}", []).append(v)
+            for cls in CLASSES:
+                picked, rng = anchors(int(ws), day, zone, cls, arr, keep_p, inp)
+                for a in picked:
+                    w0 = a.t - a.unit.unit_t0
+                    cam = cams[a.unit.framing]
+                    grid = w0 + np.arange(0.0, a.unit.clip_dur, 1.0 / cam.fps)
+                    rows = 0
+                    found: list[float] = []
+                    for sid, off in a.unit.members:
+                        if a.t + off >= DAY_S:
+                            continue
+                        g, x, z = _positions(inp.lib.segments[sid], a.t + off, grid)
+                        to, xo, zo = cam.observe(rng, g, x, z)
+                        rows += len(to)
+                        for pc in DF.observed_pieces(to, xo, zo, polys[zone], cls, DF.MIN_STAT_S):
+                            found.append(DF.track_speed(*pc))
+                    if rows == 0:
+                        continue
+                    key = f"{zone}/{cls}"
+                    nwin[key] = nwin.get(key, 0) + 1
+                    speeds.setdefault(key, []).extend(v for v in found if math.isfinite(v))
         jit = valcam["presses"]
         for press, clips in press_clips.items():
             if press not in jit or not clips:

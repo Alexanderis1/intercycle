@@ -4309,6 +4309,17 @@
    },
    "note": "no in-clip pauses without strokes; prior 0"
   },
+  "press.stroke_impulse_s": {
+   "value": 0.6,
+   "unit": "s",
+   "source": "prior",
+   "n": 0,
+   "sweep": {
+    "lo": 0.3,
+    "hi": 1.4759
+   },
+   "note": "ram down-and-up duration of one stroke, shared by all presses (read by twin/engine.py): the v0 prior, ASSUMED. Not fitted: the per-press values press.<id>.stroke_impulse_s (P9a 1.48 s, P9b 1.37 s) are the FWHM of the ROI-mean |flow_v| and are NOT RESOLVED (the width reaches the +-0.8 s window), so they are a lower bound of a near-continuous ROI motion, not the ram impulse; the sweep reaches the largest of them"
+  },
   "zone.z9.walker_rate_per_h": {
    "value": 1458.645421,
    "unit": "1/h",
@@ -4322,7 +4333,7 @@
     "family": "poisson",
     "params": {}
    },
-   "note": "ASSUMED: observed 643 person units in 0.805 h of train footage (798.4/h) divided by DEV person recall 0.547 (dev labels vs dev tracks, camera 9: 52/95, camera 14: 25/37; scored.json sha256 9e68d146bd0807b9). The footage is event-selected, so this is the crowding the clips show, not an average hour; sweep down to 0.1x the observed rate"
+   "note": "ASSUMED: observed 643 person units in 0.805 h of train footage (798.4/h) divided by DEV person recall 0.547 (dev labels vs dev tracks, camera 9: 52/95, camera 14: 25/37; labels/dev/scored.json sha256(LF) 9e68d146bd0807b91b8a1aa119d83325f684fafc24b43e504b40cf90b9d78380 from lane/S4-labels-fix2 @ 5eec96a931532defe4ecb484042a6be01674da33). The footage is event-selected, so this is the crowding the clips show, not an average hour; sweep down to 0.1x the observed rate. DAYGEN spreads it over the layout states (twin.daygen.state_rate_per_h: each state's train units per clip-hour / recall)"
   },
   "zone.z14.walker_rate_per_h": {
    "value": 110.552656,
@@ -4337,7 +4348,7 @@
     "family": "poisson",
     "params": {}
    },
-   "note": "ASSUMED: observed 9 person units in 0.120 h of train footage (74.7/h) divided by DEV person recall 0.676 (dev labels vs dev tracks, camera 9: 52/95, camera 14: 25/37; scored.json sha256 9e68d146bd0807b9). The footage is event-selected, so this is the crowding the clips show, not an average hour; sweep down to 0.1x the observed rate"
+   "note": "ASSUMED: observed 9 person units in 0.120 h of train footage (74.7/h) divided by DEV person recall 0.676 (dev labels vs dev tracks, camera 9: 52/95, camera 14: 25/37; labels/dev/scored.json sha256(LF) 9e68d146bd0807b91b8a1aa119d83325f684fafc24b43e504b40cf90b9d78380 from lane/S4-labels-fix2 @ 5eec96a931532defe4ecb484042a6be01674da33). The footage is event-selected, so this is the crowding the clips show, not an average hour; sweep down to 0.1x the observed rate. DAYGEN spreads it over the layout states (twin.daygen.state_rate_per_h: each state's train units per clip-hour / recall)"
   },
   "zone.z14.forklift_rate_per_h": {
    "value": 647.380419,

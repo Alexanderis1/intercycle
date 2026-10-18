@@ -140,3 +140,142 @@ def test_validation_sample_shape(inp, monkeypatch):
     assert set(res) >= {"speeds", "intervals", "n_windows", "seeds", "footage_unsafe_share"}
     assert res["intervals"].get("P9a")
     assert all(1.0 < v < 3.0 for v in res["intervals"]["P9a"])
+
+
+# ------------------------------------------------------------------------------------------------ fix round 1
+
+@pytest.mark.parametrize("call", [
+    lambda inp, s: G.world_p_running(s, "P9a", inp.dyn),
+    lambda inp, s: G.day_states(s, 1, "z9", inp.tables),
+    lambda inp, s: G.staffing(s, 1, inp.dyn),
+    lambda inp, s: G.press_events(s, 1, "P9a", inp, 600.0),
+    lambda inp, s: G.arrivals(s, 1, "z9", "person", inp, 600.0),
+], ids=["world_p_running", "day_states", "staffing", "press_events", "arrivals"])
+def test_public_draw_helpers_refuse_test_seeds(inp, monkeypatch, call):
+    """PLAN §5: test-world truth only inside the sealed run; every public draw helper checks the seed itself."""
+    monkeypatch.delenv("INTERCYCLE_SEALED_RUN", raising=False)
+    with pytest.raises(PermissionError):
+        call(inp, 5000)
+    call(inp, 999)
+    monkeypatch.setenv("INTERCYCLE_SEALED_RUN", "1")
+    call(inp, 5000)
+
+
+# z14 layout states with uneven unit counts: under a uniform pick inside the day's state, unit "A0" (the only unit of
+# the most likely bright state) would get 60 % of the bright arrivals instead of 1/4; state E has no unit at all
+SHARE_STATES = {"A": (60.0, "bright", 1), "B": (40.0, "bright", 3), "C": (50.0, "dim", 2), "D": (50.0, "dim", 1),
+                "E": (30.0, "dim", 0)}
+SHARE_SEEDS = range(0, 1000)
+
+
+@pytest.fixture(scope="module")
+def share_inp(inp) -> G.Inputs:
+    tables = {"layout_states": {
+        "z14": {g: {"zone": "z14", "clip_seconds": h, "lum_class": lum, "framing": "c14_f0"}
+                for g, (h, lum, _) in SHARE_STATES.items()},
+        "z9": {"S9": {"zone": "z9", "clip_seconds": 10.0, "lum_class": "bright", "framing": "c9_f0"}}}}
+    units, segs = [], {}
+    for g, (_, lum, n) in SHARE_STATES.items():
+        for i in range(n):
+            sid = f"seg:{g}{i}"
+            segs[sid] = Segment(id=sid, cls="person", source="resampled", clip_id="x", track_id=i,  # type: ignore[arg-type]
+                                points=[(0.0, 20.0, 0.0), (4.0, 22.0, 1.0)])
+            units.append(G.Unit(unit_id=f"{g}{i}", zone="z14", cls="person", group_id=g, lum_class=lum,
+                                unsafe=bool(i % 2), framing="c14_f0", clip_id="x", clip_dur=6.0, unit_t0=0.5,
+                                members=[(sid, 0.0)]))
+    dyn = inp.dyn.model_copy(deep=True)
+    dyn.assumed["zone.z14.walker_rate_per_h"].value = 2.0
+    return G.Inputs(site=inp.site, dyn=dyn, tables=tables, lib=G.Library(units=units, segments=segs, sha256="x"),
+                    footage_violation=True)
+
+
+@pytest.fixture(scope="module")
+def share_days(share_inp) -> list[tuple[int, list[G.Arrival]]]:
+    return [(s, G.arrivals(s, 1, "z14", "person", share_inp, G.DAY_S)) for s in SHARE_SEEDS]
+
+
+def test_state_rates_average_to_the_zone_rate(share_inp):
+    st = share_inp.tables["layout_states"]["z14"]
+    h = sum(s["clip_seconds"] for s in st.values())
+    mean = sum(G.state_rate_per_h("z14", "person", g, share_inp) * s["clip_seconds"] / h for g, s in st.items())
+    assert mean == pytest.approx(2.0)
+    assert G.state_rate_per_h("z14", "person", "E", share_inp) == 0.0
+    # per unit, every state has the same rate: units per clip-hour / recall is constant across states
+    per_unit = {g: G.state_rate_per_h("z14", "person", g, share_inp) / n * st[g]["clip_seconds"]
+                for g, (_, _, n) in SHARE_STATES.items() if n}
+    assert max(per_unit.values()) == pytest.approx(min(per_unit.values()))
+
+
+def test_long_run_unit_shares_match_the_library_within_a_lighting_class(share_inp, share_days):
+    """Audit fix 2: within a lighting class every train unit is resampled equally often (1/units of that class)."""
+    ns = share_inp.dyn.get("site.night_share").value
+    counts: dict[str, dict[str, int]] = {"bright": {}, "dim": {}}
+    for _, arr in share_days:
+        for a in arr:
+            lum = "dim" if G.is_night(a.t, ns) else "bright"
+            assert a.unit.group_id in G.lighting_states("z14", lum, share_inp.tables)[0]
+            counts[lum][a.unit.unit_id] = counts[lum].get(a.unit.unit_id, 0) + 1
+    for lum, want_units in (("bright", {"A0", "B0", "B1", "B2"}), ("dim", {"C0", "C1", "D0"})):
+        c = counts[lum]
+        assert set(c) == want_units
+        tot = sum(c.values())
+        for u, k in c.items():
+            assert abs(k / tot - 1 / len(want_units)) < 0.04, (lum, u, k / tot)
+
+
+def test_validation_anchors_weight_every_train_unit_equally(share_inp, share_days):
+    """The validation selection keeps anchors proportional to arrivals with the train lighting mix, so each library
+    unit anchors equally often (the dataset counts each of its tracks once)."""
+    keep = G.anchor_probs(share_inp, 5)
+    c: dict[str, int] = {}
+    for s, arr in share_days:
+        picked, _ = G.anchors(s, 1, "z14", "person", arr, keep, share_inp)
+        for a in picked:
+            c[a.unit.unit_id] = c.get(a.unit.unit_id, 0) + 1
+    tot = sum(c.values())
+    assert set(c) == {u.unit_id for u in share_inp.lib.units}
+    assert abs(tot / len(share_days) - 5.0) < 0.5
+    for u, k in c.items():
+        assert abs(k / tot - 1 / 7) < 0.03, (u, k / tot)
+
+
+def test_unsafe_flag_is_dropped_before_the_state(share_inp):
+    lib = share_inp.lib
+    assert [u.unit_id for u in lib.pool("z14", "person", "A", True)] == ["A0"]       # A has no unsafe unit
+    assert {u.unit_id for u in lib.pool("z14", "person", "B", True)} == {"B1"}
+
+
+def _site_safety(tmp_path, site: Site) -> Path:
+    """twin/safety.yaml re-keyed onto the v1 site (it still names the v0 site and presses P9a, P14a): every v1 press
+    gets the P9a guard entry."""
+    import yaml
+
+    d = yaml.safe_load((REPO / "twin" / "safety.yaml").read_text(encoding="utf-8"))
+    entry = next(p for p in d["presses"] if p["press"] == "P9a")
+    d["site_id"] = site.site_id
+    d["presses"] = [{**entry, "press": p.id} for p in site.presses]
+    p = tmp_path / "safety.yaml"
+    p.write_text(yaml.safe_dump(d), encoding="utf-8")
+    return p
+
+
+def test_engine_and_plant_build_from_dynamics_v1_and_a_daygen_v1_day(inp, tmp_path, monkeypatch):
+    """Audit fix 1: the engine reads the shared press.stroke_impulse_s of twin/dynamics.json (v0 contract key)."""
+    from twin import plant as PL
+    from twin.engine import Engine
+
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
+    dyn = load(Dynamics, G.DYNAMICS)
+    p = dyn.get("press.stroke_impulse_s")
+    assert p.source == "prior" and p.n == 0 and p.sweep.lo <= p.value <= p.sweep.hi
+    ds = G.generate_day(5, 1, inputs=inp, duration_s=600.0)
+    eng = Engine(ds, inp.site, dyn)
+    assert eng is not None
+    sp = G.write_day(ds, tmp_path / "w5_d1.day_script.json")
+    cfg = {"seconds": 120.0, "sim": "fake",
+           "plant": {"site": str(G.SITE), "safety": str(_site_safety(tmp_path, inp.site)), "dynamics": str(G.DYNAMICS),
+                     "day_script": str(sp), "run_id": "dyn_v1", "zone": "z9", "world": 0, "world_split": "dev",
+                     "condition": "learned", "code": {"head": "test"}, "plant_t0": ds.t0_s,
+                     "run_dir": str(tmp_path / "runs" / "dyn_v1"), "allow_short_mission": True}}
+    plant = PL.make(cfg)
+    assert plant.engine is not None and plant.world_seed == 5

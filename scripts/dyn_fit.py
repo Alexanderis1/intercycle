@@ -5,16 +5,23 @@ Both .npz files are plain numpy arrays: the generator (twin/daygen.py) is Isaac-
 
 Inputs: PERC tracks and machines tables of the A1+ TRAIN split (`esk.load("train")`), projected to the floor with
 CAL v1 (`twin/site.yaml` H and k1 per framing, `project_tracks`), and the train keyframes' mean grey level (luma).
-The arrival-rate correction uses person recall measured on the DEV labels (labels/dev, or `--labels-ref` git ref)
-against the DEV tracks; it only enters ASSUMED parameters (their notes say so).
-Every fitted parameter lists its train clip ids; `twin.provenance.assert_train_only` checks them before writing.
+The arrival-rate correction uses person recall measured on the DEV labels (labels/dev, or the `--labels-ref` git
+ref when labels/dev is not in the tree) against the DEV tracks; it only enters ASSUMED parameters (their notes say
+so). The labels' scored.json must have the pinned sha256 (`SCORED_SHA256`, or `--labels-sha256`): other labels fail
+closed instead of silently changing the rates; its full sha256 and source (tree or ref + commit) are recorded.
+Fail-closed order: everything is computed in memory first; `twin.provenance.assert_train_only` then checks every
+clip id set the outputs come from (fitted parameters, library, press clips / judged / running, press masks, layout
+states, the jitter and gap clips of the validation camera) and only then is any file written. An .npz whose arrays
+are unchanged is not rewritten (np.savez stamps the zip with the time, so a rewrite would change the library sha256
+pinned in dynamics.json for the same content).
 
-    python scripts/dyn_fit.py [--labels-ref lane/S4-labels-fix2]
+    python scripts/dyn_fit.py [--labels-ref lane/S4-labels-fix2] [--labels-sha256 <sha>]
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 import subprocess
@@ -43,6 +50,9 @@ MASKS_NAME = "dyn/press_masks_v1.npz"    # train press clips' frame times + MISS
 IMPULSE_HALF_S = 0.8               # +-0.8 s around a stroke (under half of the shorter learned period, 1.69 s)
 FORKLIFT_RECALL = (8, 13)          # P5 agent check on camera 14 (lead decision): 8 of 13 forklifts found, precision 1.00
 UNSAFE_PREFIXES = (0, 1, 2, 3)     # scripts/esk_split.py: class prefixes 0-3 are unsafe behaviour clips
+LABELS_REF = "lane/S4-labels-fix2"  # DEV labels (S4) used for the recall correction; not merged into main yet
+SCORED_SHA256 = "9e68d146bd0807b91b8a1aa119d83325f684fafc24b43e504b40cf90b9d78380"   # its labels/dev/scored.json (LF)
+SHARED_IMPULSE_PRIOR_S = 0.6       # dynamics_v0 `press.stroke_impulse_s` (the engine's one ram impulse for all presses)
 LIBRARY_COLUMNS = ["unit_id", "seg_id", "zone", "cls", "clip_id", "track_id", "piece", "group_id", "framing",
                    "lum_class", "unsafe", "clip_dur", "unit_t0", "seg_t_off", "dt", "x", "z"]
 
@@ -51,16 +61,46 @@ def sha256_file(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def write_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
-    """np.savez with plain (non-object) dtypes, so np.load(allow_pickle=False) reads it."""
+def plain_arrays(arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Plain (non-object) dtypes, so np.load(allow_pickle=False) reads them."""
     out = {}
     for k, v in arrays.items():
         a = np.asarray(v)
         if a.dtype == object:
             a = a.astype(str)
         out[k] = a
-    with open(path, "wb") as f:
-        np.savez(f, **out)  # type: ignore[arg-type]
+    return out
+
+
+def npz_bytes(arrays: dict[str, np.ndarray]) -> bytes:
+    buf = io.BytesIO()
+    np.savez(buf, **plain_arrays(arrays))  # type: ignore[arg-type]
+    return buf.getvalue()
+
+
+def same_npz(path: Path, arrays: dict[str, np.ndarray]) -> bool:
+    """True when `path` holds exactly these arrays (same names, dtypes, shapes and values)."""
+    if not path.exists():
+        return False
+    want = plain_arrays(arrays)
+    with np.load(path, allow_pickle=False) as z:
+        if sorted(z.files) != sorted(want):
+            return False
+        return all(z[k].dtype == want[k].dtype and z[k].shape == want[k].shape and np.array_equal(z[k], want[k])
+                   for k in want)
+
+
+def put_npz(path: Path, arrays: dict[str, np.ndarray], raw: bytes) -> str:
+    """Write the npz unless the file already holds the same arrays; returns the sha256 of the file on disk."""
+    if not same_npz(path, arrays):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    return sha256_file(path)
+
+
+def npz_sha(path: Path, arrays: dict[str, np.ndarray], raw: bytes) -> str:
+    """sha256 the file will have after `put_npz` (the existing file's when its arrays are unchanged)."""
+    return sha256_file(path) if same_npz(path, arrays) else hashlib.sha256(raw).hexdigest()
 
 
 def sha256_lf(p: Path) -> str:
@@ -121,8 +161,20 @@ def two_means_split(x: np.ndarray) -> float:
 
 # ------------------------------------------------------------------------------------------------ recall (dev)
 
-def load_labels(ref: str | None) -> tuple[list[dict], str]:
-    """Scored DEV label frames (labels/dev/scored.json statuses) and the sha256 of scored.json."""
+def labels_source(ref: str | None) -> str:
+    """Where load_labels reads labels/dev from: the tree, else `<ref> @ <commit>`."""
+    if (ROOT / "labels" / "dev" / "scored.json").exists():
+        return "labels/dev (tree)"
+    if not ref:
+        raise FileNotFoundError("labels/dev missing; pass --labels-ref <git ref holding labels/dev>")
+    commit = subprocess.run(["git", "-C", str(ROOT), "rev-parse", f"{ref}^{{commit}}"], check=True,
+                            capture_output=True, text=True).stdout.strip()
+    return f"{ref} @ {commit}"
+
+
+def load_labels(ref: str | None, want_sha256: str = SCORED_SHA256) -> tuple[list[dict], str]:
+    """Scored DEV label frames (labels/dev/scored.json statuses) and the sha256 (LF) of scored.json, which must be
+    `want_sha256` (fail closed: other labels would change the ASSUMED rates without a deliberate re-pin)."""
     def read(name: str) -> bytes:
         p = ROOT / "labels" / "dev" / name
         if p.exists():
@@ -133,6 +185,10 @@ def load_labels(ref: str | None) -> tuple[list[dict], str]:
                               capture_output=True).stdout
 
     scored_b = read("scored.json")
+    sha = hashlib.sha256(scored_b.replace(b"\r\n", b"\n")).hexdigest()
+    if sha != want_sha256:
+        raise ValueError(f"labels/dev/scored.json sha256 {sha} != pinned {want_sha256}: re-pin deliberately "
+                         "(--labels-sha256) to fit on other labels")
     scored = json.loads(scored_b)
     sets: dict[str, dict] = {}
     frames = []
@@ -143,7 +199,7 @@ def load_labels(ref: str | None) -> tuple[list[dict], str]:
         if ls not in sets:
             sets[ls] = {fr["sample_id"]: fr for fr in json.loads(read(ls))["frames"]}
         frames.append({**sets[ls][f["sample_id"]], "camera": int(f["camera"])})
-    return frames, hashlib.sha256(scored_b.replace(b"\r\n", b"\n")).hexdigest()
+    return frames, sha
 
 
 def person_recall(frames: list[dict], data: Path) -> dict[int, tuple[int, int]]:
@@ -179,7 +235,8 @@ def person_recall(frames: list[dict], data: Path) -> dict[int, tuple[int, int]]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--labels-ref", default=None, help="git ref to read labels/dev from when not in the tree")
+    ap.add_argument("--labels-ref", default=LABELS_REF, help="git ref to read labels/dev from when not in the tree")
+    ap.add_argument("--labels-sha256", default=SCORED_SHA256, help="required sha256 (LF) of labels/dev/scored.json")
     a = ap.parse_args()
 
     data = esk.data_root()
@@ -223,6 +280,7 @@ def main() -> None:
     group_sizes: list[int] = []
     jitter_tracks: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
     gap_tabs: dict[int, list[pd.DataFrame]] = {}
+    valcam_clips: set[str] = set()                  # clips whose tracks fit the validation camera (jitter, gaps)
     for cid in sorted(tr_ids):
         row = inv.loc[cid]
         cam, fr = int(row["camera"]), str(row["framing_id"])
@@ -235,6 +293,7 @@ def main() -> None:
             g = g.sort_values("t")
             jitter_tracks.setdefault(fr, []).append((g["u"].to_numpy(float), g["v"].to_numpy(float)))
         gap_tabs.setdefault(cam, []).append(track_gaps(cast(pd.DataFrame, raw.loc[raw["class"] == "person"])))
+        valcam_clips.add(cid)
         tr = project_tracks(raw, H, K1)
         pieces: dict[str, list[tuple]] = {"person": [], "forklift": []}
         for key, g in tr.groupby(["class", "track_id"], sort=True):
@@ -269,9 +328,9 @@ def main() -> None:
                                          float(x[i]), float(z[i])))
     lib = pd.DataFrame(lib_rows, columns=pd.Index(LIBRARY_COLUMNS))
     lib_path = data / LIB_NAME
-    lib_path.parent.mkdir(parents=True, exist_ok=True)
-    write_npz(lib_path, {c: lib[c].to_numpy() for c in LIBRARY_COLUMNS})     # numpy-readable (Isaac-side generator)
-    lib_sha = sha256_file(lib_path)
+    lib_arrays = {c: lib[c].to_numpy() for c in LIBRARY_COLUMNS}               # numpy-readable (Isaac-side generator)
+    lib_raw = npz_bytes(lib_arrays)
+    lib_sha = npz_sha(lib_path, lib_arrays, lib_raw)                        # written only after the provenance check
     udf = pd.DataFrame(units)
     lib_clips = sorted(set(lib["clip_id"]))
 
@@ -291,6 +350,7 @@ def main() -> None:
     press_tab: dict = {"contract": "intercycle.dyn_press/1", "presses": {}}
     press_params: dict[str, dict] = {}
     masks: list[tuple[str, np.ndarray, np.ndarray]] = []
+    mask_clips: set[str] = set()
     for p in site.presses:
         mdir = data / "machines" / p.id
         cids = sorted(c for c in (f.stem for f in mdir.glob("*.parquet")) if c in tr_ids)
@@ -302,6 +362,7 @@ def main() -> None:
             st, miss = m["stroke"].to_numpy(bool), m["missing"].to_numpy(bool)
             if len(t) > 2:
                 masks.append((p.id, t, miss))
+                mask_clips.add(cid)
             if len(t) > 2:
                 dt_frame = float(np.median(np.diff(t)))
             obs_s = float((~miss).sum() * (np.median(np.diff(t)) if len(t) > 2 else 0.0))
@@ -348,18 +409,25 @@ def main() -> None:
         press_params[p.id] = {**entry, "learned": learned, "judged": judged, "running": running, "cids": cids}
 
     starts = np.cumsum([0] + [len(t) for _, t, _ in masks[:-1]])
-    write_npz(data / MASKS_NAME, {"press": np.array([p for p, _, _ in masks]), "start": starts.astype(np.int64),
-                                  "t": np.concatenate([t for _, t, _ in masks]),
-                                  "missing": np.concatenate([m for _, _, m in masks])})
+    mask_arrays = {"press": np.array([p for p, _, _ in masks]), "start": starts.astype(np.int64),
+                   "t": np.concatenate([t for _, t, _ in masks]), "missing": np.concatenate([m for _, _, m in masks])}
+    mask_raw = npz_bytes(mask_arrays)
 
     # ---- recall (dev labels vs dev tracks) for the ASSUMED arrival-rate correction
-    frames, scored_sha = load_labels(a.labels_ref)
+    labels_src = labels_source(a.labels_ref)
+    frames, scored_sha = load_labels(a.labels_ref, a.labels_sha256)
     rec = person_recall(frames, data)
 
-    OUT_PRESS.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PRESS.write_text(json.dumps(press_tab, indent=1) + "\n", encoding="utf-8", newline="\n")
-    OUT_CAM.write_text(json.dumps(valcam, indent=1) + "\n", encoding="utf-8", newline="\n")
-    press_sha = sha256_lf(OUT_PRESS)
+    # ---- press tables (in memory; written after the provenance check)
+    zone_states = {zid: {g: s for g, s in states.items() if s["zone"] == zid}
+                   for zid in sorted({s["zone"] for s in states.values()})}
+    press_tab["layout_states"] = zone_states
+    press_tab["luma"] = lum_info
+    press_tab["library"] = {"path": f"$INTERCYCLE_DATA/{LIB_NAME}", "sha256": lib_sha, "rows": int(len(lib)),
+                            "units": int(len(udf)), "segments": int(lib["seg_id"].nunique())}
+    press_txt = json.dumps(press_tab, indent=1) + "\n"
+    cam_txt = json.dumps(valcam, indent=1) + "\n"
+    press_sha = hashlib.sha256(press_txt.encode("utf-8")).hexdigest()           # = sha256_lf of the LF file
 
     # ---- dynamics.json
     hours = {cam: float(train.loc[train["camera"] == cam, "duration"].sum()) / 3600.0 for cam in (9, 14)}
@@ -395,10 +463,7 @@ def main() -> None:
                 1.0, "scale", "fitted", len(u), 1.0, 1.0, ref=lib_ref, clips=sorted(set(u["clip_id"])),
                 note=f"{len(u)} resampling units ({int(u['n'].sum())} smoothed track pieces, rolling median "
                      f"{DF.SMOOTH_N} samples, one point per {DF.DECIM_S} s) from train tracks projected with CAL v1")
-    zone_states = {}
-    for zid in sorted({s["zone"] for s in states.values()}):
-        st = {g: s for g, s in states.items() if s["zone"] == zid}
-        zone_states[zid] = st
+    for zid, st in zone_states.items():
         cl = sorted(train.loc[train["group_id"].isin(list(st)), "clip_id"])
         tot = sum(s["clip_seconds"] for s in st.values())
         obs[f"layout.{zid}.states"] = param(
@@ -455,6 +520,17 @@ def main() -> None:
             asm[f"press.{pid}.stroke_impulse_s"] = param(0.6, "s", "prior", 0, 0.3, 1.0, note="v0 prior")
             asm[f"press.{pid}.interval_km"] = param(0.0, "probability", "prior", 0, 0.0, 0.2,
                                                     note="no in-clip pauses without strokes; prior 0")
+    # the engine (twin/engine.py) draws one ram impulse for every press from the shared key press.stroke_impulse_s
+    # (the frozen v0 contract key): the per-press fits are not resolved impulses, so the shared value stays the prior
+    fwhm = {pid: e["impulse_fwhm_s"] for pid, e in press_params.items() if e["learned"]}
+    asm["press.stroke_impulse_s"] = param(
+        SHARED_IMPULSE_PRIOR_S, "s", "prior", 0, 0.3, max([1.0, *fwhm.values()]),
+        note="ram down-and-up duration of one stroke, shared by all presses (read by twin/engine.py): the v0 prior, "
+             "ASSUMED. Not fitted: the per-press values press.<id>.stroke_impulse_s ("
+             + ", ".join(f"{p} {v:.2f} s" for p, v in sorted(fwhm.items()))
+             + ") are the FWHM of the ROI-mean |flow_v| and are NOT RESOLVED (the width reaches the "
+             f"+-{IMPULSE_HALF_S} s window), so they are a lower bound of a near-continuous ROI motion, not the ram "
+             "impulse; the sweep reaches the largest of them")
     # ---- ASSUMED block
     rec_note = ", ".join(f"camera {c}: {k}/{n}" for c, (k, n) in sorted(rec.items()))
     for zid, cam in (("z9", 9), ("z14", 14)):
@@ -466,9 +542,11 @@ def main() -> None:
         asm[f"zone.{zid}.walker_rate_per_h"] = param(
             rate, "1/h", "assumed", 0, 0.1 * obs_rate, 1.2 * rate, dist={"family": "poisson", "params": {}},
             note=f"ASSUMED: observed {len(u)} person units in {hours[cam]:.3f} h of train footage ({obs_rate:.1f}/h) "
-                 f"divided by DEV person recall {recall:.3f} (dev labels vs dev tracks, {rec_note}; scored.json "
-                 f"sha256 {scored_sha[:16]}). The footage is event-selected, so this is the crowding the clips show, "
-                 "not an average hour; sweep down to 0.1x the observed rate")
+                 f"divided by DEV person recall {recall:.3f} (dev labels vs dev tracks, {rec_note}; labels/dev/"
+                 f"scored.json sha256(LF) {scored_sha} from {labels_src}). The footage is event-selected, so this is "
+                 "the crowding the clips show, not an average hour; sweep down to 0.1x the observed rate. DAYGEN "
+                 "spreads it over the layout states (twin.daygen.state_rate_per_h: each state's train units per "
+                 "clip-hour / recall)")
     fl = udf[(udf["zone"] == "z14") & (udf["cls"] == "forklift")]
     fr_rec = FORKLIFT_RECALL[0] / FORKLIFT_RECALL[1]
     obs_fl = len(fl) / hours[14]
@@ -508,18 +586,27 @@ def main() -> None:
     # the split rows are read through esk's pointer rule (prereg/<name>), as scripts/cal_v1.py does: the bare
     # twin.schemas.prereg.load_active_split resolves the pointer from the repo root and fails closed on it
     split_rows = parse_split(esk.active_split_path(ROOT).read_text(encoding="utf-8"))
-    n = assert_train_only({"dynamics": model.train_clips(), "library": lib_clips}, split_rows)
-    press_tab["layout_states"] = zone_states
-    press_tab["luma"] = lum_info
-    press_tab["library"] = {"path": f"$INTERCYCLE_DATA/{LIB_NAME}", "sha256": lib_sha, "rows": int(len(lib)),
-                            "units": int(len(udf)), "segments": int(lib["seg_id"].nunique())}
-    OUT_PRESS.write_text(json.dumps(press_tab, indent=1) + "\n", encoding="utf-8", newline="\n")
-    press_sha2 = sha256_lf(OUT_PRESS)
-    txt = json.dumps(dyn, indent=1).replace(press_sha, press_sha2)
-    OUT_DYN.write_text(txt + "\n", encoding="utf-8", newline="\n")
-    Dynamics.model_validate_json(OUT_DYN.read_text(encoding="utf-8"))
+    state_clips = sorted(train.loc[train["group_id"].isin([g for st in zone_states.values() for g in st]), "clip_id"])
+    id_sets = {"dynamics": model.train_clips(), "library": lib_clips, "press_masks": sorted(mask_clips),
+               "layout_states": state_clips, "valcam_jitter_gaps": sorted(valcam_clips)}
+    for pid, e in press_params.items():
+        id_sets.update({f"press:{pid}:clips": e["cids"], f"press:{pid}:judged": e["judged"],
+                        f"press:{pid}:running": e["running"]})
+    n = assert_train_only(id_sets, split_rows)          # fail closed BEFORE any output is written
+    # ---- write (only after the provenance check)
+    dyn_txt = json.dumps(dyn, indent=1) + "\n"
+    Dynamics.model_validate_json(dyn_txt)
+    lib_sha_disk = put_npz(lib_path, lib_arrays, lib_raw)
+    if lib_sha_disk != lib_sha:
+        raise RuntimeError(f"path library sha256 {lib_sha_disk} != the {lib_sha} pinned in dynamics.json")
+    put_npz(data / MASKS_NAME, mask_arrays, mask_raw)
+    OUT_PRESS.parent.mkdir(parents=True, exist_ok=True)
+    OUT_PRESS.write_text(press_txt, encoding="utf-8", newline="\n")
+    OUT_CAM.write_text(cam_txt, encoding="utf-8", newline="\n")
+    OUT_DYN.write_text(dyn_txt, encoding="utf-8", newline="\n")
     print(json.dumps({"train_ids_checked": n, "library": press_tab["library"], "recall": rec,
-                      "dynamics_sha256_lf": sha256_lf(OUT_DYN), "press_sha256_lf": press_sha2}, indent=1))
+                      "labels": {"scored_sha256": scored_sha, "source": labels_src},
+                      "dynamics_sha256_lf": sha256_lf(OUT_DYN), "press_sha256_lf": sha256_lf(OUT_PRESS)}, indent=1))
 
 
 def _beta_q(a: float, b: float, q: float) -> float:
