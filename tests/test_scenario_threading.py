@@ -154,6 +154,19 @@ def test_half_threaded_twin_cfgs_are_refused(world_dir):
         "other path": _launch(base, " -p scenario:=$IC_WORLD/other.yaml"),
         "overridden later": dict(good, goal_cmd=good["goal_cmd"] + " -p scenario:=/x/bodyshop.yaml"),
         "empty value": _launch(base, " -p scenario:="),
+        # fix2: other ROS 2 forms that set the same parameter after the correct argument
+        "node-prefixed override": dict(good, goal_cmd=good["goal_cmd"] + " -p timing_planner:scenario:=/x/b.yaml"),
+        "quoted override": dict(good, goal_cmd=good["goal_cmd"] + " -p 'scenario:=/x/b.yaml'"),
+        "double-quoted override": dict(good, extra_launch=[c + ' -p "scenario:=/x/b.yaml"' for c in
+                                                            good["extra_launch"]]),
+        "params file": dict(good, goal_cmd=good["goal_cmd"] + " --params-file /x/p.yaml"),
+        "params file in the bridge": dict(good, extra_launch=[c + " --params-file /x/p.yaml" for c in
+                                                               good["extra_launch"]]),
+        "list goal lacks arg": dict(good, goal_cmd=["python3", "-m", "intercycle_nav.timing_planner", "--ros-args"]),
+        "list goal node-prefixed override": dict(good, goal_cmd=["python3", "-m", "intercycle_nav.timing_planner",
+                                                                 "--ros-args", "-p",
+                                                                 "scenario:=$IC_WORLD/scenario.yaml", "-p",
+                                                                 "timing_planner:scenario:=/x/b.yaml"]),
     }
     for name, cfg in cases.items():
         try:
@@ -163,6 +176,10 @@ def test_half_threaded_twin_cfgs_are_refused(world_dir):
         pytest.fail(f"accepted a half-threaded twin cfg: {name}")
     with pytest.raises(TypeError):
         check_robot_scenario(dict(good, extra_launch="exec python3 -m intercycle_nav.observer_bridge"))
+    with pytest.raises(TypeError):
+        check_robot_scenario(dict(good, goal_cmd=7))
+    with pytest.raises(TypeError):
+        check_robot_scenario(dict(good, extra_launch=[{"cmd": "x"}]))
 
 
 def test_body_shop_cfg_with_a_stray_scenario_argument_is_refused(world_dir):
@@ -171,3 +188,57 @@ def test_body_shop_cfg_with_a_stray_scenario_argument_is_refused(world_dir):
     with pytest.raises(ValueError, match="body shop"):
         load_scenario(stray)
     check_robot_scenario(_launch({"world_dir": str(world_dir)}))
+    for extra in (" -p timing_planner:scenario:=/x/twin.yaml", " -p 'scenario:=/x/twin.yaml'",
+                  ' -p "scenario:=/x/twin.yaml"', " --params-file /x/p.yaml"):      # fix2: every form is refused
+        with pytest.raises(ValueError):
+            check_robot_scenario(_launch({"world_dir": str(world_dir)}, extra))
+
+
+# ------------------------------------------------------------------ fix2: list commands, build-time check
+
+
+def test_body_shop_and_twin_list_commands_are_accepted(world_dir):
+    """episode._start_cmd and intercycle_sim/README.md allow goal_cmd / extra_launch items as argv lists ($VAR
+    expansion): the check reads them instead of crashing (a body-shop regression of fix1)."""
+    goal = ["python3", "-u", "-m", "intercycle_nav.timing_planner", "--ros-args", "-p", "condition:=learned"]
+    bridge = ["python3", "-u", "-m", "intercycle_nav.observer_bridge", "--ros-args", "-p", "condition:=learned"]
+    body = {"world_dir": str(world_dir), "goal_cmd": goal, "extra_launch": [bridge, "exec python3 -m x"]}
+    check_robot_scenario(body)
+    assert load_scenario(body)[1] is None
+    with pytest.raises(ValueError, match="body shop"):
+        check_robot_scenario(dict(body, goal_cmd=goal + ["-p", "scenario:=/x/twin.yaml"]))
+    arg = ["-p", "scenario:=$IC_WORLD/scenario.yaml"]
+    twin = dict(body, scenario="scenario.yaml", goal_cmd=goal + arg, extra_launch=[bridge + arg])
+    check_robot_scenario(twin)
+    assert load_scenario(twin)[0].site_id == TWIN_SITE_ID
+    with pytest.raises(ValueError):
+        check_robot_scenario(dict(twin, extra_launch=[bridge]))
+
+
+def _patched_episode_cfg(cond: str, scenario: str) -> dict:
+    """The corrected hand-off patch for batch.episode_cfg (owner: the EVAL runner): set cfg["scenario"] and append
+    masks.scenario_ros_arg(cfg) to the observer_bridge command and to goal_cmd. No world_dir: episode.py adds it to
+    run_cfg at run time."""
+    from intercycle_eval.batch import episode_cfg
+
+    cfg = dict(episode_cfg("x", 20, cond), scenario=scenario)
+    arg = K.scenario_ros_arg(cfg)
+    return dict(cfg, goal_cmd=cfg["goal_cmd"] + arg,
+                extra_launch=[c + arg if "intercycle_nav.observer_bridge" in c else c for c in cfg["extra_launch"]])
+
+
+def test_build_time_check_needs_no_world_dir():
+    """Audit fix2 (major): the EVAL runner checks every condition's cfg when it BUILDS it, before episode.py adds
+    world_dir; a relative scenario (the intended form) must pass the launch-string check there. Resolving the path
+    (which needs world_dir) stays in load_scenario, at run time."""
+    from intercycle_eval.batch import CONDS, episode_cfg
+
+    for cond in CONDS:
+        fixed = _patched_episode_cfg(cond, "scenario.yaml")
+        assert "world_dir" not in fixed
+        check_robot_scenario(fixed)
+        with pytest.raises(ValueError, match="scenario"):              # unpatched strings: refused at build time
+            check_robot_scenario(dict(episode_cfg("x", 20, cond), scenario="scenario.yaml"))
+        with pytest.raises(ValueError, match="world_dir"):             # run time without world_dir: still refused
+            load_scenario(fixed)
+        check_robot_scenario(episode_cfg("x", 20, cond))               # body shop, every condition

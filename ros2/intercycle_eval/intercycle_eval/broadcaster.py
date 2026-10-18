@@ -54,31 +54,49 @@ def _models_patch(path: str):
     return d
 
 
-_ROS_SCENARIO = re.compile(r"(?:^|\s)(?:-p|--param)\s+scenario:=(\S*)")
+# Any assignment of a parameter named `scenario`, whatever precedes it: ' -p scenario:=', a node prefix
+# ('timing_planner:scenario:='), or quotes ("'scenario:=", '"scenario:='). Matching with no '-p' required is the
+# fail-closed side (a 'scenario:=' remap or launch argument counts too). The value stops at whitespace or a quote.
+_ROS_SCENARIO = re.compile(r"(?<!\w)scenario:=([^\s'\"]*)")
+# A ROS params file could set `scenario` where this check cannot see it: refused in robot-side commands.
+_PARAMS_FILE = re.compile(r"--params-file|(?<!\w)params_file:=")
 BRIDGE_MODULE = "intercycle_nav.observer_bridge"
 
 
+def _cmd_text(name: str, cmd) -> str:
+    """A launch command as text: a shell string as is, an argv list (episode._start_cmd's list form, $VAR expansion)
+    joined by spaces. Anything else fails closed."""
+    if isinstance(cmd, str):
+        return cmd
+    if isinstance(cmd, list) and all(isinstance(c, (str, int, float)) for c in cmd):
+        return " ".join(str(c) for c in cmd)
+    raise TypeError(f"run_cfg {name} must be a shell string or an argv list, got {cmd!r}")
+
+
 def check_robot_scenario(cfg: dict) -> None:
-    """Fail closed on a half-threaded scenario (S1b item 3, audit fix1).
+    """Fail closed on a half-threaded scenario (S1b item 3, audit fix1 / fix2).
 
     The robot side (observer_bridge -> masks.Site, timing_planner -> TimingCore) gets the scenario ONLY through the
     ' -p scenario:=...' ROS argument in its launch strings (masks.scenario_ros_arg); it never reads run_cfg. If the
     broadcaster loaded run_cfg["scenario"] while those strings lack the argument, it would sign frames with the twin
     site_id, the robot would load the body shop, and every frame would be rejected as 'wrong_site' (a counted
     rejection, not an error): the learned / oracle conditions would silently run without a feed. So: goal_cmd and
-    every observer_bridge command in extra_launch must carry exactly one scenario argument equal to
-    scenario_ros_arg(cfg), and none in body-shop mode (the reverse mismatch). In twin mode both commands must exist.
-    Raises ValueError (TypeError for non-string commands)."""
-    from intercycle_nav.masks import run_cfg_scenario, scenario_ros_arg
+    every observer_bridge command in extra_launch must carry exactly one scenario assignment (any form, see
+    _ROS_SCENARIO) equal to scenario_ros_arg(cfg), none in body-shop mode (the reverse mismatch), and no ROS params
+    file. In twin mode both commands must exist. Commands are shell strings or argv lists.
 
-    run_cfg_scenario(cfg)                                  # validates the key (type, relative path needs world_dir)
-    arg = scenario_ros_arg(cfg)
+    It compares launch strings only and needs no world_dir (a relative scenario is $IC_WORLD/<rel> in the strings),
+    so the EVAL runner can call it when it BUILDS each cfg, before episode.py adds world_dir; resolving the path is
+    load_scenario's job at run time. Raises ValueError (TypeError for malformed commands)."""
+    from intercycle_nav.masks import scenario_ros_arg
+
+    arg = scenario_ros_arg(cfg)                            # validates the key; needs no world_dir
     want = [arg.split(":=", 1)[1]] if arg else []
-    goal = cfg.get("goal_cmd") or ""
+    goal = _cmd_text("goal_cmd", cfg.get("goal_cmd") or "")
     extra = cfg.get("extra_launch") or []
-    if not isinstance(goal, str) or not isinstance(extra, list) or not all(isinstance(c, str) for c in extra):
-        raise TypeError("run_cfg goal_cmd must be a string and extra_launch a list of strings")
-    bridges = [c for c in extra if BRIDGE_MODULE in c]
+    if not isinstance(extra, list):
+        raise TypeError("run_cfg extra_launch must be a list of commands")
+    bridges = [c for c in (_cmd_text("extra_launch item", x) for x in extra) if BRIDGE_MODULE in c]
     if want and not goal:
         raise ValueError(f"run_cfg scenario {cfg['scenario']!r} is set but there is no goal_cmd (timing_planner) to "
                          "carry it to the robot side")
@@ -86,6 +104,9 @@ def check_robot_scenario(cfg: dict) -> None:
         raise ValueError(f"run_cfg scenario {cfg['scenario']!r} is set but extra_launch has no {BRIDGE_MODULE} "
                          "command to carry it to the robot side")
     for name, cmd in [("goal_cmd", goal)] + [(BRIDGE_MODULE, c) for c in bridges]:
+        if _PARAMS_FILE.search(cmd):
+            raise ValueError(f"{name} loads a ROS params file, which could set `scenario` unseen by this check: "
+                             "pass parameters with -p only on the robot-side launch strings")
         got = _ROS_SCENARIO.findall(cmd)
         if got != want:
             raise ValueError(f"{name} carries scenario argument(s) {got}, run_cfg wants {want or 'none (body shop)'}: "
@@ -96,7 +117,8 @@ def load_scenario(cfg: dict):
     """(Scenario, path) of the episode: run_cfg["scenario"] (twin mode: the compiled twin scenario; relative = inside
     world_dir), else the body-shop default (path None). The robot side gets the same path as a ROS parameter
     (intercycle_nav.masks.scenario_ros_arg), never by reading run_cfg; check_robot_scenario refuses the run first if
-    its launch strings do not carry exactly that argument."""
+    its launch strings do not carry exactly that argument, then run_cfg_scenario resolves the path (a relative one
+    needs the world_dir that episode.py adds to run_cfg)."""
     from intercycle import scenario as S
     from intercycle_nav.masks import run_cfg_scenario
 
