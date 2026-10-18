@@ -137,3 +137,17 @@ def test_rounds_refuse_an_overlapping_chain():
           for c in ("static", "learned", "reactive")]
     with pytest.raises(TB.BatchError, match="overlap"):
         TB.rounds(ms)
+
+
+def test_the_sealed_plan_matches_twin_eval_s_sealed_test_design():
+    """The launcher's 192 test-split run ids are exactly the cells of twin_eval's sealed design (fixed, K = 16)."""
+    from intercycle.eval import twin_design as D
+
+    ms = TB.plan(WORLDS, ["z9", "z14"])
+    des = D.make_design([], {}, split="test", engine="double", worlds=list(range(16)))
+    assert des.fixed and des.conditions == ("static", "learned", "reactive") and des.worlds == tuple(range(16))
+    cells = {D.parse_run_id(m.run_id) for m in ms}
+    want = {((w, d, z, c), 0) for w in des.worlds for d in des.days for z in ("z9", "z14") for c in des.conditions}
+    assert len(want) == 192 and cells == want
+    with pytest.raises(D.EvalError, match="K = 16"):
+        D.make_design([], {}, split="test", engine="double", worlds=list(range(15)))
