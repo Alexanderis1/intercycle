@@ -967,3 +967,83 @@ def test_robot_stages_are_refused_until_wired(s, monkeypatch):
     with pytest.raises(SR.Refusal, match="not wired"):
         SR.run(s["repo"], s["root"], ["double"], fake_fetch, fake_runner)
     assert os.environ.get(SR.SEALED_ENV) is None and not (s["repo"] / SR.RUNLOG).exists()
+
+
+# ------------------------------------------------------------------------------------------------ score (fix1)
+
+def _scored(monkeypatch):
+    import types
+
+    import twin.dev_labels as DL
+
+    seen = {}
+
+    def fake_load(blobs, samples, sha_of):
+        seen["load"] = (sorted(blobs), samples, sha_of)
+        return types.SimpleNamespace(doc={"counts": {"frames_scored": 0}})
+
+    def fake_scorer(labels_dir, data, site, splits, watchdog, scored, perc, clips_dir):
+        seen["score"] = dict(labels_dir=labels_dir, splits=splits, perc=perc, clips_dir=clips_dir, site=site)
+        return {"person": {"n": 0}, "frames": [{"label": "secret"}], "windows": [], "clips": ["0_te1"]}
+
+    monkeypatch.setattr(DL, "load_scored_test", fake_load)
+    return seen, fake_scorer
+
+
+def _ran(c):
+    try:
+        SR.run(c["repo"], c["root"], ["clips"], fake_fetch, fake_runner)
+    finally:
+        os.environ.pop(SR.SEALED_ENV, None)
+
+
+def test_score_runs_the_same_scorer_on_the_attempt_and_keeps_label_content_sealed(c, monkeypatch, tmp_path):
+    seen, scorer = _scored(monkeypatch)
+    with pytest.raises(SR.Refusal, match="no done clips attempt"):              # nothing ran yet
+        SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
+    _ran(c)
+    d = SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
+    assert d["attempt"] == 1
+    assert seen["load"][1] == "labels/samples.json" and seen["load"][2] == {k: sha(v) for k, v in CLIPS.items()}
+    assert seen["score"]["splits"] == ("test",) and seen["score"]["labels_dir"] is None
+    assert seen["score"]["perc"] == c["root"] / "perc" / "attempt_001"
+    assert seen["score"]["clips_dir"] == c["root"] / "clips" and seen["score"]["site"] == c["repo"] / SR.SITE
+    full = json.loads((c["root"] / SR.SCORES_DIR / "attempt_001_realclip_test.json").read_text(encoding="utf-8"))
+    summ = json.loads(Path(d["summary"]).read_text(encoding="utf-8"))
+    assert full["result"]["frames"] == [{"label": "secret"}] and full["freeze_realclip_sha"] == c["rc"]
+    assert "frames" not in summ["result"] and "windows" not in summ["result"] and "clips" not in summ["result"]
+    assert summ["result"]["person"] == {"n": 0} and summ["attempt"] == 1
+    with pytest.raises(SR.Refusal):                                             # scored once (and tree now dirty)
+        SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
+
+
+def test_score_refuses_changed_perc_outputs(c, monkeypatch, tmp_path):
+    seen, scorer = _scored(monkeypatch)
+    _ran(c)
+    write(c["root"] / "perc" / "attempt_001" / "tracks" / "0_te1.parquet", b"edited")
+    with pytest.raises(SR.Refusal, match="changed since the clips attempt"):
+        SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
+    write(c["root"] / "perc" / "attempt_001" / "tracks" / "0_te1.parquet", b"tclip zero")
+    write(c["root"] / "perc" / "attempt_001" / "boxes" / "extra.parquet", b"x")
+    with pytest.raises(SR.Refusal, match="differs from RUNLOG outputs"):
+        SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
+    assert "score" not in seen
+
+
+def test_score_runs_the_clips_refusals_first(c, monkeypatch, tmp_path):
+    seen, scorer = _scored(monkeypatch)
+    _ran(c)
+    write(c["repo"] / "pkg" / "helper.py", "X = 2\n")                          # a code change after FREEZE_REALCLIP
+    commit(c["repo"], "edit", "pkg/helper.py")
+    with pytest.raises(SR.Refusal, match="FREEZE_REALCLIP"):
+        SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
+    assert "score" not in seen and "load" not in seen
+
+
+def test_the_sealed_scorer_is_in_the_guarded_real_clip_set(monkeypatch):
+    monkeypatch.undo()                                  # the real CLIPS_STAGE_ROOTS, not the scratch-repo stand-in
+    for rel in ("intercycle/eval/realclip.py", "intercycle/observer/pixel_adapter.py", "twin/dev_labels.py"):
+        assert rel in SR.CLIPS_STAGE_ROOTS
+    assert SR.SITE in SR.REALCLIP_DATA_PATHS
+    got = SR.import_closure(REPO, "HEAD", SR.CLIPS_STAGE_ROOTS)
+    assert {"intercycle/eval/realclip.py", "twin/dev_labels.py", "twin/schemas/labels.py"} <= got

@@ -167,3 +167,19 @@ record and is never edited.
   machine, two test labeller agents), the `scripts/sealed_run.py` blob on main (`c6e7d530…`, replacing the
   lane/S1a-slice-fix1 blob `6d87cefc…` that the S1a-prereg draft cited), and the code that must change before FREEZE to
   match the text (PREREG §1).
+
+Lane notes under A2 item 4 and the split freeze (lane RC-freeze-fix1):
+
+- **Real-clip occlusion -> MISSING, limitation (lane RC-freeze-fix1, dev figures, results/dev/realclip_dev.json).**
+  Under the image-space ram-ROI rule (USER DECISION Sun ~07:00) the T-W6 claim is partial on the dev clips: inside the
+  labelled hidden spans 336/428 PERC samples (0.785) are flagged missing, so 92 (21.5 %) are not, and 31/35 2 Hz
+  Observation ticks (0.886) are MISSING, so 4 stay finite: a stroke can be emitted from an occluded ram ROI. On the
+  windows' non-hidden ticks 145/292 (0.497) are also MISSING, mostly from the M-W10 watchdog (ok on 487/763 = 0.638 of
+  all adapter ticks) and frame 0; the split of that base rate into watchdog, frame-0 and no-flow parts is not computed
+  yet. Both rates are reported beside the test figure.
+- **Sealed real-clip scoring (lane RC-freeze-fix1).** `scripts/sealed_run.py score` is the pre-registered analysis of
+  the real-clip test: same refusals as the clips stage, then the dev scorer (intercycle.eval.realclip.run) on the
+  LABELS-checked test labels with split test. Test stroke windows are scored by the dev status rules; reserves
+  (`-rN`) count only while their press has fewer than 10 scored windows, in list order, and a press that ends below
+  10 is reported (counts.short_presses), not refused. The watchdog's TRAIN keyframes and the inventory are read from
+  `$INTERCYCLE_DATA` (outside the repo, so not hash-guarded by the freeze).

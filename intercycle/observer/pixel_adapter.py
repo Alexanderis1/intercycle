@@ -44,6 +44,13 @@ from intercycle.observer import watchdog as WD
 from intercycle.perception.esk_ingest import project_tracks
 from twin.schemas.site import Site, polygon_bbox
 
+
+# The axis-aligned danger rect of a press polygon grown by its dilation. ONE helper, in the truth-free site schema,
+# shared with twin.plant (a truth module this real-clip path may not import: tests/test_truth_allowlist.py); the
+# name _bbox is kept for tests/test_realclip.py, which checks it equals twin.plant._bbox.
+_bbox = polygon_bbox
+
+
 TICK_S = 1.0 / OM.FRAME_HZ
 WATCH_WIDTH = 960                     # train keyframes are 960 px wide; live frames are resized to it (sharpness scale)
 CLASS_CODE = {"person": OM.PERSON, "forklift": OM.VEHICLE, "vehicle": OM.VEHICLE}

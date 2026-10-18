@@ -399,17 +399,27 @@ def train_references(inv: pd.DataFrame, data: Path, framings: Iterable[str]) -> 
     return refs
 
 
-def run(labels_dir: Path, data: Path, site_path: Path, allowed_splits: Sequence[str] = ("dev",),
-        watchdog: bool = True) -> dict:
+def run(labels_dir: Path | None, data: Path, site_path: Path, allowed_splits: Sequence[str] = ("dev",),
+        watchdog: bool = True, scored=None, perc: Path | None = None, clips_dir: Path | None = None) -> dict:
     """Score the scored DEV labels (twin.dev_labels.load_scored) against PERC output under `data`, running the pixel
-    adapter (with the M-W10 watchdog on decoded frames) on every labelled clip."""
+    adapter (with the M-W10 watchdog on decoded frames) on every labelled clip.
+    Sealed scoring (scripts/sealed_run.py score) passes `scored` (twin.dev_labels.load_scored_test), `perc` (the
+    attempt's PERC tables: tracks/, boxes/, machines/) and `clips_dir` (the MANIFEST-checked test clips) with
+    allowed_splits ("test",); `data` then gives only the inventory and the TRAIN keyframes of the watchdog."""
     from intercycle.observer import mapping as OM
     from intercycle.observer import pixel_adapter as PA
     from twin.dev_labels import load_scored
     from twin.schemas import load
     from twin.schemas.site import Site
 
-    sd = load_scored(labels_dir)
+    if scored is None:
+        if labels_dir is None:
+            raise ValueError("no labels: pass labels_dir (dev) or scored (sealed test)")
+        sd = load_scored(labels_dir)
+    else:
+        sd = scored
+    tab = perc if perc is not None else data
+    cdir = clips_dir if clips_dir is not None else data / "clips"
     inv = pd.read_parquet(data / "inventory.parquet")
     site = load(Site, site_path)
     geoms = PA.site_geometry(site)
@@ -432,12 +442,12 @@ def run(labels_dir: Path, data: Path, site_path: Path, allowed_splits: Sequence[
         g = geom_for(meta["framing"])
         if g is None:
             continue
-        tr = _read(data / "tracks" / f"{c}.parquet")
+        tr = _read(tab / "tracks" / f"{c}.parquet")
         if tr is None:
             raise FileNotFoundError(f"no PERC tracks for {c}")
-        mach = {p: d for p in g.press_ids if (d := _read(data / "machines" / p / f"{c}.parquet")) is not None}
+        mach = {p: d for p in g.press_ids if (d := _read(tab / "machines" / p / f"{c}.parquet")) is not None}
         dur = float(inv.loc[inv["clip_id"] == c, "duration"].iloc[0])
-        frames = PA.decode_ticks(data / "clips" / f"{c}.mp4", 0.0, dur) if watchdog else []
+        frames = PA.decode_ticks(cdir / f"{c}.mp4", 0.0, dur) if watchdog else []
         ad = PA.PixelAdapter(g, refs.get(meta["framing"]))  # type: ignore[arg-type]
         ad.reset()
         seq = []
@@ -456,10 +466,10 @@ def run(labels_dir: Path, data: Path, site_path: Path, allowed_splits: Sequence[
         g = geom_for(meta["framing"])
         proj = (lambda uv, g=g: PA.project_uv(uv, g)) if g is not None else None
         zf = (lambda xz, g=g: PA.machine_of(xz, g.rects)) if g is not None else None
-        bx = _read(data / "boxes" / f"{lab.clip_id}.parquet")
+        bx = _read(tab / "boxes" / f"{lab.clip_id}.parquet")
         if bx is None:
             raise FileNotFoundError(f"no PERC boxes for {lab.clip_id}")
-        preds, found = tracked_boxes(_read(data / "tracks" / f"{lab.clip_id}.parquet"), bx, lab.t_pts)
+        preds, found = tracked_boxes(_read(tab / "tracks" / f"{lab.clip_id}.parquet"), bx, lab.t_pts)
         frame_recs.append(score_frame(lab, preds, found, meta, proj, zf))
         dp, dfound = detector_boxes(bx, lab.t_pts)
         det_recs.append(score_frame(lab, dp, dfound, meta, proj, zf))
@@ -473,7 +483,7 @@ def run(labels_dir: Path, data: Path, site_path: Path, allowed_splits: Sequence[
             for t, o, pids in ticks[w.clip_id]:
                 j = pids.index(w.press) if w.press in pids else -1
                 tm.append((t, True if j < 0 else bool(np.isnan(o.zone_motion[j]))))
-        win_recs.append(score_window(w, _read(data / "machines" / w.press / f"{w.clip_id}.parquet"),
+        win_recs.append(score_window(w, _read(tab / "machines" / w.press / f"{w.clip_id}.parquet"),
                                      sd.ignore.get(w.sample_id, []), sd.hidden.get(w.sample_id, []), meta, tm))
 
     out = summarise(frame_recs, win_recs)

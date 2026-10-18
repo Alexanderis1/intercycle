@@ -81,19 +81,24 @@ class Part:
     samples_name: str
     samples_bytes: bytes
     supplement: bool = False
+    split: str = "dev"
     labels: LabelSet = field(init=False)
     samples: SampleList = field(init=False)
 
     def __post_init__(self):
         self.labels = LabelSet.model_validate(json.loads(self.labels_bytes))
         self.samples = SampleList.model_validate(json.loads(self.samples_bytes))
-        if self.labels.split != "dev" or self.samples.split != "dev":
-            raise ValueError(f"{self.labels_name}: dev label sets only")
+        if self.labels.split != self.split or self.samples.split != self.split:
+            raise ValueError(f"{self.labels_name}: {self.split} label sets only")
         check_complete(self.labels, self.samples, require_all=not self.supplement)
 
 
-def build_scored(parts: list[Part], sha_of: dict[str, str]) -> dict:
-    """The scored.json document for `parts` (base first). `sha_of` maps clip_id -> sha256 (dev inventory)."""
+def build_scored(parts: list[Part], sha_of: dict[str, str], test: bool = False) -> dict:
+    """The scored.json document for `parts` (base first). `sha_of` maps clip_id -> sha256 (dev inventory).
+    test=True (the sealed TEST labels, labels/TEST_RULES.md "Reserve windows are labelled like every other window;
+    which windows are scored is decided later from the list order"): every `-rN` window is a reserve, a reserve that
+    would be scored after its press already has TARGET_PER_PRESS scored windows is `not_needed`, and a press that ends
+    below the target is reported in counts["short_presses"] instead of refused (the labels are sealed)."""
     def csha(cid: str) -> str:
         if cid not in sha_of:
             raise ValueError(f"clip {cid} is not in the dev inventory")
@@ -102,6 +107,7 @@ def build_scored(parts: list[Part], sha_of: dict[str, str]) -> dict:
     frames_out, wins_out = [], []
     seen_f: dict[tuple, str] = {}
     seen_w: dict[tuple, str] = {}
+    n_scored: dict[str, int] = {}
     for part in parts:
         fl = {f.sample_id: f for f in part.labels.frames}
         wl = {w.sample_id: w for w in part.labels.stroke_windows}
@@ -118,7 +124,7 @@ def build_scored(parts: list[Part], sha_of: dict[str, str]) -> dict:
                                        status="duplicate" if dup else "scored", dup_of=dup))
                 continue
             w = wl.get(it.sample_id)
-            reserve = part.supplement and bool(RESERVE_RE.search(it.sample_id))
+            reserve = (part.supplement or test) and bool(RESERVE_RE.search(it.sample_id))
             row = dict(sample_id=it.sample_id, label_set=part.labels_name, press=it.press, clip_id=it.clip_id,
                        clip_sha256=csha(it.clip_id), t0=it.t0, t1=it.t1, dup_of=None, n_strokes=0, hidden=[],
                        edge=[], supplement_reserve=reserve)
@@ -149,10 +155,15 @@ def build_scored(parts: list[Part], sha_of: dict[str, str]) -> dict:
                     raise ValueError(f"{it.sample_id}: no strokes but neither 'NOT SCORABLE:' nor "
                                      f"'{NOT_RUNNING}' (fail closed)")
                 row["status"] = "not_running"
+            elif test and reserve and n_scored.get(str(it.press), 0) >= TARGET_PER_PRESS:
+                row["status"] = "not_needed"
             else:
                 row["status"] = "scored"
+            if row["status"] == "scored":
+                n_scored[str(it.press)] = n_scored.get(str(it.press), 0) + 1
             wins_out.append(row)
-    _check_stopping(wins_out)
+    if not test:
+        _check_stopping(wins_out)
     files = {}
     for part in parts:
         files[part.labels_name] = sha256_bytes(part.labels_bytes)
@@ -170,6 +181,9 @@ def build_scored(parts: list[Part], sha_of: dict[str, str]) -> dict:
                                          for a, b in w["edge"]), 3),
         "scored_strokes": sum(w["n_strokes"] for w in wins_out if w["status"] == "scored"),
     }
+    if test:
+        counts["short_presses"] = {p: n_scored.get(p, 0) for p in sorted({w["press"] for w in wins_out})
+                                   if n_scored.get(p, 0) < TARGET_PER_PRESS}
     parts_out = [dict(labels=p.labels_name, samples=p.samples_name, supplement=p.supplement) for p in parts]
     return dict(contract=CONTRACT, rule=RULE, parts=parts_out, files=files, frames=frames_out,
                 stroke_windows=wins_out, counts=counts)
@@ -248,3 +262,51 @@ def load_scored(labels_dir: Path) -> ScoredDev:
     return ScoredDev(frames=frames, windows=windows, hidden={r["sample_id"]: r["hidden"] for r in rows},
                      edge={r["sample_id"]: r["edge"] for r in rows},
                      ignore={r["sample_id"]: sorted(r["hidden"] + r["edge"]) for r in rows}, doc=doc)
+
+
+def load_scored_test(label_files: dict[str, bytes], samples_name: str, sha_of: dict[str, str]) -> ScoredDev:
+    """The scored TEST frames and stroke windows (sealed scoring, scripts/sealed_run.py score). `label_files` maps
+    each LABELS-hashed label file name to its bytes (the caller has checked them against sealed/LABELS.sha256), among
+    them the sample list `samples_name`; `sha_of` maps clip_id -> sha256 (the MANIFEST). Each label file is a test
+    LabelSet answering that sample list; together they label every sampled item exactly once (fail closed). Statuses:
+    build_scored(test=True), same rules as dev."""
+    samples = label_files[samples_name]
+    names = sorted(n for n in label_files if n != samples_name)
+    if not names:
+        raise ValueError("no test label file besides the sample list")
+    parts = [Part(n, label_files[n], samples_name, samples, supplement=True, split="test") for n in names]
+    labelled = [f.sample_id for p in parts for f in p.labels.frames] +                [w.sample_id for p in parts for w in p.labels.stroke_windows]
+    if len(labelled) != len(set(labelled)):
+        raise ValueError("a test sample is labelled in more than one label file")
+    want = {i.sample_id for i in parts[0].samples.items}
+    if set(labelled) != want:
+        raise ValueError(f"test labels leave {len(want - set(labelled))} sampled items unlabelled (every item is "
+                         f"labelled, TEST_RULES)")
+    # one base part per label file; reserves are decided by list order across the files (build_scored(test=True))
+    for p in parts:
+        p.supplement = False
+    doc = build_scored(_test_parts_in_list_order(parts), sha_of, test=True)
+    fmap = {f.sample_id: f for p in parts for f in p.labels.frames}
+    wmap = {w.sample_id: w for p in parts for w in p.labels.stroke_windows}
+    frames = [fmap[r["sample_id"]] for r in doc["frames"] if r["status"] == "scored"]
+    rows = [r for r in doc["stroke_windows"] if r["status"] == "scored"]
+    windows = [wmap[r["sample_id"]] for r in rows]
+    return ScoredDev(frames=frames, windows=windows, hidden={r["sample_id"]: r["hidden"] for r in rows},
+                     edge={r["sample_id"]: r["edge"] for r in rows},
+                     ignore={r["sample_id"]: sorted(r["hidden"] + r["edge"]) for r in rows}, doc=doc)
+
+
+def _test_parts_in_list_order(parts: list[Part]) -> list[Part]:
+    """build_scored walks each part's sample list in order; the test sample list is shared by every label file, so
+    the merged labels are given as ONE part (all labels of all files) to keep the list order across frames and
+    windows. The merged LabelSet is re-validated."""
+    base = json.loads(parts[0].labels_bytes)
+    base["frames"] = [json.loads(f.model_dump_json()) for p in parts for f in p.labels.frames]
+    base["stroke_windows"] = [json.loads(w.model_dump_json()) for p in parts for w in p.labels.stroke_windows]
+    for p in parts[1:]:
+        for k in ("rules_sha256", "sample_list_sha256", "split"):
+            if getattr(p.labels, k) != getattr(parts[0].labels, k):
+                raise ValueError(f"test label files disagree on {k}")
+    merged = Part("+".join(p.labels_name for p in parts), json.dumps(base).encode("utf-8"), parts[0].samples_name,
+                  parts[0].samples_bytes, supplement=False, split="test")
+    return [merged]

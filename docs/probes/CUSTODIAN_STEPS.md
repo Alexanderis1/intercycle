@@ -50,7 +50,15 @@ python scripts/custodian_fetch.py
   `git worktree add --detach C:\intercycle_rc <RCW>` ;
   `cd C:\intercycle_rc` ;
   `python scripts/sealed_run.py check --stages clips` (refusals only) ;
-  `python scripts/sealed_run.py run --stages clips`.
+  `python scripts/sealed_run.py run --stages clips` ;
+  `python scripts/sealed_run.py score` (same worktree, `INTERCYCLE_DATA` set to the dev data root: inventory and the
+  watchdog's TRAIN keyframes only).
+  `score` is the pre-registered real-clip analysis: it re-runs the same refusals, re-hashes the attempt's PERC tables
+  against RUNLOG, loads the LABELS-checked test labels (`twin.dev_labels.load_scored_test`, same status rules as dev;
+  reserves by list order) and runs the dev scorer `intercycle.eval.realclip.run` with split `test`. It writes the full
+  result (per-item records carry label content) to `C:\intercycle_sealed\scores\attempt_NNN_realclip_test.json` and the
+  summary (figures and n only) to `results/sealed/realclip_test_attempt_NNN.json`, which the custodian commits with the
+  RUNLOG. The lead reads only that summary.
   The clips stage refuses unless HEAD differs from the FREEZE_REALCLIP commit only in `prereg/FREEZE_REALCLIP` and
   `results/sealed/**`, so running it on main after later robot commits is refused by design. MANIFEST and LABELS must
   hash to their FREEZE_REALCLIP blobs. No seeds are needed. The RUNLOG it appends (`results/sealed/RUNLOG.json` in
