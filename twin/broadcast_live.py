@@ -55,13 +55,17 @@ def episode_key() -> tuple[SigningKey, str]:
     return key, f"{key_id_of(key.verify_key)}:{key.verify_key.encode().hex()}"
 
 
-def spec_record(spec: dict, zone: str, zone_machines: list[str]) -> dict:
-    """observer_spec.json: the site-wide twin_spec and the mission zone's machine ids (zone scenario order)."""
+def spec_record(spec: dict, zone: str, zone_machines: list[str], camera_model: str) -> dict:
+    """observer_spec.json: the site-wide twin_spec, the mission zone's machine ids (zone scenario order) and the camera
+    model that writes the Observation (the plant's `camera.provenance()["model"]`; it picks the observer config,
+    `observer_live.config_for_camera`, fail closed)."""
     ids = [m["id"] for m in spec["machines"]]
     bad = [m for m in zone_machines if m not in ids]
     if bad or not zone_machines:
         raise ValueError(f"zone {zone} machines {zone_machines} are not all in the observer spec {ids}")
-    return {"contract": SPEC_CONTRACT, "zone": zone, "zone_machines": list(zone_machines), "spec": spec}
+    OL.config_for_camera(camera_model, "")             # refuse a camera model without a twin-run config now
+    return {"contract": SPEC_CONTRACT, "zone": zone, "zone_machines": list(zone_machines), "camera_model": camera_model,
+            "spec": spec}
 
 
 class ZoneView:
@@ -80,20 +84,25 @@ class ZoneView:
         return replace(f, machines=[replace(f.machines[i], index=k) for k, i in enumerate(self.idx)])
 
 
-def load_inputs(world: Path, work: Path) -> tuple[dict, list[str], str, Path]:
-    """(spec, zone machines, margin path, learn obs path under work/learn/obs_v2.jsonl)."""
+def load_inputs(world: Path, work: Path) -> tuple[dict, list[str], str, Path, str]:
+    """(spec, zone machines, margin path, learn obs path under work/learn/obs_v2.jsonl, camera model). A spec record
+    without a camera model is refused (fail closed)."""
     rec = json.loads((world / SPEC_FILE).read_text(encoding="utf-8"))
     if rec.get("contract") != SPEC_CONTRACT:
         raise ValueError(f"{SPEC_FILE}: contract {rec.get('contract')!r} != {SPEC_CONTRACT!r}")
+    if not rec.get("camera_model"):
+        raise ValueError(f"{SPEC_FILE}: no camera_model (the observer config depends on it)")
     learn = work / "learn" / OL.OBS_FILE
     learn.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(world / LEARN_FILE, learn)
-    return rec["spec"], list(rec["zone_machines"]), str(world / MARGIN_FILE), learn
+    return rec["spec"], list(rec["zone_machines"]), str(world / MARGIN_FILE), learn, str(rec["camera_model"])
 
 
-def learned_observer(spec: dict, margin_path: str, learn_path: Path) -> tuple[OL.ObserverLive, float, int]:
-    """An ObserverLive that has ingested the learning period. Returns (observer, newest delivery time, ticks)."""
-    ob = OL.ObserverLive(spec, OL.ObserverLiveConfig(margin_path=margin_path))
+def learned_observer(spec: dict, margin_path: str, learn_path: Path,
+                     camera_model: str) -> tuple[OL.ObserverLive, float, int]:
+    """An ObserverLive (config by camera model, `OL.config_for_camera`) that has ingested the learning period.
+    Returns (observer, newest delivery time, ticks)."""
+    ob = OL.ObserverLive(spec, OL.config_for_camera(camera_model, margin_path))
     rd = OL.ObsV2Reader(learn_path, ob.M, len(spec["cameras"]))
     t_now, n = -math.inf, 0
     for o in rd.poll():
@@ -124,8 +133,8 @@ def main(argv: list[str] | None = None) -> None:
     log = open(a.log or obs_path.parent / "broadcast_live.jsonl", "a", encoding="utf-8")
     key, vk = episode_key()
     write_vk(work, vk)
-    spec, zone_machines, margin_path, learn_path = load_inputs(world, work)
-    ob, t_now, n_learn = learned_observer(spec, margin_path, learn_path)
+    spec, zone_machines, margin_path, learn_path, camera_model = load_inputs(world, work)
+    ob, t_now, n_learn = learned_observer(spec, margin_path, learn_path, camera_model)
     bundle = pack_map_for_key(ob.map_snapshot(), key, version=1, issue_time=DAY0_UNIX + t_now)
     zv = ZoneView(ob, zone_machines)
     diag = ob.diagnostics()

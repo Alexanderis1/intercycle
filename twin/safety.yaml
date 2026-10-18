@@ -1,0 +1,78 @@
+# twin/safety.yaml - guard type per press, reset distribution, entry rules (contract twin.safety/1,
+# twin/schemas/safety.py; owner S5a + user; U4, W-W4, R-W2). Read by twin/plant.py.
+# Site esk_press_v1 (twin/site.yaml, 6 presses); the G0 stub site_v0 uses twin/safety_v0.yaml (same rules, P9a / P14a).
+# U4 (user, Sat ~21:10): guard types cannot be seen from 4 m, so EVERY press is ASSUMED: a light curtain with manual
+# reset, reset time lognormal median 240 s, p90 900 s; the 60-900 s sweep is descriptive only.
+# Entry rules (what the safety system does when the robot ENTERS the dilated danger polygon in a press state):
+#   running   -> trip  (light curtain broken while the press runs: protective stop, manual reset from outside)
+#   stopped   -> allow (no stop at entry; a restart that falls due while the robot is inside is HELD)
+#   idle      -> hold  (the engine never emits idle; kept for the contract)
+#   tripped / held / resetting -> hold (the press may not restart while the robot is inside; a reset starts
+#                                        only after the robot has left)
+# Latched restart interlock (U4 "light curtain plus manual reset"; W-W4; R-W2(b) "manual reset on ANY entry"): a
+# perimeter light curtain cannot sense the robot inside, so EVERY entry latches the restart interlock, whatever the
+# press state: after any visit that did not trip the press, a light_curtain + manual-reset press restarts only after
+# a manual reset from outside, drawn from the same lognormal as the trip reset (state resetting, from the robot's
+# exit). A reset that delays a scheduled restart is a hold. One press_hold row per delayed restart (value = the held
+# seconds, or the delayed running seconds when only the reset delayed it); a held freeze never runs past its running
+# bout. Leaving a stopped press just before its restart therefore costs about as much as leaving just after it.
+# Not modelled (disclosed): a guard device that can sense presence inside (area scanner) or a permit input.
+# U4 descriptive sweep: cfg plant.reset_override_s (a fixed reset inside sweep_s) replaces every reset draw; such a
+# run is tagged a sweep run in plant_summary.json and the log rows, never a primary-metric run.
+contract: twin.safety/1
+site_id: esk_press_v1
+presses:
+- press: P9a
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: &rules
+  - {press_state: running, action: trip}
+  - {press_state: idle, action: hold}
+  - {press_state: stopped, action: allow}
+  - {press_state: tripped, action: hold}
+  - {press_state: held, action: hold}
+  - {press_state: resetting, action: hold}
+- press: P9b
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
+- press: P14a
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
+- press: P14b
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
+- press: P14c
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules
+- press: P14d
+  guard: {type: ASSUMED, device: light_curtain, reset: manual}
+  reset:
+    family: lognormal
+    median_s: 240.0
+    p90_s: 900.0
+    sweep_s: {lo: 60.0, hi: 900.0}
+  entry_rules: *rules

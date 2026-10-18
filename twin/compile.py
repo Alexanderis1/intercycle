@@ -12,8 +12,9 @@ Output, per zone (`CompiledZone`):
   hall annex, traffic or BLE layout.
 * `rects` + `extent`: the static bodies for `intercycle.sim.geometry.StaticMap(None, rects=, extent=)` and
   `world.build_world_files(scenario_path=, rects=, extent=)` (twin/build_worlds.py): one axis-aligned box per press
-  footprint (cls "press") and the unseen floor as wall rects (cls "wall"). The extent is the zone's visible-floor
-  bounding box snapped out to the 0.1 m grid plus a 2-cell margin, so StaticMap's closing ring lies on unseen floor.
+  footprint (cls "press") and the unseen floor as wall rects (cls "wall"). The extent is the bounding box of the
+  zone's visible floor and its press footprints (a press may stand on unseen floor) snapped out to the 0.1 m grid plus
+  a 2-cell margin, so StaticMap's closing ring lies on unseen floor.
   A cell whose square is not entirely inside the visible floor polygon is wall (fail closed: unseen floor is never
   free, at the cost of at most one cell of visible floor along a slanted edge).
 * `danger_rects`: per press, the danger polygon's bounding box grown by `dilation_m` (the exact bounding box of the
@@ -38,7 +39,7 @@ import hashlib
 import logging
 import math
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -127,9 +128,13 @@ def _cells(v: float) -> float:
     return round(v / GRID_RES, 6)
 
 
-def zone_extent(zone: SiteZone) -> AABB:
-    """The zone's visible-floor bounding box snapped out to the grid, plus EXTENT_MARGIN_CELLS cells on every side."""
-    x0, z0, x1, z1 = _aabb(zone.floor_polygon.value)
+def zone_extent(zone: SiteZone, footprints: Sequence[Sequence[Point]] = ()) -> AABB:
+    """The bounding box of the zone's visible floor AND its press footprints (`footprints`, the zone's presses), snapped
+    out to the grid, plus EXTENT_MARGIN_CELLS cells on every side. A press may stand on unseen floor (zone 9's P9b,
+    hidden behind P9a): its body must still lie inside the zone's world (StaticMap refuses a rect outside the
+    extent); the floor around it is unseen, hence wall (`unseen_floor_rects`)."""
+    pts = list(zone.floor_polygon.value) + [q for fp in footprints for q in fp]
+    x0, z0, x1, z1 = _aabb(pts)
     m = EXTENT_MARGIN_CELLS
     i0, j0 = math.floor(_cells(x0)) - m, math.floor(_cells(z0)) - m
     i1, j1 = math.ceil(_cells(x1)) + m, math.ceil(_cells(z1)) + m
@@ -606,8 +611,8 @@ def compile_site(site: Site, dynamics: Dynamics, tasks: Tasks, *, safety: Safety
     _check_refs(site, dynamics, tasks)
     out: dict[str, CompiledZone] = {}
     for zone in site.zones:
-        extent = zone_extent(zone)
         presses = [p for p in site.presses if p.zone == zone.id]
+        extent = zone_extent(zone, [p.footprint.value for p in presses])
         danger = {p.id: danger_rect(p) for p in presses}
         feet = [footprint_rect(p) for p in presses]
         rects = feet + unseen_floor_rects(zone.floor_polygon.value, extent, f"UNSEEN_{zone.id}")

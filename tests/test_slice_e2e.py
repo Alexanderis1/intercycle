@@ -1,10 +1,12 @@
-"""Thin vertical slice end to end (PLAN_TWIN §4; scripts/slice.py), locally on the G0 stubs.
+"""Thin vertical slice end to end (PLAN_TWIN §4; scripts/slice.py), locally on the G0 stubs AND on the v1 artifacts.
 
 Runs steps 1-8 with the local scripted double (the Modal fake-backend + Nav2 mission is `scripts/slice.py --modal`,
 run at the gates) and checks the plan's assertions: truth allowlist + Isaac-deps tests pass, signatures verify with
 an explicit keyring and fail closed, >= 1 inspection attempt, the metric JSON validates against its schema, a press
 stop caused by the robot appears in the Observation within 1 tick + latency. The checkers themselves are shown to
-fail on a broken input (a late observation, a mission without an attempt, an errored mission)."""
+fail on a broken input (a late observation, a mission without an attempt, an errored mission). The `report` tests run
+on the whole G0 v0 stub set (`stubs=True`); the `report_v1` tests run the same slice on the v1 artifacts (site.yaml,
+dynamics.json + DAYGEN v1, tasks.yaml, safety.yaml) with the stat_v1 camera."""
 from __future__ import annotations
 
 import importlib.util
@@ -35,7 +37,7 @@ def report(tmp_path_factory):
     old = os.environ.get("INTERCYCLE_TRUTH_LOG")
     os.environ["INTERCYCLE_TRUTH_LOG"] = str(out / "truth_access.log")
     try:
-        rep = SL.run(out, world=0, day=9, zone="z14", guard_tests=True)
+        rep = SL.run(out, world=0, day=9, zone="z14", guard_tests=True, stubs=True)
     finally:
         if old is None:
             os.environ.pop("INTERCYCLE_TRUTH_LOG", None)
@@ -119,7 +121,7 @@ def test_truth_never_opened_by_the_slice(report):
 def test_stop_checker_rejects_a_late_observation(report, tmp_path):
     _, out = report
     rd = out / "runs" / "mission_local"
-    adapter = SL.PL.ObsAdapter(SL.load(SL.Site, SL.inputs()["site"]))
+    adapter = _adapter(SL.load(SL.Site, SL.inputs(stubs=True)["site"]))
     st = report[0]["assertions"]["stop_in_observation"]["stops"][0]
     lines = (rd / "obs_v2.jsonl").read_text(encoding="utf-8").splitlines()
     late = tmp_path / "late"
@@ -181,8 +183,14 @@ def test_slice_names_no_truth_path():
     assert not [s for s in lits if any(t in s for t in TRUTH_TOKENS)]
 
 
+def _adapter(site):
+    """The plant's ObsAdapter for `site` with the plant camera's holds (as `Plant.__init__` builds it)."""
+    cam = SL.PL.make_camera(site, 0, 9)
+    return SL.PL.ObsAdapter(site, hold_s=dict(cam.hold_s_by_press), roi_vis=cam.roi_vis)
+
+
 def _cz():
-    paths = SL.inputs()
+    paths = SL.inputs(stubs=True)
     return paths, SL.C.compile_paths(paths["site"], paths["dynamics"], paths["tasks"])["z14"]
 
 
@@ -226,12 +234,13 @@ def test_modal_probe_and_patrol_cfgs_are_labelled_for_what_they_are():
 def test_modal_world_files_carry_the_learned_observer_inputs_and_no_truth(report):
     rep, out = report
     _, cz = _cz()
-    site = SL.load(SL.Site, SL.inputs()["site"])
-    adapter = SL.PL.ObsAdapter(site)
+    site = SL.load(SL.Site, SL.inputs(stubs=True)["site"])
+    adapter = _adapter(site)
     spec = SL.observer_spec(site, {"z14": cz}, adapter)
     mp, _ = SL.margin_path(out)
     learn = out / "runs" / "learn" / "obs_v2.jsonl"
-    wb = SL.world_bytes(out / "worlds" / "z14", learn, spec, [m.id for m in cz.scenario.machines], mp, "z14")
+    wb = SL.world_bytes(out / "worlds" / "z14", learn, spec, [m.id for m in cz.scenario.machines], mp, "z14",
+                        "stat_v1")
     assert {"boxes.json", "mesh.npz", "map.yaml", "map.pgm", "world.json", "factory_l0.usda", "scenario.yaml",
             "inputs.json", "observer_spec.json", "m7_margin.json", "learn_obs.jsonl"} <= set(wb)
     from twin import truth_guard as TG
@@ -240,6 +249,7 @@ def test_modal_world_files_carry_the_learned_observer_inputs_and_no_truth(report
     assert wb["learn_obs.jsonl"] == learn.read_bytes()
     rec = json.loads(wb["observer_spec.json"])
     assert rec["zone_machines"] == [m.id for m in cz.scenario.machines] and rec["spec"]["site_id"] == spec["site_id"]
+    assert rec["camera_model"] == "stat_v1"
 
 
 def test_planner_graph_from_the_shipped_world_is_the_compiled_twin_graph(report):
@@ -310,11 +320,11 @@ def test_shipping_the_day_script_reads_truth_only_through_the_guard(report, tmp_
     monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(log))
     seen = _record_truth_reads(monkeypatch)
     _, cz = _cz()
-    site = SL.load(SL.Site, SL.inputs()["site"])
-    spec = SL.observer_spec(site, {"z14": cz}, SL.PL.ObsAdapter(site))
+    site = SL.load(SL.Site, SL.inputs(stubs=True)["site"])
+    spec = SL.observer_spec(site, {"z14": cz}, _adapter(site))
     mp, _ = SL.margin_path(out)
     SL.world_bytes(out / "worlds" / "z14", out / "runs" / "learn" / "obs_v2.jsonl", spec,
-                   [m.id for m in cz.scenario.machines], mp, "z14")
+                   [m.id for m in cz.scenario.machines], mp, "z14", "stat_v1")
     assert seen == [], f"world files read truth: {seen}"
     script = out / ("w0_d9" + SL.FILE_SUFFIX)
     name, data = SL.PL.day_script_payload(script)
@@ -396,20 +406,22 @@ def _broadcast(report, tmp_path, zone="z14"):
 
     _, out = report
     _, cz = _cz()
-    site = SL.load(SL.Site, SL.inputs()["site"])
-    spec = SL.observer_spec(site, {zone: cz}, SL.PL.ObsAdapter(site))
+    site = SL.load(SL.Site, SL.inputs(stubs=True)["site"])
+    spec = SL.observer_spec(site, {zone: cz}, _adapter(site))
     mp, _ = SL.margin_path(out)
     world, work = tmp_path / "world", tmp_path / "work"
     world.mkdir()
     work.mkdir()
     for n, b in SL.world_bytes(out / "worlds" / zone, out / "runs" / "learn" / "obs_v2.jsonl", spec,
-                               [m.id for m in cz.scenario.machines], mp, zone).items():
+                               [m.id for m in cz.scenario.machines], mp, zone, "stat_v1").items():
         (world / n).write_bytes(b)
     key, vk = BL.episode_key()
     BL.write_vk(work, vk)
-    spec2, zm, margin, learn = BL.load_inputs(world, work)
+    spec2, zm, margin, learn, cam = BL.load_inputs(world, work)
     assert learn == work / "learn" / "obs_v2.jsonl" and (work / BL.VK_FILE).read_text(encoding="utf-8") == vk
-    ob, t_now, n = BL.learned_observer(spec2, margin, learn)
+    assert cam == "stat_v1"
+    ob, t_now, n = BL.learned_observer(spec2, margin, learn, cam)
+    assert ob.cfg.motion_thr == SL.OL.stat_v1_motion_thr()[0]
     assert n == int(SL.LEARN_S * 2)
     bundle = pack_map_for_key(ob.map_snapshot(), key, version=1, issue_time=SL.DAY0_UNIX + t_now)
     zv = BL.ZoneView(ob, zm)
@@ -465,10 +477,124 @@ def test_twin_broadcast_refuses_bad_inputs(report, tmp_path):
     with pytest.raises(ValueError, match="contract"):
         BL.load_inputs(tmp_path, tmp_path / "work")
     with pytest.raises(ValueError, match="not all in the observer spec"):
-        BL.spec_record({"machines": [{"id": "P14a"}]}, "z14", ["P9a"])
+        BL.spec_record({"machines": [{"id": "P14a"}]}, "z14", ["P9a"], "stat_v1")
+    with pytest.raises(ValueError, match="stat_v1"):                 # no twin-run config for another camera model
+        BL.spec_record({"machines": [{"id": "P14a"}]}, "z14", ["P14a"], "camera_v0")
+    (tmp_path / BL.SPEC_FILE).write_text(json.dumps({"contract": BL.SPEC_CONTRACT, "zone": "z14", "spec": {},
+                                                     "zone_machines": ["P14a"]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="no camera_model"):          # an old spec record is refused
+        BL.load_inputs(tmp_path, tmp_path / "work")
     empty = tmp_path / "learn" / "obs_v2.jsonl"
     empty.parent.mkdir()
     empty.write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="no learning-period observations"):
         BL.learned_observer(SL.OL.twin_spec([dict(id="P14a", kind="press", rect=(0, 0, 1, 1))], (0, 0, 5, 5),
-                                            [(1.0, 1.0)], site_id=1, key_id=1), str(mp), empty)
+                                            [(1.0, 1.0)], site_id=1, key_id=1), str(mp), empty, "stat_v1")
+
+
+# ---------------------------------------------------------------- the same slice on the v1 artifacts
+
+@pytest.fixture(scope="module")
+def report_v1(tmp_path_factory):
+    import os
+
+    from intercycle import esk
+    try:
+        if not (esk.data_root() / "dyn" / "path_library_v1.npz").exists():
+            pytest.skip("DAYGEN v1 path library not present ($INTERCYCLE_DATA)")
+    except Exception as e:                                   # no data root configured
+        pytest.skip(f"no data root: {e}")
+    out = tmp_path_factory.mktemp("slice_v1")
+    old = os.environ.get("INTERCYCLE_TRUTH_LOG")
+    os.environ["INTERCYCLE_TRUTH_LOG"] = str(out / "truth_access.log")
+    try:
+        rep = SL.run(out, world=0, day=9, zone="z14", guard_tests=False)
+    finally:
+        if old is None:
+            os.environ.pop("INTERCYCLE_TRUTH_LOG", None)
+        else:
+            os.environ["INTERCYCLE_TRUTH_LOG"] = old
+    return rep, out
+
+
+# the stop-in-Observation assertion is the one part of the slice that is not green on the v1 artifacts (see
+# test_v1_stop_in_observation); every other step and assertion must be
+V1_KNOWN_RED = {"stop_in_observation"}
+
+
+def test_v1_inputs_are_the_v1_artifacts():
+    p = SL.inputs()
+    assert {k: v.name for k, v in p.items()} == {"site": "site.yaml", "dynamics": "dynamics.json",
+                                                  "tasks": "tasks.yaml", "safety": "safety.yaml"}
+    assert {k: v.name for k, v in SL.inputs(stubs=True).items()} == {
+        "site": "site_v0.yaml", "dynamics": "dynamics_v0.json", "tasks": "tasks_v0.yaml", "safety": "safety_v0.yaml"}
+
+
+def test_v1_slice_steps_green(report_v1):
+    rep, _ = report_v1
+    bad = {k: v for part in ("steps", "assertions") for k, v in rep[part].items()
+           if not v["ok"] and k not in V1_KNOWN_RED}
+    assert not bad, bad
+
+
+def test_v1_build_compiles_every_press_inside_its_zone_world(report_v1):
+    """Root cause of the v1 RED step 1: P9b stands on unseen floor outside the zone-9 visible-floor box; the zone
+    extent now covers every press footprint of the zone."""
+    rep, out = report_v1
+    s = rep["steps"]["1_build"]
+    assert not any(s["stubs"].values())
+    for z in ("z9", "z14"):
+        for f in SL.FILES_STEP1:
+            assert (out / "worlds" / z / f).stat().st_size > 0
+    site = SL.load(SL.Site, SL.inputs()["site"])
+    paths = SL.inputs()
+    cz = SL.C.compile_paths(paths["site"], paths["dynamics"], paths["tasks"])
+    for p in site.presses:
+        x0, z0, x1, z1 = cz[p.zone].extent
+        fp = p.footprint.value
+        assert all(x0 <= q[0] <= x1 and z0 <= q[1] <= z1 for q in fp), (p.id, cz[p.zone].extent)
+
+
+def test_v1_day_is_daygen_v1_with_every_press(report_v1):
+    s = report_v1[0]["steps"]["2_day"]
+    site = SL.load(SL.Site, SL.inputs()["site"])
+    assert s["generator"] == SL.DG1.GENERATOR and s["duration_s"] == SL.DAY_S
+    assert sorted(s["presses"]) == sorted(p.id for p in site.presses) and s["walkers"] >= 1
+
+
+def test_v1_observer_runs_on_the_stat_v1_config(report_v1):
+    rep, _ = report_v1
+    e, o = rep["steps"]["3_4_engine_adapter"], rep["steps"]["5_observer"]
+    assert e["camera_model"] == "stat_v1" and e["camera_cal_source"].startswith("cal_v1")
+    assert e["n_obs"] == int(SL.LEARN_S * 2)
+    thr, src = SL.OL.stat_v1_motion_thr()
+    assert o["camera_model"] == "stat_v1" and o["motion_thr"] == thr
+    assert o["tags"]["motion_thr"]["source"] == src
+
+
+def test_v1_inspection_attempt_and_metric(report_v1):
+    rep, out = report_v1
+    assert rep["assertions"]["inspection_attempt"]["attempted"] >= 1
+    pm = SL.PrimaryMetric.model_validate_json((out / "primary_metric.json").read_text(encoding="utf-8"))
+    assert pm.missions[0].condition == "learned" and pm.split == "dev"
+
+
+def test_v1_truth_never_opened_by_the_slice(report_v1):
+    _, out = report_v1
+    lines = [ln.split("\t") for ln in (out / "truth_access.log").read_text(encoding="utf-8").splitlines()
+             if ln and not ln.startswith("#")]
+    from twin import truth_guard as TG
+
+    callers = {ln[1] for ln in lines}
+    assert callers and callers <= set(TG.TRUTH_READERS) | set(TG.TRUTH_PRODUCERS)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "v1 artifacts, world 0 day 9, first 30 min: no robot-caused stop is visible as 'no motion' in the Observation. "
+    "Zone 14 (the slice zone): the trip probe sees no stroking press in 240 s (zone_motion MISSING on 74-80 % of the "
+    "learning ticks) and enters an idle press (no trip). Zone 9: the probe trips P9a, but P9a / P9b zone_motion is "
+    "MISSING on 100 % / 99.9 % of the ticks (stat_v1's camera-9 ROI hold 34 s under DAYGEN v1's mover density), so "
+    "the stop shows as MISSING, never as no motion. Owners: S3a (DAYGEN density) / S3b (stat_v1 hold); not tuned "
+    "here (lead decision: no tuning)."))
+def test_v1_stop_in_observation(report_v1):
+    assert report_v1[0]["assertions"]["stop_in_observation"]["ok"]
