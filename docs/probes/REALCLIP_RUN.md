@@ -107,4 +107,33 @@ the sealed root:
 # or, on an existing dry run:  & $py scripts\sealed_run.py dev-score --dev-root F:\intercycle\out\rc_final_dryrun --labels labels\dev
 ```
 
-Dev numbers of this dry run: pending (the next commit of lane RC-final fills them in).
+### Dev numbers (RC-final, Sun 07:20 WEST; against Claude-agent labels, not human labels)
+
+Run: 51 dev clips (every clip of the dev base sample list plus every clip with a scored dev label) through the clips
+stage on Modal (157 s wall, one ephemeral app, cost well under the $1 cap), then `dev-score`. Output in
+`F:\intercycle\out\rc_final_dryrun\scores\dev_realclip.json` (outside the repo).
+
+PERC reproducibility: of the 220 tables the container wrote, all 51 `tracks` and 51 `boxes` are byte-identical to the
+dev batch in `$INTERCYCLE_DATA`; 102 of 118 `machines` tables are identical, 16 differ only in float noise of
+`flow_v` / `roi_energy` (max 0.11) with 16 flipped `stroke` / `missing` samples in total, none in a scored window
+(the full-set re-score below is identical to the committed dev result).
+
+1. Sealed path (`dev-score`: dev LABELS -> `load_scored_test(split="dev")` -> `realclip.run`), dev BASE pair only
+   (`labels.json` + `sample.json`; the test loader takes one sample list, so the dev supplement is not in it):
+   - person (tracked, primary), pooled: 39 frames, 126 GT, 103 pred, 79 TP: recall 0.627 (bootstrap-by-group CI
+     0.559-0.712), precision 0.767; c9 R 0.573 P 0.773 (19 frames), c14 R 0.757 P 0.757 (20 frames);
+   - foot point: median 8.98 px, p90 42.1 px (n 79); zone accuracy 1.00 (n 79);
+   - strokes (BDC): 11 windows, 44 GT, 35 pred, 35 TP: P 1.00, R 0.795, F1 0.886 (P9a 0.947 over 6 windows, P9b 0.829
+     over 5); stroke-count error mean signed -0.82, mean abs 0.82;
+   - occlusion -> MISSING (image-ROI rule): NOT exercised here: no base window has a hidden span (n 0); base non-hidden
+     ticks reported MISSING 74/162 (0.457);
+   - status counts: 39 frames scored, 11 windows scored, both presses short of the 10-window target (reported as
+     `short_presses`, as the test path does).
+2. Same re-ingested PERC, full dev set with the dev loader (`realclip.run(labels/dev)`, base + supplement):
+   identical to the committed `results/dev/realclip_dev.json`: person R 0.614 P 0.764 (40 frames, 132 GT), foot px
+   median 8.69 / p90 41.6, zone accuracy 1.00 (n 81); strokes 20 windows F1 0.803 (P 1.00, R 0.671), count error -1.3;
+   occlusion -> MISSING 31/35 observation ticks (0.886), base non-hidden 145/292, PERC samples 336/428.
+
+Sanity: the person figures of (1) and (2) agree within the one-frame difference; precision 1.00 of strokes and the
+negative count error (PERC misses strokes, never invents them) match the dev result; the sealed scoring path ran end to
+end on real files (real loader, real scorer, LABELS hash checks, PERC re-hash) with no error.
