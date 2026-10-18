@@ -12,7 +12,9 @@ Pipeline (the same code runs on dev and, inside sealed_run.py, on test):
    mean vertical flow in full-resolution px/s (+ = down); ``roi_energy`` the mean absolute frame difference.
    Frames whose ROI overlaps a person box are MISSING (NaN, no stroke).
 4. ``detect_strokes``: Schmitt trigger on the down lobe of ``flow_v`` with an adaptive threshold, confirmed by an
-   up lobe (the ram returns) within ``max_stroke_s``, debounced by ``min_gap_s``.
+   up lobe (the ram returns) within ``max_stroke_s``, debounced by ``min_gap_s``. The emitted stroke time is the
+   ram's BOTTOM (BDC: the down-to-up zero crossing of the smoothed ``flow_v`` after the down lobe), the label
+   definition of a stroke (labels/RULES.md; USER DECISION Sun ~07:00), not the onset of the down lobe.
 5. ``lamp_beat``: dominant frequency of the global (ROI-masked) luma. Mains flicker sampled at ~25 fps aliases to a
    slow beat; a stroke rate equal to that beat is flagged, because it may be light, not a ram.
 
@@ -185,10 +187,31 @@ def roi_signals(frames: np.ndarray, t: np.ndarray, mask: np.ndarray, scale: floa
     return pd.DataFrame({"t": t, "flow_v": flow_v, "roi_energy": energy, "missing": missing})
 
 
-def detect_strokes(t: np.ndarray, flow_v: np.ndarray, params: PressParams | None = None) -> tuple[np.ndarray, float]:
-    """Indices of stroke starts (onset of the ram's down lobe) and the threshold used (px/s).
+def _bdc_index(t: np.ndarray, v: np.ndarray, ok: np.ndarray, i: int, max_s: float) -> int:
+    """BDC of the down lobe triggered at sample i: of the last finite sample with v > 0 and the first finite sample
+    with v <= 0 after it, the one closer to zero; -1 when no finite v <= 0 follows within max_s of t[i]."""
+    last_pos = i
+    for m in range(i + 1, len(v)):
+        if t[m] - t[i] > max_s:
+            return -1
+        if not ok[m]:
+            continue
+        if v[m] <= 0:
+            return m if abs(v[m]) <= abs(v[last_pos]) else last_pos
+        last_pos = m
+    return -1
 
-    NaN samples (missing) never start a stroke and reset the trigger.
+
+def detect_strokes(t: np.ndarray, flow_v: np.ndarray, params: PressParams | None = None) -> tuple[np.ndarray, float]:
+    """Indices of the strokes' BOTTOM samples (BDC) and the threshold used (px/s).
+
+    A stroke is a down lobe (smoothed flow_v above the threshold) confirmed by the return (an up lobe below -threshold
+    within ``max_stroke_s``). Its emitted sample is BDC, the label definition of a stroke time: the down-to-up zero
+    crossing of the smoothed flow_v after the down lobe, i.e. of the last finite sample with v > 0 and the first
+    finite sample with v <= 0 the one closer to zero (both within ``max_stroke_s`` of the trigger). No crossing in
+    that span: no stroke (fail closed). ``min_gap_s`` debounces consecutive BDC times.
+
+    NaN samples (missing) are never emitted and reset the trigger.
     """
     p = params or PressParams()
     v = np.asarray(flow_v, float)
@@ -225,16 +248,14 @@ def detect_strokes(t: np.ndarray, flow_v: np.ndarray, params: PressParams | None
             i += 1
             continue
         if armed and v[i] > thr:
-            j0 = i                           # walk back to the onset (last sample at or below the release level)
-            while j0 - 1 >= 0 and ok[j0 - 1] and v[j0 - 1] > rel:
-                j0 -= 1
             good = True
             if p.require_return:
                 k = i
                 while k < n and t[k] - t[i] <= p.max_stroke_s and not (ok[k] and v[k] < -thr):
                     k += 1
                 good = k < n and t[k] - t[i] <= p.max_stroke_s
-            if good and (not starts or t[j0] - t[starts[-1]] >= p.min_gap_s):
+            j0 = _bdc_index(t, v, ok, i, p.max_stroke_s) if good else -1
+            if j0 >= 0 and (not starts or t[j0] - t[starts[-1]] >= p.min_gap_s):
                 starts.append(j0)
             armed = False
         elif not armed and v[i] < rel:

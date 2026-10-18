@@ -52,7 +52,9 @@ def run(clip, boxes=None):
 
 def test_strokes_and_period_on_clean_clip():
     r = run(make_clip(period=1.6, dur=7.0))
-    assert len(r.strokes_t) == 5                     # strokes start at 0, 1.6, 3.2, 4.8, 6.4 s
+    assert len(r.strokes_t) == 5                     # down lobes start at 0, 1.6, 3.2, 4.8, 6.4 s
+    bdc = 0.4 + 1.6 * np.arange(5)                   # emitted at the bottom (BDC), the label definition
+    assert np.all(np.abs(np.sort(r.strokes_t) - bdc) <= 0.1)
     iv, cens = pm.intervals(r.strokes_t, r.extra["duration"])
     assert np.all(np.abs(iv - 1.6) < 0.1)
     assert cens is not None and 0 < cens < 1.6
@@ -133,5 +135,40 @@ def test_continuous_sinusoidal_ram_is_counted():
         frames[i] = np.clip(canvas, 0, 255).astype(np.uint8)
     r = run(pm.Clip(t=t, frames=frames, scale=SCALE))
     assert len(r.strokes_t) == 5                     # down lobes start at 0, 1.8, 3.6, 5.4, 7.2 s
+    assert np.all(np.abs(np.sort(r.strokes_t) - (0.9 + period * np.arange(5))) <= 0.1)   # BDC = y max
     iv, _ = pm.intervals(r.strokes_t, r.extra["duration"])
     assert np.all(np.abs(iv - period) < 0.15)
+
+
+def test_detect_strokes_emits_bdc_sample():
+    """The emitted index is the down-to-up zero crossing (BDC), not the onset of the down lobe."""
+    t = np.arange(0, 6.0, 1 / 25.0)
+    v = 30.0 * np.sin(2 * np.pi * t / 2.0)                        # + = down on (0, 1), up on (1, 2): BDC at 1, 3, 5 s
+    idx, thr = pm.detect_strokes(t, v, pm.PressParams(smooth_s=0.0))
+    assert thr > 0
+    assert np.allclose(t[idx], [1.0, 3.0, 5.0], atol=1 / 25.0 + 1e-9)
+
+
+def test_detect_strokes_no_crossing_no_stroke():
+    """A down lobe that never crosses zero within max_stroke_s (no return, require_return off) emits nothing."""
+    t = np.arange(0, 6.0, 1 / 25.0)
+    v = np.where(t > 1.0, 30.0, 0.0)
+    idx, _ = pm.detect_strokes(t, v, pm.PressParams(smooth_s=0.0, require_return=False))
+    assert len(idx) == 0
+
+
+def test_detect_strokes_skips_missing_samples_at_bdc():
+    """A NaN (MISSING) sample at the crossing is never emitted; the nearest finite crossing sample is."""
+    t = np.arange(0, 4.0, 1 / 25.0)
+    v = 30.0 * np.sin(2 * np.pi * t / 2.0)
+    j = int(np.argmin(np.abs(t - 1.0)))
+    v[j] = np.nan
+    idx, _ = pm.detect_strokes(t, v, pm.PressParams(smooth_s=0.0))
+    assert j not in set(idx.tolist()) and np.isfinite(v[idx]).all()
+    assert np.any(np.abs(t[idx] - 1.0) <= 2 / 25.0 + 1e-9)
+
+
+def test_frame_zero_is_missing():
+    r = run(make_clip(period=1.6, dur=2.0))
+    assert bool(r.table["missing"].iloc[0]) and np.isnan(r.table["flow_v"].iloc[0])
+    assert not bool(r.table["stroke"].iloc[0])
