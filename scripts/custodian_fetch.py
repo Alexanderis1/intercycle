@@ -87,7 +87,11 @@ def main() -> None:
     if not rows:
         sys.exit("no test rows in the split")
     clips = a.dest / "clips"
-    clips.mkdir(parents=True, exist_ok=True)
+    if a.verify_only:
+        if not clips.is_dir():
+            sys.exit(f"FAILED: {clips} does not exist")
+    else:
+        clips.mkdir(parents=True, exist_ok=True)
     bad = []
     for k, (cid, sha) in enumerate(rows, 1):
         p = clips / f"{cid}.mp4"
@@ -96,13 +100,13 @@ def main() -> None:
         if not p.exists() or sha256_file(p) != sha:
             bad.append(cid)
         print(f"[{k}/{len(rows)}] {cid} {'ok' if cid not in bad else 'BAD'}", flush=True)
-    extra = sorted(f.name for f in clips.iterdir() if f.is_file() and f.stem not in {c for c, _ in rows})
+    extra = sorted(f.name for f in clips.iterdir() if f.is_file() and f.name not in {f"{c}.mp4" for c, _ in rows})
     if bad or extra:
         sys.exit(f"FAILED: {len(bad)} missing/wrong files {bad[:10]}, {len(extra)} extra files {extra[:10]}")
     # hash of the split file with LF line endings, so a CRLF checkout (core.autocrlf) gives the same value
     text = manifest_text(rows, hashlib.sha256(a.split.read_bytes().replace(b"\r\n", b"\n")).hexdigest())
     if a.verify_only:
-        if not a.manifest.exists() or a.manifest.read_text(encoding="utf-8") != text:
+        if not a.manifest.exists() or a.manifest.read_bytes().replace(b"\r\n", b"\n").decode("utf-8") != text:
             sys.exit(f"FAILED: {a.manifest} is missing or differs from the files")
         print(f"verified {len(rows)} files against {a.manifest}")
         return

@@ -103,3 +103,21 @@ record and is never edited.
 - Scratch images of P5 and P6 are named by index or framing and show only viewed clips, which are never test.
 - **After Pass 2** (565 train+dev clips and 1,130 keyframes on the volume and in `$INTERCYCLE_DATA`), the check was run
   again: volume 3,958 files, local 2,329 files, 0 test traces. `inventory.parquet` equals `split_a1.csv`.
+
+## Amendment 1, lead notes (Sun 18 Oct ~02:25 CEST, lead session intercycle-74, under the user's autonomy grant of ~01:40)
+
+- **Reading of "clips agents already looked at".** The lead confirms the vision reading used by the builder:
+  only clips whose pixels an agent viewed (P5's checked frames, P6's median backgrounds; 96 ids) are excluded from
+  test. P7 (matcher counts) and P8 (detector-only face-size histogram) processed clips automatically, without an agent
+  viewing them. Four such clips are now in TEST and are named here for the record: `7_tr1` (P7), `3_te7`, `3_tr42`,
+  `6_tr12` (P8). The split cannot be re-derived after the purge, so this is disclosed, not amended again.
+- **Calibration files invalid until refit.** `twin/cal/k1_v0.json` and `twin/cal/scale_v0.json` were fitted before
+  A1+. Some k1 sources are now dev, the c9_f0 reference clip `0_te21` is now dev, and the person-height scale fit used
+  RF-DETR boxes of 13 clips that are now TEST. Both files are INVALID for CAL v0. Lane S2 refits k1 (per framing,
+  including c9_f1) and scale on A1+ TRAIN clips only, and the train-only provenance assertion covers their source ids.
+- **Wording fix.** All 32 byte-identical sets carry different class labels; 13 such pairs lie inside test.
+- **Per-stratum shortfall (to disclose with the real-clip results).** 60/20/20 holds in the unsafe strata but not in
+  the safe ones (camera 9 safe: train 31 / dev 21 / test 1; camera 14 safe: test 3 of 40), because the viewed-group
+  rule moved groups out of test. The real-clip test reports per stratum.
+- **custodian_fetch.py hardened** (extra-file check by full name, no mkdir in --verify-only, CRLF-normalised manifest
+  compare) and `.gitattributes` pins LF for `sealed/*`, `prereg/*.csv` and `prereg/ACTIVE_SPLIT`.
