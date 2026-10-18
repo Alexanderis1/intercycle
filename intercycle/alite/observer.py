@@ -9,6 +9,7 @@ ObsV2Converter (occlusion and dead cameras = MISSING, T-W6 / M-W10).
 What it keeps:
 - the map: the body-shop LayeredMap (L1 envelopes per phase bin, L2 / L3), fed by MapBuilder with the
   ConditionTracker (its own phase, production state);
+- the static-space change detector (observer/change.py: a new moving machine outside every zone + 1 m);
 - M-W4: S7a's in-zone change detector `change_detect_l1.L1ChangeDetector` (CUSUM on hits in FREE cells -> UNKNOWN,
   forgetting per observed tick) next to the map; its UNKNOWN boxes go into map.unknown_rects;
 - T-W2: per tick the map's phase (tracker), for `phase_origin.LagCalibrator` in `learn_slow`;
@@ -29,6 +30,7 @@ import numpy as np
 from intercycle.alite.phase_origin import LagCalibrator, PhaseOrigin, robot_phase
 from intercycle.observer import learn_cycles as LC
 from intercycle.observer import mapping as M
+from intercycle.observer.change import ChangeDetector
 from intercycle.observer.change_detect_l1 import L1ChangeDetector
 from intercycle.scenario import Scenario
 from intercycle.types import MachineModel, MachineNow, State
@@ -43,7 +45,8 @@ class AliteObserver:
         self.builder = M.MapBuilder(scn)
         self.map = self.builder.map
         self.tracker = self.builder.tracker
-        self.det = L1ChangeDetector(self.map) if change_detection else None
+        self.legacy = ChangeDetector(self.map) if change_detection else None     # static space outside zone + 1 m
+        self.det = L1ChangeDetector(self.map) if change_detection else None      # M-W4: inside zone + 1 m
         self.line = [i for i, m in enumerate(scn.machines) if m.on_line]
         self.cells = [i for i, m in enumerate(scn.machines) if not m.on_line]
         self.missing_veto_s = float(missing_veto_s)
@@ -63,8 +66,11 @@ class AliteObserver:
     def step(self, obs: M.Observation, learn_map: bool = True) -> M.Cond:
         v2 = self.conv(obs)
         cond = self.builder.feed(v2) if learn_map else self.builder.condition(v2)
-        if self.det is not None and learn_map:
-            self.events += self.det.step(v2, cond)
+        if learn_map:
+            if self.legacy is not None:
+                self.events += self.legacy.step(v2, cond)
+            if self.det is not None:
+                self.events += self.det.step(v2, cond)
         zm = np.asarray(v2.zone_motion, float)
         y = np.where(np.isfinite(zm), (zm > 0).astype(float), np.nan)
         ph = np.where((cond.phase_bin >= 0) & (cond.phase_bin != M.STOP_BIN), cond.phase, np.nan)
