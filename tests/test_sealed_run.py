@@ -945,8 +945,9 @@ def _scored(monkeypatch):
 
     seen = {}
 
-    def fake_load(blobs, samples, sha_of):
+    def fake_load(blobs, samples, sha_of, split="test"):
         seen["load"] = (sorted(blobs), samples, sha_of)
+        seen["split"] = split
         return types.SimpleNamespace(doc={"counts": {"frames_scored": 0}})
 
     def fake_scorer(labels_dir, data, site, splits, watchdog, scored, perc, clips_dir):
@@ -972,7 +973,8 @@ def test_score_runs_the_same_scorer_on_the_attempt_and_keeps_label_content_seale
     d = SR.score(c["repo"], c["root"], data_root=tmp_path, scorer=scorer)
     assert d["attempt"] == 1
     assert seen["load"][1] == "labels/samples.json" and seen["load"][2] == {k: sha(v) for k, v in CLIPS.items()}
-    assert seen["score"]["splits"] == ("test",) and seen["score"]["labels_dir"] is None
+    assert seen["score"]["splits"] == ("test",) and seen["score"]["labels_dir"] is None and seen["split"] == "test"
+    assert seen["load"][0] == ["labels/samples.json"]     # from <sealed-root>/labels only (frames.json: no contract)
     assert seen["score"]["perc"] == c["root"] / "perc" / "attempt_001"
     assert seen["score"]["clips_dir"] == c["root"] / "clips" and seen["score"]["site"] == c["repo"] / SR.SITE
     full = json.loads((c["root"] / SR.SCORES_DIR / "attempt_001_realclip_test.json").read_text(encoding="utf-8"))
@@ -1014,3 +1016,52 @@ def test_the_sealed_scorer_is_in_the_guarded_real_clip_set(monkeypatch):
     assert SR.SITE in SR.REALCLIP_DATA_PATHS
     got = SR.import_closure(REPO, "HEAD", SR.CLIPS_STAGE_ROOTS)
     assert {"intercycle/eval/realclip.py", "twin/dev_labels.py", "twin/schemas/labels.py"} <= got
+    # the container module (shipped by add_local_python_source, imported by name) is a guarded real-clip input
+    assert "scripts/sealed_ingest.py" in SR.CLIPS_STAGE_ROOTS and "scripts/sealed_ingest.py" in got
+
+
+def test_a_sealed_ingest_change_after_freeze_realclip_is_refused(c):
+    """RC-final: scripts/sealed_ingest.py (the container code) is covered by C3 like any other file: a commit that
+    changes it after FREEZE_REALCLIP refuses the clips stage."""
+    write(c["repo"] / "scripts" / "sealed_ingest.py", "X = 1\n")
+    commit(c["repo"], "container edit", "scripts/sealed_ingest.py")
+    refused(c, "FREEZE_REALCLIP")
+
+
+def test_labels_paths_must_sit_under_the_sealed_labels_dir(c):
+    lab = SR.load_sealed(c["repo"], "labels", "LABELS")
+    SR.check_label_files(c["root"], lab)
+    moved = lab.model_copy(update={"files": [f.model_copy(update={"path": "elsewhere/" + f.path}) for f in lab.files]})
+    with pytest.raises(SR.Refusal, match="not under labels/"):
+        SR.check_label_files(c["root"], moved)
+    up = lab.model_copy(update={"files": [f.model_copy(update={"path": "labels/../" + f.path}) for f in lab.files]})
+    with pytest.raises(SR.Refusal, match="not under labels/"):
+        SR.check_label_files(c["root"], up)
+
+
+def test_dev_score_runs_the_score_core_with_split_dev(s, monkeypatch, tmp_path):
+    """dev-dry-run --labels: the dev labels go through score's own core (LABELS-checked files under <root>/labels,
+    load_scored_test, the scorer) with split dev; PERC outputs re-hashed against dev_dry_run.json."""
+    seen, scorer = _scored(monkeypatch)
+    data = tmp_path / "data"
+    for cid, d in DEV_CLIPS.items():
+        write(data / "clips" / f"{cid}.mp4", d)
+    items = [SampleItem(sample_id="dev-f-1", kind="frame", clip_id="4_dv1", group_id="g", camera=14, split="dev",
+                        t_pts=1.0)]
+    smp = {"contract": "twin.label_samples/1", "split": "dev", "seed": 1, "rule": "r",
+           "items": [i.model_dump(mode="json") for i in items], "items_sha256": sample_items_sha256(items)}
+    lab_dir = tmp_path / "labels_dev"
+    write(lab_dir / "sample.json", json.dumps(smp))
+    write(lab_dir / "labels.json", json.dumps({"labels": []}))
+    dev = tmp_path / "devroot"
+    rec = SR.dev_dry_run(s["repo"], dev, list(DEV_CLIPS), data_root=data, runner=fake_runner, labels=lab_dir,
+                         scorer=scorer)
+    assert seen["split"] == "dev" and seen["score"]["splits"] == ("dev",)
+    assert seen["load"][0] == ["labels/sample.json"] and seen["load"][1] == "labels/sample.json"
+    assert seen["load"][2] == {k: sha(v) for k, v in DEV_CLIPS.items()}
+    assert seen["score"]["perc"] == Path(rec["clips_stage"]["out"]) and seen["score"]["clips_dir"] == dev.resolve() / "clips"
+    assert "frames" not in rec["score"]["result"] and Path(rec["score"]["full"]).is_file()
+    assert os.environ.get(SR.SEALED_ENV) is None and not (s["repo"] / SR.RUNLOG).exists()
+    write(Path(rec["clips_stage"]["out"]) / "tracks" / "4_dv1.parquet", b"edited")
+    with pytest.raises(SR.Refusal, match="changed since the clips attempt"):
+        SR.dev_score(s["repo"], dev, lab_dir, data_root=data, scorer=scorer)
