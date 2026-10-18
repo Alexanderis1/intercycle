@@ -1,0 +1,12 @@
+{
+ "_doc": "CAL v0 k1 line hints (probe P6). Approximate endpoints (full-res px) of straight world lines picked by eye on the median background of TRAIN frames of each framing (/esk/p6/<framing>_bg.jpg on the Modal volume). intercycle.framing.trace_edge snaps each hint to the sub-pixel edge. Lines nearly radial to the image centre carry no k1 information and were dropped (c14: blue plate edge, die-plate edge); the c14 right column's trace followed a ladder and was dropped.",
+ "c9_f0": {
+  "A_center_yellow_stripe": [[1212, 215], [1030, 1020]],
+  "B_green_walkway_left_yellow_line": [[1400, 10], [1735, 1075]],
+  "C_green_walkway_inner_yellow_line": [[1668, 525], [1850, 975]]
+ },
+ "c14_f0": {
+  "A_yellow_floor_line": [[770, 610], [1490, 930]],
+  "C_white_column_left_edge_top": [[1437, 3], [1410, 105], {"half_width": 15}]
+ }
+}
