@@ -115,3 +115,99 @@ def test_supplement_stopping_rule(monkeypatch):
         DL.build_scored([base, _part(sup_items, early, True, "labels_s1.json")], sha)
     with pytest.raises(ValueError, match="not labelled"):                    # a primary must be labelled
         DL.build_scored([base, _part(sup_items, {"dev-sws1-P9b-r1": ([1.0], "ok")}, True, "labels_s1.json")], sha)
+
+
+# ---- fix round 2: edge spans, spans that reach the window edge, exact stopping rule, load_scored re-check ----------
+
+def test_edge_spans_parse_and_are_returned_with_the_hidden_spans(monkeypatch):
+    monkeypatch.setattr(DL, "TARGET_PER_PRESS", 1)
+    assert DL.edge_spans("possible BDC near 7.6 s: edge, not clicked; edge 7.00-8.00 s") == [[7.0, 8.0]]
+    items = [_win("dev-sw-P9b-01", "c1")]
+    labels = {"dev-sw-P9b-01": ([1.0], "hidden 2.00-3.00 s. possible BDC: edge, not clicked; edge 7.00-8.00 s")}
+    doc = DL.build_scored([_part(items, labels)], {"c1": "s1"})
+    row = doc["stroke_windows"][0]
+    assert row["hidden"] == [[2.0, 3.0]] and row["edge"] == [[7.0, 8.0]]
+    assert doc["counts"]["scored_edge_seconds"] == 1.0
+
+
+def test_an_unclicked_edge_bdc_without_an_edge_span_fails_closed(monkeypatch):
+    monkeypatch.setattr(DL, "TARGET_PER_PRESS", 1)
+    items = [_win("dev-sw-P9b-01", "c1")]
+    labels = {"dev-sw-P9b-01": ([1.0], "possible BDC near 7.9 s at the window end: edge, not clicked")}
+    with pytest.raises(ValueError, match="edge span"):
+        DL.build_scored([_part(items, labels)], {"c1": "s1"})
+
+
+@pytest.mark.parametrize("note,fixed", [("hidden 5.00-7.97 s", "hidden 5.00-7.98 s"),
+                                        ("edge 7.00-7.95 s", "edge 7.00-7.98 s"),
+                                        ("hidden 0.05-1.00 s", "hidden 0.00-1.00 s")])
+def test_a_span_that_stops_just_short_of_the_window_edge_fails_closed(monkeypatch, note, fixed):
+    monkeypatch.setattr(DL, "TARGET_PER_PRESS", 1)
+    items = [_win("dev-sw-P9b-01", "c1", t1=7.9742)]
+    with pytest.raises(ValueError, match="short of the window"):
+        DL.build_scored([_part(items, {"dev-sw-P9b-01": ([1.0], note)})], {"c1": "s1"})
+    DL.build_scored([_part(items, {"dev-sw-P9b-01": ([1.0], fixed)})], {"c1": "s1"})
+
+
+def test_a_span_outside_the_window_fails_closed(monkeypatch):
+    monkeypatch.setattr(DL, "TARGET_PER_PRESS", 1)
+    items = [_win("dev-sw-P9b-01", "c1")]
+    with pytest.raises(ValueError, match="outside the window"):
+        DL.build_scored([_part(items, {"dev-sw-P9b-01": ([1.0], "hidden 9.00-9.50 s")})], {"c1": "s1"})
+
+
+def test_a_press_must_end_with_exactly_the_target_of_scored_windows(monkeypatch):
+    monkeypatch.setattr(DL, "TARGET_PER_PRESS", 2)
+    items = [_win("dev-sw-P9b-01", "c1"), _win("dev-sw-P9b-02", "c2"), _win("dev-sw-P9b-03", "c3")]
+    sha = {"c1": "s1", "c2": "s2", "c3": "s3"}
+    under = {"dev-sw-P9b-01": ([1.0], "ok"), "dev-sw-P9b-02": ([], "press not running"),
+             "dev-sw-P9b-03": ([], "press not running")}
+    with pytest.raises(ValueError, match="ends with 1 scored windows"):
+        DL.build_scored([_part(items, under)], sha)
+    over = {k: ([1.0], "ok") for k in under}
+    with pytest.raises(ValueError, match="ends with 3 scored windows"):
+        DL.build_scored([_part(items, over)], sha)
+
+
+def test_a_supplementary_reserve_labelled_after_the_target_fails_closed(monkeypatch):
+    monkeypatch.setattr(DL, "TARGET_PER_PRESS", 2)
+    base = _part([_win("dev-sw-P9b-01", "c1")], {"dev-sw-P9b-01": ([1.0], "ok")})
+    sup_items = [_win("dev-sws1-P9b-01", "c2"), _win("dev-sws1-P9b-r1", "c3"), _win("dev-sws1-P9b-r2", "c4")]
+    sha = {"c1": "s1", "c2": "s2", "c3": "s3", "c4": "s4"}
+    # the target (2) is reached at the primary 01; r1 is then labelled although it is not needed
+    late = {"dev-sws1-P9b-01": ([1.0], "ok"), "dev-sws1-P9b-r1": ([], "press not running")}
+    with pytest.raises(ValueError, match="labelled after"):
+        DL.build_scored([base, _part(sup_items, late, True, "labels_s1.json")], sha)
+
+
+def test_load_scored_rebuilds_the_statuses_and_fails_closed_on_a_rehashed_edit(tmp_path):
+    for f in DEV.iterdir():
+        shutil.copy(f, tmp_path / f.name)
+    doc = json.loads((tmp_path / "scored.json").read_bytes())
+    row = next(r for r in doc["stroke_windows"] if r["status"] == "not_running")
+    row["status"] = "scored"                                   # an 11th scored window, scored.sha256 updated to match
+    raw = DL.dump(doc)
+    (tmp_path / "scored.json").write_bytes(raw)
+    (tmp_path / "scored.sha256").write_text(DL.sha256_bytes(raw) + "  scored.json\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not what the label files give"):
+        DL.load_scored(tmp_path)
+
+
+def test_committed_edge_spans_and_spans_reach_the_window_edges():
+    s = DL.load_scored(DEV)
+    rows = {r["sample_id"]: r for r in s.doc["stroke_windows"]}
+    for sid in ("dev-sw-P9a-04", "dev-sw-P9a-09"):
+        assert rows[sid]["edge"] and rows[sid]["edge"][-1][1] >= rows[sid]["t1"]
+        assert s.ignore[sid] == sorted(rows[sid]["hidden"] + rows[sid]["edge"])
+    for sid in ("dev-sws1-P9b-r3", "dev-sws1-P9b-r6"):
+        assert rows[sid]["hidden"][-1][1] >= rows[sid]["t1"]
+
+
+def test_committed_c9_f1_frames_box_the_left_border_operator():
+    s = DL.load_scored(DEV)
+    fr = {f.sample_id: f for f in s.frames}
+    for sid in ("dev-f-c9-03", "dev-f-c9-06", "dev-f-c9-09", "dev-f-c9-12", "dev-f-c9-17", "dev-f-c9-19",
+                "dev-fs1-c9-01", "dev-f-c9-01", "dev-f-c9-07"):
+        left = [b for b in fr[sid].boxes if b.cls == "person" and b.x0 == 0.0 and 330 <= b.y0 <= 420
+                and b.y1 <= 480]
+        assert len(left) == 1 and left[0].truncated and left[0].occluded, sid

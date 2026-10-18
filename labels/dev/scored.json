@@ -1,10 +1,22 @@
 {
  "contract": "intercycle.dev_label_scoring/1",
- "rule": "Statuses derived by twin/dev_labels.py build_scored from the label notes and strokes (labels/RULES.md r1): frames scored | duplicate (same clip sha256 and PTS); stroke windows in list order: not_needed (unlabelled supplementary reserve), duplicate (same press, clip sha256, t0, t1), ambiguous ('NOT SCORABLE:' note), not_running ('press not running' note, no strokes), scored (at least one BDC). Detections inside 'hidden' spans are not scored. Scored windows: 10 per press with distinct clip sha256.",
+ "rule": "Statuses derived by twin/dev_labels.py build_scored from the label notes and strokes (labels/RULES.md r2): frames scored | duplicate (same clip sha256 and PTS); stroke windows in list order: not_needed (unlabelled supplementary reserve), duplicate (same press, clip sha256, t0, t1), ambiguous ('NOT SCORABLE:' note), not_running ('press not running' note, no strokes), scored (at least one BDC). Detections inside 'hidden' and 'edge' spans are not scored. Scored windows: exactly 10 per press with distinct clip sha256; a supplementary reserve is labelled only while its press has fewer than 10.",
+ "parts": [
+  {
+   "labels": "labels.json",
+   "samples": "sample.json",
+   "supplement": false
+  },
+  {
+   "labels": "labels_s1.json",
+   "samples": "sample_s1.json",
+   "supplement": true
+  }
+ ],
  "files": {
-  "labels.json": "256617b03e0d0bcaebafbe02b0f46fc69d33fe753f76dffbbfa3f85fd3c81c6f",
+  "labels.json": "a46205ec29eaa6cd01b7837dd617737e09b15f70397dd48368491a42e8e93e84",
   "sample.json": "80d3e850b54ec2a3bb0121a84c95609da481045c7963924b867eac6c431d98dc",
-  "labels_s1.json": "5832a2c2f3ecf918403165075152d37ee58c8b1a06cb32be4e50b34f53a1b8af",
+  "labels_s1.json": "1753c89b98ad4e58a4b5558f90f637e36742b6de6cdc2599aa32ce1c79812a9d",
   "sample_s1.json": "a757382ba4a4b8a1f146df42f2a54b27ba35bd8cf817232dcc5cd3410a924ad7"
  },
  "frames": [
@@ -14,7 +26,7 @@
    "clip_id": "0_tr2",
    "clip_sha256": "9190e65768851528ff64349af15326d040a2ee5635da16c45307adc4fa963118",
    "camera": 9,
-   "n_boxes": 6,
+   "n_boxes": 7,
    "status": "scored",
    "dup_of": null
   },
@@ -34,7 +46,7 @@
    "clip_id": "0_tr47",
    "clip_sha256": "1181c2f2c8770fe1763d6e397d147936a651fa9d6485a658dc96cc5a5bdf6e2e",
    "camera": 9,
-   "n_boxes": 5,
+   "n_boxes": 6,
    "status": "scored",
    "dup_of": null
   },
@@ -64,7 +76,7 @@
    "clip_id": "0_te11",
    "clip_sha256": "170a97c819e668d899e378e4ec1c417d89df8da3eff4373bf08f9698152babe1",
    "camera": 9,
-   "n_boxes": 5,
+   "n_boxes": 6,
    "status": "scored",
    "dup_of": null
   },
@@ -74,7 +86,7 @@
    "clip_id": "4_tr26",
    "clip_sha256": "3a8c080ea4fc42d366e243c29193aeee5fc4cf68b6b89e7b6c11ddfb33c9b5e8",
    "camera": 9,
-   "n_boxes": 6,
+   "n_boxes": 7,
    "status": "scored",
    "dup_of": null
   },
@@ -94,7 +106,7 @@
    "clip_id": "0_tr47",
    "clip_sha256": "1181c2f2c8770fe1763d6e397d147936a651fa9d6485a658dc96cc5a5bdf6e2e",
    "camera": 9,
-   "n_boxes": 5,
+   "n_boxes": 6,
    "status": "scored",
    "dup_of": null
   },
@@ -124,7 +136,7 @@
    "clip_id": "0_te11",
    "clip_sha256": "170a97c819e668d899e378e4ec1c417d89df8da3eff4373bf08f9698152babe1",
    "camera": 9,
-   "n_boxes": 5,
+   "n_boxes": 6,
    "status": "scored",
    "dup_of": null
   },
@@ -144,7 +156,7 @@
    "clip_id": "1_tr90",
    "clip_sha256": "1181c2f2c8770fe1763d6e397d147936a651fa9d6485a658dc96cc5a5bdf6e2e",
    "camera": 9,
-   "n_boxes": 5,
+   "n_boxes": 6,
    "status": "duplicate",
    "dup_of": "dev-f-c9-03"
   },
@@ -174,7 +186,7 @@
    "clip_id": "1_tr89",
    "clip_sha256": "170a97c819e668d899e378e4ec1c417d89df8da3eff4373bf08f9698152babe1",
    "camera": 9,
-   "n_boxes": 4,
+   "n_boxes": 5,
    "status": "scored",
    "dup_of": null
   },
@@ -194,7 +206,7 @@
    "clip_id": "1_tr90",
    "clip_sha256": "1181c2f2c8770fe1763d6e397d147936a651fa9d6485a658dc96cc5a5bdf6e2e",
    "camera": 9,
-   "n_boxes": 5,
+   "n_boxes": 6,
    "status": "scored",
    "dup_of": null
   },
@@ -414,7 +426,7 @@
    "clip_id": "0_te10",
    "clip_sha256": "99f7b8efdbd821f5a64a05d7943e6bbe1140b3b26cc33ee2433c432f1b0f2b62",
    "camera": 9,
-   "n_boxes": 5,
+   "n_boxes": 6,
    "status": "scored",
    "dup_of": null
   }
@@ -431,6 +443,8 @@
    "dup_of": null,
    "n_strokes": 2,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -444,6 +458,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "ambiguous"
   },
   {
@@ -457,6 +473,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "ambiguous"
   },
   {
@@ -470,6 +488,13 @@
    "dup_of": null,
    "n_strokes": 4,
    "hidden": [],
+   "edge": [
+    [
+     9.35,
+     10.62
+    ]
+   ],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -483,6 +508,8 @@
    "dup_of": null,
    "n_strokes": 2,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -496,6 +523,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "ambiguous"
   },
   {
@@ -509,6 +538,8 @@
    "dup_of": "dev-sw-P9a-02",
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "duplicate"
   },
   {
@@ -522,6 +553,8 @@
    "dup_of": "dev-sw-P9a-03",
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "duplicate"
   },
   {
@@ -535,6 +568,13 @@
    "dup_of": null,
    "n_strokes": 5,
    "hidden": [],
+   "edge": [
+    [
+     9.25,
+     10.33
+    ]
+   ],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -548,6 +588,8 @@
    "dup_of": null,
    "n_strokes": 5,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -561,6 +603,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "ambiguous"
   },
   {
@@ -574,6 +618,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "ambiguous"
   },
   {
@@ -587,6 +633,8 @@
    "dup_of": null,
    "n_strokes": 2,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -600,6 +648,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -613,6 +663,8 @@
    "dup_of": null,
    "n_strokes": 4,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -626,6 +678,8 @@
    "dup_of": null,
    "n_strokes": 4,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -639,6 +693,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -652,6 +708,8 @@
    "dup_of": null,
    "n_strokes": 4,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -665,6 +723,8 @@
    "dup_of": "dev-sw-P9b-03",
    "n_strokes": 4,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "duplicate"
   },
   {
@@ -678,6 +738,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -691,6 +753,8 @@
    "dup_of": "dev-sw-P9b-05",
    "n_strokes": 4,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "duplicate"
   },
   {
@@ -704,6 +768,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -717,6 +783,8 @@
    "dup_of": "dev-sw-P9b-02",
    "n_strokes": 4,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "duplicate"
   },
   {
@@ -730,6 +798,8 @@
    "dup_of": null,
    "n_strokes": 6,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -743,6 +813,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -756,6 +828,8 @@
    "dup_of": null,
    "n_strokes": 6,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -769,6 +843,8 @@
    "dup_of": null,
    "n_strokes": 4,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -782,6 +858,8 @@
    "dup_of": null,
    "n_strokes": 5,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -795,6 +873,8 @@
    "dup_of": null,
    "n_strokes": 5,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -813,6 +893,8 @@
      0.8
     ]
    ],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -826,6 +908,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -839,6 +923,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -852,6 +938,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -865,6 +953,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -878,6 +968,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -891,6 +983,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -904,6 +998,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -917,6 +1013,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -930,6 +1028,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -948,6 +1048,13 @@
      7.0
     ]
    ],
+   "edge": [
+    [
+     8.15,
+     8.99
+    ]
+   ],
+   "supplement_reserve": false,
    "status": "scored"
   },
   {
@@ -961,6 +1068,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "ambiguous"
   },
   {
@@ -974,6 +1083,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -987,6 +1098,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": false,
    "status": "not_running"
   },
   {
@@ -1005,6 +1118,8 @@
      3.3
     ]
    ],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "scored"
   },
   {
@@ -1018,6 +1133,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_running"
   },
   {
@@ -1033,9 +1150,11 @@
    "hidden": [
     [
      2.2,
-     7.97
+     7.98
     ]
    ],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "scored"
   },
   {
@@ -1058,6 +1177,8 @@
      5.6
     ]
    ],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "scored"
   },
   {
@@ -1071,6 +1192,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_running"
   },
   {
@@ -1094,9 +1217,11 @@
     ],
     [
      6.8,
-     8.98
+     8.99
     ]
    ],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "scored"
   },
   {
@@ -1110,6 +1235,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -1123,6 +1250,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -1136,6 +1265,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -1149,6 +1280,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -1162,6 +1295,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   },
   {
@@ -1175,6 +1310,8 @@
    "dup_of": null,
    "n_strokes": 0,
    "hidden": [],
+   "edge": [],
+   "supplement_reserve": true,
    "status": "not_needed"
   }
  ],
@@ -1198,7 +1335,8 @@
    }
   },
   "scored_window_seconds": 164.964,
-  "scored_hidden_seconds": 17.12,
+  "scored_hidden_seconds": 17.14,
+  "scored_edge_seconds": 3.19,
   "scored_strokes": 79
  }
 }

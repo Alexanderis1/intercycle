@@ -43,7 +43,10 @@ the sha256 of this file.
   and the note describes it with its approximate position, so the ambiguity is reported, not guessed.
 - **Blur.** Motion blur does not stop boxing: box the blurred extent of the body.
 - **Border check.** Before a frame is closed, the labeller views the four image borders (strips about 200 px
-  wide) as full-resolution crops; people sitting or standing at the border are often only partly in view.
+  wide) as full-resolution crops; people sitting or standing at the border are often only partly in view. A dark or
+  low-contrast shape in a border strip is judged by stepping through neighbouring frames of the same clip: a shape
+  whose pose or position changes is a person (boxed, or named in the note as uncertain); a shape that stays the
+  same is background.
 
 ## Strokes
 
@@ -53,9 +56,13 @@ the sha256 of this file.
   going down and starts going up. One stroke per BDC. If the BDC lies between two frames, the earlier frame's
   PTS is used; if the ram dwells at the bottom for several frames, the middle frame of the dwell is used.
 - A BDC within the first or last frame of the window counts only if the ram is seen going down before it and up
-  after it (otherwise it is not clicked; the note says "edge, not clicked").
+  after it (otherwise it is not clicked; the note says "edge, not clicked" and gives the excluded span as
+  "edge a-b s", from about midway between the nearest clicked BDC and the unclicked one up to the window edge).
 - If a person or object hides the ROI so that a BDC cannot be seen, no stroke is clicked for that stretch and the
-  note gives the hidden time span.
+  note gives the hidden time span as "hidden a-b s".
+- Spans are written in seconds with two decimals and rounded outward; a span that runs to a window edge is written
+  so that it reaches it (a <= t0, b >= t1), so no frame is left outside it. A scorer ignores detections inside
+  hidden and edge spans (`twin/dev_labels.py`, `ScoredDev.ignore`).
 - **Running.** A press is running in a window if at least one BDC is seen. A window with the press stopped is
   labelled `strokes: []` with the note "press not running"; it stays in the label set, and the reserve windows
   (`...-r1`, `-r2`, ...) replace such windows in list order for the 20 scored windows.
@@ -68,8 +75,9 @@ the sha256 of this file.
 - **The scored set is machine-readable.** `labels/dev/scored.json` gives every labelled item one status: frames
   `scored` | `duplicate`; stroke windows `scored` (running, at least one BDC clicked) | `not_running` | `ambiguous` |
   `duplicate` | `not_needed`. It records the sha256 of each label file and of each sample list it covers.
-  Scorers read labels only through `twin/dev_labels.py`, which checks those hashes and fails closed. The 20 scored
-  windows are 10 per press with distinct clip sha256.
+  Scorers read labels only through `twin/dev_labels.py`, which checks those hashes, rebuilds the statuses from the
+  hashed files and fails closed on any difference. The 20 scored windows are exactly 10 per press with distinct clip
+  sha256.
 
 ## Supplementary lists
 
@@ -77,9 +85,13 @@ the sha256 of this file.
   seeded RNG and hashed (`sample_s1.sha256`) and committed BEFORE any of its items is viewed. It is drawn from the dev
   inventory reduced to one clip per sha256, and excludes every clip sha256 already sampled for the same press.
 - Its frames and its primary stroke windows are all labelled. Its reserve windows are labelled in list order, per
-  press, only until that press has 10 `scored` windows over the base and supplementary lists together; the remaining
-  reserves are not labelled and get the status `not_needed`. The list order is seeded random, so this stopping rule
-  does not select on content.
+  press, only while that press has fewer than 10 `scored` windows over the base and supplementary lists together;
+  the remaining reserves are not labelled and get the status `not_needed`. The list order is seeded random, so this
+  stopping rule does not select on content.
+- **Reproducing the lists** (GPU env, PyAV; nothing is written): `python scripts/label_sample.py --legacy-base
+  --check labels/dev/sample.json` (the base list was drawn before the sha256 dedupe) and `python
+  scripts/label_sample.py --supplement labels/dev/sample.json --check labels/dev/sample_s1.json`. The script never
+  overwrites an existing list; a new list needs `--out` to a new path.
 - Its labels go to a separate label set (`labels/dev/labels_s1.json`) that answers its hash.
 - How strokes are seen is written in the label set notes (frame stepping, space-time strip of the ROI pixels).
 
@@ -94,3 +106,8 @@ the sha256 of this file.
   Supplementary lists. The base labels (`labels.json`, first made under the previous version of this file, sha256
   `8a3b9ab5984e13350444b26db853619f807738a31c298f75bfa4514e27695b63`) were re-checked under this version, and their
   `rules_sha256` now names this version.
+- **r2 (fix round 2, Sun 18 Oct ~03:30 CEST).** Added: stepping through neighbouring frames in the Border check, the
+  "edge a-b s" span, spans that reach the window edge, exactly 10 scored windows per press with reserves labelled
+  only below the target, and the reproduce commands. Both DEV label sets (made under r1, sha256
+  `ba6242456c7397038781d182b576950f1cb828620ebbe58d9ea2cac6dc72ca92`) were re-checked in the left 200 px strip of
+  every c9_f1 frame and at the window edges, and their `rules_sha256` now names this version.

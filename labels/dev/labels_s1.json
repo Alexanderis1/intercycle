@@ -5,7 +5,7 @@
  "labeller_kind": "claude_agent",
  "blind": true,
  "proposals_shown": false,
- "rules_sha256": "ba6242456c7397038781d182b576950f1cb828620ebbe58d9ea2cac6dc72ca92",
+ "rules_sha256": "493457a5574e52fc4554c116f84ae0bcbb580a280a447e07f8a98b3abf820a20",
  "sample_list_sha256": "f019af80844b28a903e9bcae8a8e936f5241383eebb7c49adb7637987a1b038e",
  "frames": [
   {
@@ -72,9 +72,21 @@
      "truncated": true,
      "occluded": false,
      "src": "labeller"
+    },
+    {
+     "cls": "person",
+     "x0": 0.0,
+     "y0": 408.0,
+     "x1": 35.0,
+     "y1": 474.0,
+     "foot_u": 17.5,
+     "foot_v": 474.0,
+     "truncated": true,
+     "occluded": true,
+     "src": "labeller"
     }
    ],
-   "note": "seated operator at the left border behind a chair back (head, blue shirt, one shoe visible; cut by the left border); two operators behind the P9a crown (red shirt facing away, and one facing the camera), lower bodies hidden; a blurred dark shape right of them near (490, 480) may be a third person, not boxed (uncertain); walker at the end of the aisle in front of the forklift glare; person at the bottom border seen from above holding a phone (feet not visible); vehicle (forklift, headlight glare) in the aisle near (1450, 650) on camera 9: not boxed (no vehicle class on camera 9), no driver distinguishable; dark shapes by the right wall near (1760, 720) are bins/chairs, not boxed"
+   "note": "seated operator at the left border behind a chair back (head, blue shirt, one shoe visible; cut by the left border); two operators behind the P9a crown (red shirt facing away, and one facing the camera), lower bodies hidden; a blurred dark shape right of them near (490, 480) may be a third person, not boxed (uncertain); walker at the end of the aisle in front of the forklift glare; person at the bottom border seen from above holding a phone (feet not visible); vehicle (forklift, headlight glare) in the aisle near (1450, 650) on camera 9: not boxed (no vehicle class on camera 9), no driver distinguishable; dark shapes by the right wall near (1760, 720) are bins/chairs, not boxed; fix r2 border check: operator crouching at the left border behind the yellow-green railing by the far-left press (dark workwear, head near (20, 425), white reflective cuff near (28, 451)), pose changes between neighbouring frames of the clip; boxed, cut by the left border, lower body behind the railing (feet not visible); its back merges with a static dark machine part at x 0-25, y 405-470, so the left and top box edges are uncertain by about 10 px; a pale shape at the left border near (5, 375) may be the head of a person standing mostly outside the frame, not boxed (uncertain)"
   }
  ],
  "stroke_windows": [
@@ -158,7 +170,7 @@
     3.8662907772855415,
     7.289569069673782
    ],
-   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 5.00-7.00 s (an operator's head in front of the slide). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 5.00-7.00 s (an operator's head in front of the slide). fix r2: possible BDC near 8.95 s at the window end, rise after it not seen: edge, not clicked; edge 8.15-8.99 s. strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
   },
   {
    "sample_id": "dev-sws1-P9b-03",
@@ -220,7 +232,7 @@
    "strokes": [
     0.7652033830044301
    ],
-   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 2.20-7.97 s (a person in front of the slide). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 2.20-7.98 s (a person in front of the slide). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
   },
   {
    "sample_id": "dev-sws1-P9b-r4",
@@ -255,7 +267,7 @@
     2.013441401530407,
     3.7452174788562225
    ],
-   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 0.04-0.90 s and hidden 3.95-5.60 s and hidden 6.80-8.98 s (covered by people / the band dims). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
+   "note": "P9b c9_f1: slide band at x 405-425, y 400-420. hidden 0.04-0.90 s and hidden 3.95-5.60 s and hidden 6.80-8.99 s (covered by people / the band dims). strokes marked by the labeller on upscaled space-time strips (kymographs, scripts/label_extract.py kymo) of the ROI columns, one column per decoded frame with PTS ticks, with an edge-trace overlay as a viewing aid; stroke = middle frame of the band's lowest image position, snapped to the nearest frame PTS."
   }
  ]
 }
