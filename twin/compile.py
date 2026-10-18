@@ -548,6 +548,11 @@ def _check_refs(site: Site, dyn: Dynamics, tasks: Tasks) -> None:
     if {z.zone for z in tasks.zones} != zones:
         raise CompileError(f"tasks zones {sorted(z.zone for z in tasks.zones)} != site zones {sorted(zones)}")
     presses = {p.id: p for p in site.presses}
+    # per-press dynamics keys are press.<id>.<param> (press.<param> is a shared parameter)
+    dyn_presses = {k.split(".")[1] for k in [*dyn.observed, *dyn.assumed]
+                   if k.startswith("press.") and len(k.split(".")) == 3}
+    if dyn_presses != set(presses):
+        raise CompileError(f"dynamics press ids {sorted(dyn_presses)} != site press ids {sorted(presses)}")
     for c in tasks.checkpoints:
         if c.press is not None and (c.press not in presses or presses[c.press].zone != c.zone):
             raise CompileError(f"checkpoint {c.id}: press {c.press} is not a press of zone {c.zone}")

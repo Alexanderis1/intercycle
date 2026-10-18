@@ -279,6 +279,25 @@ def test_inconsistent_ids_are_refused():
         compiled(dyn=d)
 
 
+@pytest.mark.parametrize("block", ["observed", "assumed"])
+def test_dynamics_block_of_an_unknown_press_is_refused(block):
+    d = copy.deepcopy(DYN0)
+    d[block]["press.P99.stroke_period_s"] = copy.deepcopy(DYN0["observed"]["press.P9a.stroke_period_s"])
+    if block == "assumed":
+        d[block]["press.P99.stroke_period_s"]["source"] = "assumed"
+    with pytest.raises(C.CompileError, match=r"dynamics press ids \['P14a', 'P99', 'P9a'\] != site press ids"):
+        compiled(dyn=d)
+
+
+def test_site_press_missing_from_every_dynamics_key_is_refused():
+    d = copy.deepcopy(DYN0)
+    for blk in ("observed", "assumed"):
+        for k in [k for k in d[blk] if k.startswith("press.P14a.")]:
+            del d[blk][k]
+    with pytest.raises(C.CompileError, match=r"dynamics press ids \['P9a'\] != site press ids \['P14a', 'P9a'\]"):
+        compiled(dyn=d)
+
+
 def _with_clips():
     s = copy.deepcopy(SITE0)
     s["cal_sources"] = ["0_trS"]
