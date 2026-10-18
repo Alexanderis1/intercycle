@@ -19,10 +19,16 @@ Per world (intercycle.eval.twin_batch for the plan, the order, re-runs, layout a
 
 Backends: `local` = no Modal: the observer phase in this process and each mission as the plant driven by a scripted
 wiring double (slice.Driver) in this process (a wiring double, not the policies: for the stub-world end-to-end test);
-`modal` = NOT WIRED in this build (refused, fail closed): the observer phase in one Modal CPU container per world and
-each mission on Modal CPU (cloud/modal_isaac_robot.py fake backend + Nav2, cpu 4, max_rtf 2) need a broadcaster that
-starts from the pickled snapshot (twin/broadcast_live.py only re-ingests learn_obs.jsonl, which for 8 days is ~1.4 M
-lines) and the reactive state chain through the Modal volume.
+`modal` = the real policies (section "Modal backend"): the day scripts are generated HERE (the generator and
+$INTERCYCLE_DATA stay local) and shipped as plant-only files; the observer phase runs in one Modal CPU container per
+world (cloud/modal_isaac_robot.double_observer_phase, all worlds in parallel) and writes one pickled snapshot per
+(day, zone) slot to the volume; each mission runs in its own Modal CPU container (double_episode: the Modal slice's
+fake backend + Nav2 stack, cpu 4, max_rtf 2, the full T = 720 s); the learned arm's broadcaster starts from the
+snapshot (twin/broadcast_live.py --snapshot-t0) and tails the live obs_v2.jsonl; the reactive arm loads the world's
+previous chain step's saved state from the volume (episodes/<tag>/reactive_state.json, the scored attempt's), and a
+re-run of a cell starts from the SAME input state; every pulled reactive state is checked with reactive.verify_chain
+(<batch>/<tag>.reactive_chain.json). The z9 / z14 slots of a world-day never overlap (twin_batch.day_slots), because
+the reactive state is ONE per world across zones (PLAN_TWIN §5 "Baseline fairness": "persisted within the world").
 
 Modes: --dev runs dev worlds 0-3 only (dev seeds); the sealed batch (`run_sealed`) is reachable only from sealed_run.py
 after every refusal passed (INTERCYCLE_SEALED_RUN=1 and the robot FREEZE checked there); this CLI refuses --sealed.
@@ -38,7 +44,7 @@ import os
 import pickle
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 REPO = Path(__file__).resolve().parents[1]
@@ -63,7 +69,7 @@ import slice as SL  # noqa: E402  (scripts/slice.py: inputs, observer spec, marg
 
 SEALED_ENV = "INTERCYCLE_SEALED_RUN"
 SEALED_BACKEND = "modal"                # the sealed batch runs the real policies on Modal CPU, never the wiring double
-SEALED_BACKEND_READY = False            # the Modal backend is NOT wired in this build: sealed_run refuses up front
+SEALED_BACKEND_READY = True             # the Modal backend is wired (dev smoke on the stub world: see the lane report)
 SNAPSHOT = "observer_snapshot.pkl"      # the pickled observer state at a mission start (one per (world, day, zone))
 SCORED_DAYS = (9, 10)
 
@@ -172,7 +178,7 @@ def observer_phase(ctx: dict, world: TB.World, slots: list[tuple[int, str, float
 # ------------------------------------------------------------------------------------------------ missions
 
 
-def plant_cfg(ctx: dict, m: TB.Mission, script: Path, run_dir: Path, *, remote: bool = False) -> dict:
+def plant_cfg(ctx: dict, m: TB.Mission, script: Path | PurePosixPath, run_dir: Path, *, remote: bool = False) -> dict:
     paths = ctx["paths"]
     root = SL.REMOTE_REPO if remote else None
 
@@ -227,38 +233,326 @@ def local_mission(ctx: dict, m: TB.Mission, script: Path, batch: Path, snapshot:
     return {"run_id": m.run_id, "wall_s": wall, "container_usd": 0.0}
 
 
+# ------------------------------------------------------------------------------------------------ Modal backend
+# The real policies on Modal CPU (cloud/modal_isaac_robot.py double_episode: the fake kinematic backend + Nav2, the same
+# stack as the Modal slice, cpu 4, max_rtf 2), one container per mission; the observer phase in one Modal CPU container
+# per world (double_observer_phase), in the SAME image, so its pickled snapshots unpickle in the broadcaster.
+# Per condition (twin_design.SEALED_CONDITIONS), the robot side is exactly the slice's stack with:
+#   learned   twin/broadcast_live.py --snapshot-t0 t0 (starts from the world's observer snapshot at this mission's start,
+#             then tails the mission's live obs_v2.jsonl) -> observer_bridge (condition learned, episode keyring) ->
+#             timing_planner (condition learned)
+#   static    observer_bridge condition static (no feed) -> timing_planner condition static (never enters)
+#   reactive  observer_bridge condition reactive (own camera; reactive_config = the frozen default ReactiveConfig, no
+#             tuning; world_id; mission_tag; reactive_state = the world's previous chain step's saved state, empty on
+#             the world's first step) -> timing_planner condition reactive
+SNAPSHOT_VOL_DIR = "double"                 # <VOL>/double/<batch id>/w<W>/snap_d<D>_<zone>.pkl
+REACTIVE_IN = "reactive_state_in.json"      # the reactive arm's input state in its world dir
+REACTIVE_OUT = "reactive_state.json"        # observer_bridge's default reactive_state_out ($IC_OUT/reactive_state.json)
+REACTIVE_CFG = "reactive_config.json"
+PULL_WORKERS = 8                            # parallel `modal volume get` of a round's episode dirs
+
+
+def _remote(ctx: dict, k: str) -> str:
+    return f"{SL.REMOTE_REPO}/{Path(ctx['paths'][k]).resolve().relative_to(REPO).as_posix()}"
+
+
+def remote_observer_phase(job: dict, plant_dir: Path, vol_root: Path) -> dict:
+    """In the observer-phase container (cloud/modal_isaac_robot.double_observer_phase): the day scripts written by the
+    LOCAL generator (shipped as plant-only files; the engine opens them through the truth guard) -> observer_phase ->
+    one pickled snapshot per slot on the volume. Returns the stats with the snapshots' volume-relative paths."""
+    from twin.engine import load_day_script
+
+    site, dyn = load(Site, REPO / job["site"]), load(Dynamics, REPO / job["dynamics"])
+    margin = Path("/tmp") / f"{job['tag']}_m7_margin.json"
+    margin.write_bytes(job["margin"])
+    ctx = {"spec": job["spec"], "margin": margin, "site": site, "dyn": dyn, "stub": bool(job["stub"])}
+    scripts = {int(d): load_day_script(plant_dir / name) for d, name in job["days"].items()}
+    world = TB.World(**job["world"])
+    snaps, st = observer_phase(ctx, world, [(int(d), str(z), float(t)) for d, z, t in job["slots"]], float(job["day_s"]),
+                               scripts=scripts)
+    rels = {}
+    for (d, z), b in snaps.items():
+        rel = f"{job['snap_dir']}/snap_d{d}_{z}.pkl"
+        p = vol_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b)
+        rels[f"d{d}_{z}"] = rel
+    st["snapshots"] = rels
+    return st
+
+
+def modal_cfg(ctx: dict, m: TB.Mission, script_name: str, *, max_rtf: float = TB.MAX_RTF,
+              reactive_in: bool = False) -> dict:
+    """The episode cfg of one batch mission on Modal (the slice's Modal cfg with the full T and the mission's real
+    policy; module doc of this section)."""
+    from intercycle_eval.broadcaster import check_robot_scenario  # pyright: ignore[reportMissingImports]
+    from intercycle_nav.masks import scenario_ros_arg  # pyright: ignore[reportMissingImports]
+
+    if m.condition not in SEALED_CONDITIONS:
+        raise DoubleError(f"{m.run_id}: condition {m.condition!r} is not in the cut design {SEALED_CONDITIONS}")
+    cz = ctx["compiled"][m.zone]
+    pc = plant_cfg(ctx, m, PurePosixPath(SL.REMOTE_PLANT_DIR, m.run_id, script_name), Path("."), remote=True)
+    dock = cz.graph.pos["DOCK"]
+    start = [float(dock[0]), float(dock[1]), 0.0]
+    cfg: dict = {"tag": m.run_id, "twin": True, "sim": "fake", "mode": "nav", "nav2": True, "seconds": MISSION_T_S,
+                 "timeout_s": MISSION_T_S, "max_rtf": max_rtf, "start": start, "goal": start,
+                 "scenario": "scenario.yaml", "mover_source": "twin.plant:make", "plant": pc,
+                 "double": m.record(),
+                 "nav2_cmd": "ros2 launch /root/ros2/intercycle_nav/launch/nav.launch.py map:=$IC_WORLD/map.yaml"}
+    arg = scenario_ros_arg(cfg)
+    x0, z0, x1, z1 = (float(v) for v in cz.extent)
+    grid = f" -p mask_origin:=[{x0},{z0}] -p mask_size:=[{x1 - x0},{z1 - z0}]"
+    c, t0 = m.condition, m.t0
+    extra = []
+    if c == "learned":
+        extra.append("PYTHONPATH=$IC_SIM_PYTHONPATH exec $IC_SIM_PY -u -m twin.broadcast_live --work $IC_WORK"
+                     f" --obs $IC_OUT/obs_v2.jsonl --world $IC_WORLD --snapshot-t0 {t0}")
+        wait_vk = "for i in $(seq 1200); do [ -s $IC_WORK/observer_vk.txt ] && break; sleep 0.1; done; "
+        bridge = (f"{wait_vk}exec python3 -u -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true"
+                  f" -p condition:=learned -p feed:=unix://$IC_WORK/observer.sock -p plant_t0:={t0}"
+                  f" -p keyring:=\\\"$(cat $IC_WORK/observer_vk.txt)\\\"{grid}{arg}")
+    elif c == "static":
+        bridge = (f"exec python3 -u -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true"
+                  f" -p condition:=static -p feed:=none -p plant_t0:={t0}{grid}{arg}")
+    else:
+        rin = f" -p reactive_state:=$IC_WORLD/{REACTIVE_IN}" if reactive_in else ""
+        bridge = (f"exec python3 -u -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true"
+                  f" -p condition:=reactive -p feed:=none -p plant_t0:={t0}"
+                  f" -p \"reactive_config:='$(cat $IC_WORLD/{REACTIVE_CFG})'\""
+                  f" -p world_id:={reactive_world_id(m.world)} -p mission_tag:={m.run_id}{rin}{grid}{arg}")
+    extra.append(bridge)
+    cfg["extra_launch"] = extra
+    cfg["goal_cmd"] = (f"python3 -u -m intercycle_nav.timing_planner --ros-args -p use_sim_time:=true"
+                       f" -p condition:={c} -p plant_t0:={t0} -p init:=[{start[0]},{start[1]},{start[2]}]"
+                       f" -p mission_timeout_s:=100000.0 -p max_wait_s:=120.0"
+                       f" -p out:=$IC_WORK/goal.json{arg} ; exec sleep {SL.HOLD_GOAL_S}")
+    check_robot_scenario(cfg)
+    return cfg
+
+
+def reactive_world_id(w: TB.World) -> str:
+    """The reactive arm's world id (its state never crosses worlds): split + design index, never the seed."""
+    return f"{w.split}{w.index}"
+
+
+def zone_world_bytes(ctx: dict, out: Path, zone: str) -> dict[str, bytes]:
+    """The world dir of a mission in `zone` (no truth): the built zone files + the observer spec record + the frozen
+    margin + the frozen default reactive config. The learned snapshot and the reactive input state come from the
+    volume (double_episode vol_world)."""
+    from intercycle_nav import reactive as RX  # pyright: ignore[reportMissingImports]
+    from twin import broadcast_live as BL
+
+    zd = out / "worlds" / zone
+    files = {f: (zd / f).read_bytes() for f in SL.BW.FILES if (zd / f).exists()}
+    files["factory_l0.usda"] = files["static.usda"]
+    cz = ctx["compiled"][zone]
+    # the spec record names the camera model the mission plant runs (broadcast_live refuses a record without one);
+    # it is the model the observer phase's config follows (_camera: stat_v1, or StubCameraV0 on the G0 stub site)
+    model = _camera(ctx, 0, 1).provenance()["model"]
+    files[BL.SPEC_FILE] = json.dumps(BL.spec_record(ctx["spec"], zone, [mm.id for mm in cz.scenario.machines],
+                                                    model)).encode()
+    files[BL.MARGIN_FILE] = Path(ctx["margin"]).read_bytes()
+    files[REACTIVE_CFG] = json.dumps(json.loads(RX.ReactiveConfig().to_json()), separators=(",", ":")).encode()
+    return files
+
+
+def pull_episode(tag: str, dest: Path) -> Path | None:
+    """modal volume get episodes/<tag> -> <dest>/<tag>/ (twin_eval's layout). None if the volume has no such dir."""
+    import subprocess
+
+    r = subprocess.run([sys.executable, "-m", "modal", "volume", "get", "--force", "intercycle-robot",
+                        f"episodes/{tag}", str(dest)], capture_output=True, text=True)
+    p = dest / tag
+    return p if r.returncode == 0 and p.is_dir() else None
+
+
+class ModalRunner:
+    """The Modal side of run_batch (one app.run() context for the whole batch)."""
+
+    def __init__(self, ctx: dict, out: Path, batch_id: str, cpu: float = TB.CPU, max_rtf: float = TB.MAX_RTF):
+        import modal_isaac_robot as R  # pyright: ignore[reportMissingImports]
+
+        self.R, self.ctx, self.out, self.batch_id, self.cpu, self.max_rtf = R, ctx, out, batch_id, cpu, max_rtf
+        self.worlds = {z: zone_world_bytes(ctx, out, z) for z in ctx["zones"]}
+
+    def observer_phases(self, jobs: list[tuple[dict, dict[str, bytes]]]) -> list[dict]:
+        fn = self.R.double_observer_phase
+        if self.cpu != 4.0:
+            fn = fn.with_options(cpu=self.cpu)
+        calls = [fn.spawn(j, f) for j, f in jobs]
+        out = []
+        for (j, _), c in zip(jobs, calls):
+            try:
+                out.append(c.get())
+            except Exception as e:  # noqa: BLE001 - an observer phase that fails stops the batch (fail closed)
+                raise DoubleError(f"observer phase {j['tag']} failed on Modal: {e!r}") from e
+        return out
+
+    def missions(self, items: list[tuple[TB.Mission, dict, dict[str, bytes], dict[str, str]]],
+                 batch: Path) -> list[dict]:
+        fn = self.R.double_episode
+        if self.cpu != 4.0:
+            fn = fn.with_options(cpu=self.cpu)
+        t0 = time.time()
+        calls = [(m, cfg, fn.spawn(cfg, self.worlds[m.zone], pf, vw)) for m, cfg, pf, vw in items]
+        recs = []
+        for m, cfg, call in calls:
+            res: dict
+            try:
+                res = dict(call.get())
+            except Exception as e:  # noqa: BLE001 - a provider failure is recorded; classify_invalid labels it
+                res = {"tag": m.run_id, "error": f"modal: {e!r}"}
+            res.setdefault("tag", m.run_id)
+            res["cfg"] = cfg
+            res["client_wall_s"] = round(time.time() - t0, 1)
+            recs.append((m, res))
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=PULL_WORKERS) as ex:     # the pulls are I/O: in parallel, not per mission
+            pulled = list(ex.map(lambda mr: pull_episode(mr[0].run_id, batch) if "phases" in mr[1] else None, recs))
+        out = []
+        for (m, res), p in zip(recs, pulled):
+            res["pulled"] = str(p) if p else None
+            TB.write_json(batch / f"{m.run_id}.json", res)
+            wall = float((res.get("phases") or {}).get("total_wall_s") or res.get("total_wall_s") or 0.0)
+            out.append({"run_id": m.run_id, "wall_s": wall, "container_usd": TB.container_usd(wall, self.cpu),
+                        "error": res.get("error"), "pulled": res["pulled"]})
+        return out
+
+
+def modal_batch(ctx: dict, out: Path, worlds: list[TB.World], missions: list[TB.Mission], rnds, scripts, objs_days,
+                classify: Callable[[Path], dict], costs: list[dict], phase_stats: list[dict]) -> tuple[list, list]:
+    """Observer phases (one container per world, all in parallel), then the rounds (module doc step 3) on Modal."""
+    import modal_isaac_robot as R  # pyright: ignore[reportMissingImports]
+
+    batch_id = f"{out.name}_{time.strftime('%m%d_%H%M%S')}"
+    run = ModalRunner(ctx, out, batch_id)
+    runs = out / "runs"
+    jobs = []
+    for w in worlds:
+        slots = sorted({(m.day, m.zone, m.t0) for m in missions if m.world == w})
+        days = {d: p.name for (wi, d), p in scripts.items() if wi == w.index and d <= max(s[0] for s in slots)}
+        files = dict(PL.day_script_payload(scripts[(w.index, d)]) for d in days)
+        jobs.append(({"tag": f"{batch_id}_obs_w{w.index}", "world": TB.asdict(w), "slots": [list(s) for s in slots],
+                      "days": days, "day_s": objs_days, "stub": ctx["stub"], "spec": ctx["spec"],
+                      "margin": Path(ctx["margin"]).read_bytes(),
+                      "site": Path(ctx["paths"]["site"]).resolve().relative_to(REPO).as_posix(),
+                      "dynamics": Path(ctx["paths"]["dynamics"]).resolve().relative_to(REPO).as_posix(),
+                      "snap_dir": f"{SNAPSHOT_VOL_DIR}/{batch_id}/w{w.index}"}, files))
+    all_missions: list[TB.Mission] = []
+    invalid_lists: list[dict] = []
+    with R.app.run():
+        t = time.time()
+        stats = run.observer_phases(jobs)
+        for w, st in zip(worlds, stats):
+            phase_stats.append(st)
+            costs.append({"what": f"observer_phase w{w.index}", "wall_s": st["wall_s"],
+                          "usd": TB.container_usd(st["wall_s"]), "client_wall_s": round(time.time() - t, 1)})
+        snap_rel = {(w.index, k): v for w, st in zip(worlds, stats) for k, v in st["snapshots"].items()}
+        # reactive chain: world -> (volume path of the previous step's scored saved state, its pulled local copy)
+        chain_state: dict[int, tuple[str, Path] | None] = {w.index: None for w in worlds}
+        for r, rnd in enumerate(rnds):
+            todo = list(rnd)
+            k = 0
+            step_in = {m.world.index: chain_state[m.world.index] for m in rnd if m.condition == "reactive"}
+            while todo:
+                batch = runs / f"round{r}_try{k}"
+                batch.mkdir(parents=True, exist_ok=False)
+                items = []
+                for m in todo:
+                    sp = scripts[(m.world.index, m.day)]
+                    vw: dict[str, str] = {}
+                    rin = None
+                    if m.condition == "learned":
+                        vw[SNAPSHOT] = snap_rel[(m.world.index, f"d{m.day}_{m.zone}")]
+                    elif m.condition == "reactive":
+                        rin = step_in.get(m.world.index)
+                        if rin is not None:
+                            vw[REACTIVE_IN] = rin[0]
+                    cfg = modal_cfg(ctx, m, sp.name, max_rtf=run.max_rtf, reactive_in=rin is not None)
+                    cfg["reactive_parent"] = rin[0] if rin else None
+                    items.append((m, cfg, dict([PL.day_script_payload(sp)]), vw))
+                TB.write_json(batch / "batch.json", {"cfgs": [c for _, c, _, _ in items]})
+                for rec in run.missions(items, batch):
+                    costs.append({"what": rec["run_id"], **rec})
+                lst = classify(batch)
+                invalid_lists.append(lst)
+                all_missions += todo
+                bad = set(lst.get("invalid", []))
+                for m in todo:                      # the chain advances on the scored (first clean) attempt only
+                    if m.condition == "reactive" and m.run_id not in bad:
+                        cell_bad = any(x.run_id in bad for x in todo if x.cell == m.cell)
+                        if not cell_bad:
+                            prev = step_in.get(m.world.index)
+                            local = batch / m.run_id / REACTIVE_OUT
+                            chk = chain_check(local, m, prev[1] if prev else None)
+                            TB.write_json(batch / f"{m.run_id}.reactive_chain.json", chk)
+                            chain_state[m.world.index] = (f"episodes/{m.run_id}/{REACTIVE_OUT}", local)
+                todo = TB.reruns(todo, lst.get("invalid", []))
+                k += 1
+    return all_missions, invalid_lists
+
+
+def chain_check(state_out: Path, m: TB.Mission, prev_local: Path | None) -> dict:
+    """reactive.verify_chain on the pulled saved state (fail closed: an error is recorded, the next chain step then
+    starts from that file, and its bridge refuses a missing one)."""
+    from intercycle_nav import reactive as RX  # pyright: ignore[reportMissingImports]
+
+    try:
+        return {"ok": True, **RX.verify_chain(str(state_out), m.run_id, str(prev_local) if prev_local else None,
+                                              reactive_world_id(m.world))}
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": repr(e)[:500]}
+
+
 # ------------------------------------------------------------------------------------------------ the batch
 
 
 def run_batch(out: Path, worlds: list[TB.World], *, backend: str = "local", zones: list[str] | None = None,
               day_s: float = TB.DAY_S, wave_size: int = TB.WAVE_SIZE,
-              classify: Callable[[Path], dict] | None = None, stubs: bool = False) -> dict:
+              classify: Callable[[Path], dict] | None = None, stubs: bool = False, max_cells: int = 0) -> dict:
     """Steps 1-4 of the module doc for every world; returns the batch record (also <out>/double_batch.json).
-    `stubs` (the stub-world end-to-end test only) runs on the whole G0 v0 stub set (setup)."""
-    if backend != "local":
-        raise DoubleError(f"backend {backend!r} is not wired in this build (fail closed): only the local wiring backend")
+    `stubs` (the stub-world end-to-end test only) runs on the whole G0 v0 stub set (setup), local backend only.
+    max_cells > 0 (dev smoke only) keeps the first max_cells (world, day, zone) cells of the plan."""
+    if backend not in ("local", "modal"):
+        raise DoubleError(f"backend {backend!r} unknown (local | modal)")
+    if stubs and backend != "local":
+        raise DoubleError("the G0 stub set runs on the local wiring backend only (fail closed)")
     t_wall = time.time()
     ctx = setup(out, stubs=stubs)
     SL.BW.build(ctx["paths"]["site"], ctx["paths"]["dynamics"], ctx["paths"]["tasks"], out / "worlds")
     zs = zones or ctx["zones"]
     missions = TB.plan(worlds, zs, day_s=day_s)
+    if max_cells:
+        if worlds[0].split != "dev":
+            raise DoubleError("max_cells (a smoke subset) is for dev worlds only")
+        keep = sorted({m.cell for m in missions}, key=lambda c: next(m.t0 for m in missions if m.cell == c))[:max_cells]
+        missions = [m for m in missions if m.cell in keep]
     rnds = TB.rounds(missions, wave_size)
     runs = out / "runs"
     days_dir = out / "plant"
     costs: list[dict] = []
     scripts: dict[tuple[int, int], Path] = {}
     snaps: dict[tuple[int, int, str], bytes] = {}
-    phase_stats = []
+    phase_stats: list[dict] = []
+    last_day = max(m.day for m in missions)
+    objs_by_world = {}
     for w in worlds:
-        sp, objs = write_days(ctx, w, range(1, max(SCORED_DAYS) + 1), day_s, days_dir)
+        sp, objs = write_days(ctx, w, range(1, last_day + 1), day_s, days_dir)
         scripts.update({(w.index, d): p for d, p in sp.items()})
+        objs_by_world[w.index] = objs
+    classify = classify or classify_batch
+    if backend == "modal":
+        all_missions, invalid_lists = modal_batch(ctx, out, worlds, missions, rnds, scripts, day_s, classify, costs,
+                                                  phase_stats)
+        return finish_batch(out, ctx, backend, worlds, zs, missions, rnds, runs, all_missions, invalid_lists,
+                            phase_stats, costs, t_wall)
+    for w in worlds:
         slots = sorted({(m.day, m.zone, m.t0) for m in missions if m.world == w})
-        s, st = observer_phase(ctx, w, list(slots), day_s, scripts=objs)
+        s, st = observer_phase(ctx, w, list(slots), day_s, scripts=objs_by_world[w.index])
         snaps.update({(w.index, d, z): b for (d, z), b in s.items()})
         phase_stats.append(st)
-        costs.append({"what": f"observer_phase w{w.index}", "wall_s": st["wall_s"],
-                      "usd": 0.0 if backend == "local" else TB.container_usd(st["wall_s"])})
-    classify = classify or classify_batch
+        costs.append({"what": f"observer_phase w{w.index}", "wall_s": st["wall_s"], "usd": 0.0})
     all_missions: list[TB.Mission] = []
     invalid_lists = []
     for r, rnd in enumerate(rnds):
@@ -282,6 +576,12 @@ def run_batch(out: Path, worlds: list[TB.World], *, backend: str = "local", zone
             all_missions += todo
             todo = TB.reruns(todo, lst.get("invalid", []))
             k += 1
+    return finish_batch(out, ctx, backend, worlds, zs, missions, rnds, runs, all_missions, invalid_lists, phase_stats,
+                        costs, t_wall)
+
+
+def finish_batch(out: Path, ctx: dict, backend: str, worlds, zs, missions, rnds, runs: Path, all_missions,
+                 invalid_lists, phase_stats, costs, t_wall: float) -> dict:
     inv = TB.merge_invalid(invalid_lists, TB.mission_records(all_missions))
     TB.write_json(runs / TB.INVALID_ALL, inv)
     rec = {"contract": "twin.double_batch/1", "backend": backend, "split": worlds[0].split,
@@ -332,6 +632,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--worlds", default="0")
     ap.add_argument("--zones", default="")
     ap.add_argument("--backend", default="local", choices=("local", "modal"))
+    ap.add_argument("--day-s", type=float, default=TB.DAY_S, help="generated day length (dev smoke only)")
+    ap.add_argument("--max-cells", type=int, default=0, help="dev smoke: keep the first N (world, day, zone) cells")
     a = ap.parse_args(argv)
     if a.sealed or not a.dev:
         print("run_double REFUSED: the sealed batch runs only through scripts/sealed_run.py (after the robot FREEZE); "
@@ -339,7 +641,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     out = Path(a.out) if a.out else REPO / "out" / "double" / time.strftime("%m%d_%H%M%S")
     rec = run_batch(out, dev_worlds([int(x) for x in a.worlds.split(",") if x]), backend=a.backend,
-                    zones=[z for z in a.zones.split(",") if z] or None)
+                    zones=[z for z in a.zones.split(",") if z] or None, day_s=a.day_s, max_cells=a.max_cells)
     print(json.dumps({k: rec[k] for k in ("n_missions", "n_rounds", "usd", "wall_s", "runs_root")}, indent=1))
     return 0
 

@@ -107,6 +107,9 @@ image = (
     .add_local_dir(str(REPO / "intercycle"), f"{REMOTE_REPO}/intercycle", ignore=["**/__pycache__", "**/*.pyc"])
     .add_local_dir(str(REPO / "twin"), f"{REMOTE_REPO}/twin", ignore=["**/__pycache__", "**/*.pyc"])
     .add_local_dir(str(REPO / "scenario"), f"{REMOTE_REPO}/scenario")
+    # the CPU-double batch's observer phase runs the orchestrator's own loop in the container (run_double imports slice)
+    .add_local_file(str(REPO / "scripts" / "run_double.py"), f"{REMOTE_REPO}/scripts/run_double.py")
+    .add_local_file(str(REPO / "scripts" / "slice.py"), f"{REMOTE_REPO}/scripts/slice.py")
 )
 
 
@@ -179,6 +182,54 @@ def fake_episode_cpu(cpu: float = 0):
     """fake_episode at another CPU reservation (H1: cpu=4 vs the decorator's 8; memory stays 8192). 0 = decorator default.
     Modal bills max(reserved, used) per core-second, so the reservation sets the price floor."""
     return fake_episode.with_options(cpu=cpu) if cpu else fake_episode
+
+
+# --------------------------------------------------------------------------------------------- CPU-double batch
+# scripts/run_double.py --backend modal. Both functions run in THIS image (the Isaac python 3.11 and its numpy), so the
+# observer snapshot pickled by the observer phase unpickles in the mission's broadcaster with the same versions.
+DOUBLE_ROOT = f"{VOL}/double"                   # <batch>/w<W>/<snapshot files> on the volume
+
+
+def _vol_file(rel: str) -> bytes:
+    """Read <VOL>/<rel> (a plain relative path under the volume; no '..')."""
+    if rel.startswith("/") or ".." in rel.split("/"):
+        raise ValueError(f"volume path {rel!r} must be relative without '..'")
+    with open(os.path.join(VOL, rel), "rb") as f:
+        return f.read()
+
+
+@app.function(image=image, cpu=4, memory=8192, timeout=6 * 3600, volumes={VOL: vol})
+def double_observer_phase(job: dict, day_files: dict[str, bytes]) -> dict:
+    """One world's observer phase (run_double.remote_observer_phase): the day scripts are plant-only files written to
+    PLANT_DIR/<job tag>/ (only the engine opens them); the snapshots go to the volume under job["snap_dir"]."""
+    for p in (REMOTE_REPO, f"{REMOTE_REPO}/scripts", REMOTE_PKG, f"{REMOTE_ROS2}/intercycle_nav",
+              f"{REMOTE_ROS2}/intercycle_eval"):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    import run_double as RD  # pyright: ignore[reportMissingImports]  # /root/repo/scripts in the container
+
+    d = write_plant_files(job["tag"], day_files)
+    if d is None:
+        raise ValueError("observer phase without day scripts")
+    out = RD.remote_observer_phase(job, Path(d), Path(VOL))
+    vol.commit()
+    return out
+
+
+@app.function(image=image, cpu=4, memory=8192, timeout=1800, volumes={VOL: vol})
+def double_episode(cfg: dict, world: dict[str, bytes], plant_files: dict[str, bytes] | None = None,
+                   vol_world: dict[str, str] | None = None) -> dict:
+    """One CPU-double mission (fake backend + Nav2, the real policy of cfg's condition). vol_world = {world file name:
+    volume-relative path}: files already on the volume (the learned arm's observer snapshot, the reactive arm's input
+    state from its previous chain step) copied into the world dict before the episode starts. A named file that is
+    missing raises (fail closed)."""
+    vol.reload()
+    world = dict(world)
+    for name, rel in (vol_world or {}).items():
+        if os.path.basename(name) != name:
+            raise ValueError(f"world file name {name!r} must be a plain file name")
+        world[name] = _vol_file(rel)
+    return _episode(dict(cfg, sim="fake"), world, plant_files)
 
 
 @app.function(image=image, gpu="L4", cpu=8, memory=24576, timeout=3600, volumes={VOL: vol})

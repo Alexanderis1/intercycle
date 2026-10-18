@@ -432,7 +432,7 @@ def test_double_stage_runs_after_the_refusals_with_the_test_seeds(s):
     with pytest.raises(RB.StageRefusal, match="sealed flag"):
         RB.run_double_stage(s["repo"], 9, [1000] * 16, fake_double)   # never outside an attempt
     with pytest.raises(RB.StageRefusal, match="not wired"):
-        RB.run_stage("isaac", {"attempt": 1, "seeds": {"seed_ints": [1000] * 16}})
+        RB.ready(["isaac"])                   # refused before preflight (descriptive, outside sealed_run)
 
 
 def test_robot_stage_module_is_outside_the_realclip_closure():
@@ -443,9 +443,10 @@ def test_robot_stage_module_is_outside_the_realclip_closure():
                 "twin/plant.py"} & closure
 
 
-def test_double_stage_refuses_before_any_runlog_record_while_the_backend_is_not_wired(s):
-    """No fake runner: run_double.SEALED_BACKEND_READY is False in this build, so sealed_run refuses before the drand
-    fetch and before the RUNLOG `started` record (no attempt number used up)."""
+def test_double_stage_refuses_before_any_runlog_record_while_the_backend_is_not_wired(s, monkeypatch):
+    """No fake runner and run_double.SEALED_BACKEND_READY False: sealed_run refuses before the drand fetch and before
+    the RUNLOG `started` record (no attempt number used up)."""
+    monkeypatch.setattr(SR._robot_module()._run_double_module(), "SEALED_BACKEND_READY", False)
     called = []
 
     def fetch(url):
