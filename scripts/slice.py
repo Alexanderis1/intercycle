@@ -535,7 +535,7 @@ def modal_cfg(tag: str, paths: dict[str, Path], script_name: str, cz: C.Compiled
             nodes.append(n)
         cfg["goal"] = [[float(cz.graph.pos[n][0]), float(cz.graph.pos[n][1]), 0.0] for n in nodes]
         cfg["timeout_s"] = 120.0
-        cfg["patrol_until_s"] = MISSION_S - 30.0
+        cfg["patrol_until_s"] = MISSION_S + 60.0      # past the sim limit: the sim, not the goal client, ends the mission
         cfg["scenario"] = ""                           # send_goal.py takes no scenario parameter (body-shop free)
     return cfg
 
@@ -660,7 +660,7 @@ def main(argv: list[str] | None = None) -> int:
               guard_tests=not a.skip_guard_tests)
     for k in ("steps", "assertions"):
         for name, v in rep[k].items():
-            print(f"{'OK  ' if v['ok'] else 'FAIL'} {k[:-1]:<9} {name:<26} {v['wall_s']:>7}s {v.get('error', '')[:300]}")
+            print(f"{'OK  ' if v['ok'] else 'FAIL'} {k[:-1]:<9} {name:<26} {v['wall_s']:>7}s {(v.get('error') or '')[:300]}")
     print(f"slice {'GREEN' if rep['green'] else 'RED'} -> {out / 'slice_report.json'}")
     return 0 if rep["green"] else 1
 
