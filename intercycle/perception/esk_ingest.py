@@ -16,9 +16,12 @@ Pipeline per clip:
    observed in zone-9 train clips"; its vehicle boxes are the coil and the press). Every other class is dropped.
 5. **P5 rule**: a person box whose foot point lies inside a forklift box is suppressed (the driver), before tracking.
 6. **Track** with a FRESH ByteTrack (roboflow ``trackers``) per clip and per class, driven by the PTS times.
-7. **Occlusion = MISSING** (T-W6): on every press ROI of the clip's framing, a sampled frame is hit when any person
-   box (all of them, suppressed ones included) or forklift box overlaps the ROI
-   (``intercycle.observer.occlusion.roi_missing_series``, boxes padded 15 %), held ``occ_hold_s`` after the last hit.
+7. **Occlusion = MISSING** (T-W6): on every press ROI of the clip's framing, a sampled frame is hit when an occluder
+   box overlaps the ROI (``intercycle.observer.occlusion.roi_missing_series``, boxes padded 15 %), held ``occ_hold_s``
+   after the last hit. Occluders = every confirmed track box plus every person (P5-suppressed drivers included) or
+   forklift detection at conf >= ``occ_conf`` (default the tracker's activation confidence 0.4). Boxes at 0.1-0.4
+   that no track claims do not occlude: on a dev c9_f1 clip they averaged ~29 per frame and would make the P9b ROI
+   MISSING on 98 % of frames.
    A native frame is MISSING when the held flag of the sample at or before it is set, or the sample after it is hit.
 8. **Press motion** per press ROI (``press_motion.ingest_clip`` on the native-rate grey frames, with that MISSING
    mask): flow_v / roi_energy NaN and no stroke on MISSING frames.
@@ -73,6 +76,7 @@ class IngestConfig:
     forklift_cameras: tuple[int, ...] = FORKLIFT_CAMERAS
     occ_hold_s: float | None = None        # None = _default_hold(fps)
     occ_pad_frac: float = ROI_PAD_FRAC
+    occ_conf: float | None = None          # untracked detections occlude at >= this; None = tracker activation (0.4)
     press_width: int = 640                 # working width of the grey frames for press motion (P4)
     batch: int = 8                         # detector batch
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
@@ -80,6 +84,10 @@ class IngestConfig:
     @property
     def hold_s(self) -> float:
         return _default_hold(self.fps) if self.occ_hold_s is None else float(self.occ_hold_s)
+
+    @property
+    def occ_conf_value(self) -> float:
+        return float(self.tracker.activation if self.occ_conf is None else self.occ_conf)
 
 
 @dataclass
@@ -270,8 +278,12 @@ def ingest_clip(path: str | Path, clip_id: str, split: str, camera: int, framing
         supp[np.nonzero(pmask)[0][~keep]] = True
         for b, s, lab, sp in zip(d.xyxy, d.score, d.label, supp):
             box_rows.append((split, clip_id, framing, k, float(tk), str(lab), float(s), *map(float, b), bool(sp)))
-        occ.append(np.asarray(d.xyxy, float).reshape(-1, 4))               # all persons (suppressed too) + forklifts
         tb = trk.update(d.select(~supp), float(tk))
+        # occluders (T-W6 "a person / vehicle track overlaps"): every confirmed track box, plus every person (P5-
+        # suppressed drivers too) or forklift detection at >= occ_conf, the confidence that spawns a track
+        strong = np.asarray(d.score, float) >= cfg.occ_conf_value
+        occ.append(np.concatenate([np.asarray(d.xyxy, float).reshape(-1, 4)[strong],
+                                   np.asarray(tb.xyxy, float).reshape(-1, 4)]))
         if len(tb):
             fp = foot_points(tb.xyxy)
             for (u, v), s, tid, lab in zip(fp, tb.score, tb.track_id, tb.label):

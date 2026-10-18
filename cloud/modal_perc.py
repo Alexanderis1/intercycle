@@ -18,9 +18,7 @@ no test video (A1+ purge, ``cloud/modal_esk.py --action check``).
 
 Licences: RF-DETR / trackers Apache-2.0, supervision MIT, PyAV BSD-3, OpenCV Apache-2.0.
 """
-from __future__ import annotations
-
-import json
+import json  # no `from __future__ import annotations`: modal.parameter needs a real `str` annotation
 import sys
 from pathlib import Path
 
@@ -59,17 +57,20 @@ image = (
 )
 
 
-@app.cls(image=image, gpu="L4", volumes={VOL: vol}, cpu=4, memory=16384, timeout=1800,
+@app.cls(image=image, gpu="L4", volumes={VOL: vol}, cpu=4, memory=8192, timeout=1800,
          max_containers=MAX_CONTAINERS)
 class Perc:
+    # fp32 like staging's plain predict (fp16 autocast gave the same boxes on 3 dev clips and no speed-up on L4)
+    precision: str = modal.parameter(default="fp32")
+
     @modal.enter()
     def load(self) -> None:
         import csv
 
         from intercycle.perception.detector import RFDetrDetector
 
-        # the staging model (RFDETRMedium, fp32 as staging's plain predict), raw labels person / truck
-        self.det = RFDetrDetector(size="medium", device="cuda", precision="fp32", threshold=0.1,
+        # the staging model (RFDETRMedium, COCO), raw labels person / truck
+        self.det = RFDetrDetector(size="medium", device="cuda", precision=self.precision, threshold=0.1,
                                   keep=("person", "truck"), class_map={"truck": "truck"})
         with open(f"{ESK}/split/{SPLIT_FILE}", newline="", encoding="utf-8") as fh:
             self.split = {r["clip_id"]: r for r in csv.DictReader(fh)}
@@ -103,11 +104,12 @@ class Perc:
         st = dict(res.stats)
         st["wall_s"] = time.time() - t0
         st["gpu"] = self.det.dev.get("name")
+        st["precision"] = self.precision
         return {"stats": st, "files": files}
 
 
 @app.local_entrypoint()
-def main(clips: str = "", limit: int = 0):
+def main(clips: str = "", limit: int = 0, precision: str = "fp32", stats_name: str = "stats.jsonl"):
     import time
 
     sys.path.insert(0, str(ROOT))
@@ -130,8 +132,11 @@ def main(clips: str = "", limit: int = 0):
     root = esk.data_root()
     (root / "perc").mkdir(parents=True, exist_ok=True)
     ok, fail = 0, []
-    with open(root / "perc" / "stats.jsonl", "a", encoding="utf-8") as log:
-        for a, r in zip(args, Perc().run.starmap(args, return_exceptions=True)):
+    if precision not in ("fp16", "fp32"):
+        raise SystemExit(f"precision must be fp16 or fp32, got {precision}")
+    with open(root / "perc" / stats_name, "a", encoding="utf-8") as log:
+        for i, r in enumerate(Perc(precision=precision).run.starmap(args, return_exceptions=True)):  # input order
+            a = args[i]
             if not isinstance(r, dict):
                 fail.append(f"{a[0]}: {r!r}"[:300])
                 continue

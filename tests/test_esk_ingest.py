@@ -156,6 +156,8 @@ class StubDetector:
                 b.append([x, 250, x + 30, 340]); s.append(0.9); lab.append("person")
             if 12 <= k < 24:
                 b.append([320, 150, 360, 260]); s.append(0.8); lab.append("person")
+            if 40 <= k < 44:                                                    # weak untracked box on the ROI
+                b.append([300, 100, 330, 140]); s.append(0.2); lab.append("person")
             b.append([480, 200, 600, 330]); s.append(0.8); lab.append("truck")
             b.append([520, 210, 550, 300]); s.append(0.7); lab.append("person")     # driver: foot (535, 300) inside
             b.append([100, 20, 150, 60]); s.append(0.3); lab.append("truck")
@@ -173,9 +175,18 @@ def clip_path(tmp_path_factory):
     return p
 
 
-def _run(path, camera, split="dev"):
+def _run(path, camera, split="dev", cfg=None):
     return ei.ingest_clip(path, "3_tr1", split, camera, "c14_f0" if camera == 14 else "c9_f0",
-                          {"PX": ROI}, StubDetector())
+                          {"PX": ROI}, StubDetector(), cfg)
+
+
+def test_weak_untracked_boxes_do_not_occlude_unless_configured(clip_path):
+    t_weak = (40 / 12.0, 44 / 12.0)
+    for cfg, want in ((None, False), (ei.IngestConfig(occ_conf=0.1), True)):
+        m = _run(clip_path, 9, cfg=cfg).machines["PX"]
+        tt = m["t"].to_numpy(float)
+        w = (tt > t_weak[0] + 0.05) & (tt < t_weak[1] - 0.05)
+        assert w.any() and bool(m["missing"].to_numpy(bool)[w].all()) is want
 
 
 def test_end_to_end_tables_validate_and_missing(clip_path):
