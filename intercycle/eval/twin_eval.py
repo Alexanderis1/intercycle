@@ -2,24 +2,40 @@
 E-W11, E-W12).
 
     python -m intercycle.eval.twin_eval --runs RUNS_ROOT --tasks twin/tasks.yaml [--split test] [--engine double]
-        [--invalid results/sealed/invalid.json] [--h3-counts DIR] [--recall frames.json --r0 R0] --out OUT.json
+        --worlds W1,...,W16 [--days 9,10] [--invalid results/sealed/invalid.json]
+        [--h3-counts H3.json --margin-file twin/m7_margin.json] [--recall frames.json --r0 R0] --out OUT.json
 
 Inputs are the closed per-mission files the plant writes (`runs/<id>/summary.json`, `log.parquet` or `log.jsonl`) and,
 for gate 3, the per-tick miss counts that `python -m twin.eval_metrics` computes offline after the run (the only
 truth reader of EVAL, in the truth allowlist's EVAL slot; this module opens no truth file).
 
+Design (fail closed, PLAN_TWIN §5 "Design"): on the test split the design is explicit, never taken from the runs that
+happen to be present: the world list (--worlds, required), the scored days (default 9 and 10) and the conditions (the
+CPU double: all five). For the double on the test split the sealed design is enforced: K_TEST = 16 worlds, days {9, 10}
+and all five conditions (5 x 16 x 2 x 2 = 320 missions); anything else is refused. Every absent (world, day, zone,
+condition) is scored as a missing failure, and a test run outside the design is refused. (`allow_partial_design`, an
+API argument only, lets the synthetic tests use fewer worlds; the report then says `"fixed": false`.) On the dev split
+worlds and days default to the runs present.
+
 Scoring, per mission (one zone, one condition, one (world, day)):
   * Y = checkpoints of the zone's mission_order (tasks.yaml) whose capture passed Inspect (`checkpoint_pass` rows),
     set to 0 if the mission had any robot-caused press stop (`press_trip`), hold (`press_hold`) or incident; fixed
     T = 720 s. Declined and unattempted checkpoints score 0. The log rows and the summary counts must agree (fail
-    closed: a disagreement makes the mission an error).
+    closed: a disagreement makes the mission an error): trips, holds, incidents, checkpoints_planned, and attempted /
+    passed / declined against the distinct mission_order checkpoints of the attempt / pass / decline rows (the
+    plant's rule: passed counts attempted checkpoints only, declined only checkpoints never attempted). A run_id of the
+    form w<W>_d<D>_<zone>_<condition>[__a<k>] must name the summary's own cell.
   * errors: a non-infrastructure error (summary status "error", an unreadable / inconsistent summary or log, a
     missing run) is a failure: Y = 0 with the full T, and the remaining T (T - time of the first error) is added to
     the press time lost (H2). Errored or missing missions are never dropped.
   * infrastructure-invalid runs (`scripts/classify_invalid.py`'s committed list, or summary status "infra_invalid")
     are re-run, and a re-run repeats ALL conditions of the (world, day, zone): for each cell the first attempt whose
     runs are all valid is scored. Attempt k of a run is the `__a<k>` suffix of its run_id (none = attempt 0). A cell
-    without a clean attempt is scored on its last attempt with the invalid runs as failures (flagged).
+    without a clean attempt is scored on its last attempt with the invalid runs as failures (flagged). A crashed run
+    has no summary.json: every directory holding a run file (RUN_MARKERS) is found, and a run without a usable summary
+    is placed in its design cell by its invalid-list record ({"run_id", "world", "day", "zone", "condition"[, "split",
+    "engine"]}) or by its run_id (w<W>_d<D>_<zone>_<condition>[__a<k>]); an id of the invalid list with no directory
+    at all is placed the same way. A placed run that is not listed invalid is scored as an error (a failure).
   * per-checkpoint outcome (E-W12): tripped > held > passed > failed > declined > unattempted, from the rows that
     carry the checkpoint.
 
@@ -32,7 +48,10 @@ Statistics (fixed sequence, each one-sided at ALPHA = 0.05; E-W1 / E-W2):
   3. H3 map unsafe-free share: per world, the unweighted mean over its test-day units of the unit miss share at the
      frozen M-W7 margin (`intercycle.eval.conformal_margin.stream_units` + `per_world_miss_share`, the estimand the
      calibration used); e_w = share_w - (ALPHA_TARGET + 0.01), ALPHA_TARGET = 0.05 (user decision); sign-flip,
-     H1: mean e < 0. A world without a scored unit makes gate 3 not evaluable (not rejected: fail closed);
+     H1: mean e < 0. The counts must be at the frozen margin of --margin-file (margin_m and cell_m), units use that
+     file's unit.episode_s, and only streams of the evaluated split, the design worlds and the scored days are
+     accepted (any other stream is refused). A world without a scored unit, or missing the stream of any of its
+     (day, zone) cells, makes gate 3 not evaluable (not rejected: fail closed);
   4. H4 blind test person recall >= r0: with fewer than MIN_GROUPS test groups in any camera (the small-group rule)
      it passes only if the lowest per-group recall and the pooled recall are both >= r0, and the frame-level
      Clopper-Pearson interval is reported as "ignores clustering (only k groups)"; otherwise the one-sided 95 %
@@ -48,10 +67,8 @@ and the re-run count per condition.
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import math
-import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -59,12 +76,20 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 from scipy import stats
 
 from intercycle.eval.conformal_margin import UnitCounts, per_world_miss_share, stream_units
+from intercycle.eval.twin_design import (CELL_KEYS, CONDITIONS, K_TEST, REQUIRED, RUN_MARKERS, TEST_DAYS, Cell,
+                                         Design, EvalError, Run, find_runs, index_cells, is_bad, load_invalid,
+                                         make_design, mission_orders, parse_run_id, placed, placeholder_runs,
+                                         read_summary)
+from intercycle.margin_inflate import Margin, load_margin
 from twin.schemas.common import MISSION_T_S
-from twin.schemas.runs import CheckpointOutcome, MissionMetric, PrimaryMetric, Summary, require_primary, world_values
+from twin.schemas.runs import CheckpointOutcome, MissionMetric, PrimaryMetric, require_primary, world_values
+
+__all__ = ["CELL_KEYS", "CONDITIONS", "K_TEST", "REQUIRED", "RUN_MARKERS", "TEST_DAYS", "Cell", "Design", "EvalError",
+           "Run", "find_runs", "is_bad", "load_invalid", "make_design", "mission_orders", "parse_run_id", "placed",
+           "placeholder_runs", "run_eval", "main"]
 
 CONTRACT = "twin.eval_report/1"
 ALPHA = 0.05
@@ -72,18 +97,11 @@ NI_DELTA_S_PER_H = 30.0            # H2 margin, fixed in PLAN_TWIN §5, not amen
 ALPHA_TARGET = 0.05                # S7b's conformal alpha (user decision)
 H3_SLACK = 0.01
 MIN_GROUPS = 5                     # small-group rule threshold (test groups per camera)
-CONDITIONS = ("no_map", "static", "learned", "reactive", "oracle")
-REQUIRED = ("static", "learned", "reactive")
 BOOT_B = 10000
 BOOT_SEED = 20261018
 MAX_SIGNFLIP_K = 20
 OUTCOME_ORDER = ("tripped", "held", "passed", "failed", "declined", "unattempted")
-_ATTEMPT = re.compile(r"__a(\d+)$")
 _TIE = 1e-9
-
-
-class EvalError(ValueError):
-    """The EVAL inputs are inconsistent (fail closed)."""
 
 
 # ------------------------------------------------------------------------------------------------ statistics
@@ -149,25 +167,6 @@ def world_bootstrap(per_world: np.ndarray, fn, B: int = BOOT_B, seed: int = BOOT
 # ------------------------------------------------------------------------------------------------ runs
 
 
-@dataclass
-class Run:
-    run_dir: Path
-    run_id: str
-    summary: Summary | None
-    rows: list[dict]
-    problems: list[str] = field(default_factory=list)
-
-    @property
-    def attempt(self) -> int:
-        m = _ATTEMPT.search(self.run_id)
-        return int(m.group(1)) if m else 0
-
-    @property
-    def key(self) -> tuple[int, int, str, str] | None:
-        s = self.summary
-        return None if s is None else (s.world, s.day, s.zone, s.condition)
-
-
 def read_log(run_dir: Path) -> list[dict]:
     """The plant's log rows: log.parquet (CPU double) or log.jsonl (Isaac python)."""
     p, j = run_dir / "log.parquet", run_dir / "log.jsonl"
@@ -184,14 +183,7 @@ def load_run(run_dir: str | Path) -> Run:
     """Read one closed mission (summary.json is written last by the plant). Problems are recorded, never raised: the
     mission is then scored as an error."""
     d = Path(run_dir)
-    problems: list[str] = []
-    summary, rid = None, d.name
-    try:
-        raw = json.loads((d / "summary.json").read_text(encoding="utf-8"))
-        rid = str(raw.get("run_id", rid))
-        summary = Summary.model_validate(raw)
-    except Exception as e:  # noqa: BLE001 - an unreadable summary is an error mission
-        problems.append(f"summary.json unreadable or invalid: {e!r}"[:400])
+    summary, rid, problems = read_summary(d)
     try:
         rows = read_log(d)
     except Exception as e:  # noqa: BLE001
@@ -200,27 +192,11 @@ def load_run(run_dir: str | Path) -> Run:
     return Run(d, rid, summary, rows, problems)
 
 
-def find_runs(root: str | Path) -> list[Path]:
-    return sorted(p.parent for p in Path(root).rglob("summary.json"))
-
-
-def mission_orders(tasks_path: str | Path) -> dict[str, list[str]]:
-    t = yaml.safe_load(Path(tasks_path).read_text(encoding="utf-8"))
-    if not isinstance(t, Mapping) or t.get("contract") != "twin.tasks/1":
-        raise EvalError(f"{tasks_path}: not a twin.tasks/1 file")
-    return {str(z["zone"]): [str(c) for c in z["mission_order"]] for z in t["zones"]}
-
-
-def load_invalid(path: str | Path | None) -> set[str]:
-    """classify_invalid's committed list: a JSON list of run ids, or {"invalid": [...]} / {"runs": [...]}."""
-    if path is None:
-        return set()
-    body = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(body, Mapping):
-        body = body.get("invalid", body.get("runs"))
-    if not isinstance(body, list) or not all(isinstance(r, str) for r in body):
-        raise EvalError(f"{path}: expected a list of run ids")
-    return set(body)
+def load_runs(runs_root: str | Path, invalid: Mapping[str, dict | None]) -> list[Run]:
+    """Every run under runs_root (incl. crashed ones without summary.json) plus a placeholder per invalid-listed id
+    without a directory."""
+    runs = [load_run(d) for d in find_runs(runs_root)]
+    return runs + placeholder_runs(invalid, runs)
 
 
 # ------------------------------------------------------------------------------------------------ mission scoring
@@ -235,11 +211,16 @@ class Scored:
     run_dir: str | None
 
 
-def _outcomes(rows: list[dict], planned: list[str]) -> list[CheckpointOutcome]:
+def _kinds(rows: list[dict]) -> dict[str, set[str]]:
     kinds: dict[str, set[str]] = defaultdict(set)
     for r in rows:
         if r.get("checkpoint") is not None:
             kinds[str(r["checkpoint"])].add(str(r.get("kind")))
+    return kinds
+
+
+def _outcomes(rows: list[dict], planned: list[str]) -> list[CheckpointOutcome]:
+    kinds = _kinds(rows)
     out = []
     for cp in planned:
         k = kinds.get(cp, set())
@@ -259,8 +240,19 @@ def _outcomes(rows: list[dict], planned: list[str]) -> list[CheckpointOutcome]:
     return out
 
 
+def log_checkpoint_counts(rows: list[dict], planned: list[str]) -> tuple[int, int, int]:
+    """(attempted, passed, declined) of the plant's summary rule, recomputed from the log rows over the mission_order:
+    attempted = checkpoints with an attempt row, passed = attempted ones with a pass row, declined = checkpoints with a
+    decline row that were never attempted."""
+    kinds = _kinds(rows)
+    att = {cp for cp in planned if "checkpoint_attempt" in kinds.get(cp, set())}
+    pas = {cp for cp in att if "checkpoint_pass" in kinds.get(cp, set())}
+    dec = {cp for cp in planned if "checkpoint_decline" in kinds.get(cp, set())} - att
+    return len(att), len(pas), len(dec)
+
+
 def score_run(run: Run, planned_by_zone: Mapping[str, list[str]], *, infra_invalid: bool = False,
-              key: tuple[int, int, str, str] | None = None) -> Scored:
+              key: Cell | None = None) -> Scored:
     """Score one mission (module doc). `key` = (world, day, zone, condition) for a run whose summary is unusable."""
     s = run.summary
     k = run.key or key
@@ -285,6 +277,10 @@ def score_run(run: Run, planned_by_zone: Mapping[str, list[str]], *, infra_inval
                            f" != log rows {(n['press_trip'], n['press_hold'], n['incident'])}")
         if s.checkpoints_planned != len(planned):
             reasons.append(f"checkpoints_planned {s.checkpoints_planned} != tasks.yaml mission_order {len(planned)}")
+        got = log_checkpoint_counts(rows, planned)
+        if (s.attempted, s.passed, s.declined) != got:
+            reasons.append(f"summary counts (attempted, passed, declined) = {(s.attempted, s.passed, s.declined)}"
+                           f" != log rows {got}")
     outs = _outcomes(rows, planned)
     error = bool(reasons)
     lost = float(s.press_time_lost_s) if s is not None else 0.0
@@ -302,7 +298,7 @@ def score_run(run: Run, planned_by_zone: Mapping[str, list[str]], *, infra_inval
                       "contacts": n["contact"]}, "; ".join(reasons) or None, run.attempt, str(run.run_dir))
 
 
-def missing_mission(key: tuple[int, int, str, str], planned: list[str], why: str) -> Scored:
+def missing_mission(key: Cell, planned: list[str], why: str) -> Scored:
     world, day, zone, cond = key
     m = MissionMetric(run_id=f"missing:w{world}_d{day}_{zone}_{cond}", world=world, day=day, zone=zone,
                       condition=cond, T_s=MISSION_T_S, Y=0, robot_caused_press_stop=False,  # type: ignore[arg-type]
@@ -320,59 +316,31 @@ class Selection:
     first: list[Scored]                     # attempt 0 (infra-invalid runs as failures), for the report
     reruns: dict[str, int]                  # condition -> cells scored on a re-run
     unresolved: list[str]                   # cells without a clean attempt
-    unplaceable: list[str]                  # run dirs whose summary gives no design cell
+    unplaceable: list[str]                  # run dirs whose summary and id give no design cell
     excluded_non_primary: list[str] = field(default_factory=list)   # reset-sweep / short dev runs (never pooled)
 
 
-def select(runs: Iterable[Run], planned_by_zone: Mapping[str, list[str]], invalid: set[str], *, split: str,
-           engine: str, conditions: Sequence[str], worlds: Sequence[int] | None = None,
-           days: Sequence[int] | None = None) -> Selection:
-    by_cell: dict[tuple[int, int, str], dict[int, dict[str, Run]]] = defaultdict(lambda: defaultdict(dict))
-    unplaceable, non_primary = [], []
-    for r in runs:
-        s = r.summary
-        if s is None:
-            unplaceable.append(str(r.run_dir))
-            continue
-        if s.world_split != split or s.engine != engine:
-            continue
-        if s.variant != "primary" or s.reset_override_s is not None:
-            non_primary.append(r.run_id)                    # descriptive runs never enter the primary metric
-            continue
-        att = by_cell[(s.world, s.day, s.zone)][r.attempt]
-        if s.condition in att:
-            raise EvalError(f"two runs for {(s.world, s.day, s.zone, s.condition)} attempt {r.attempt}: "
-                            f"{att[s.condition].run_dir} and {r.run_dir}")
-        att[s.condition] = r
-    ws = sorted(set(worlds) if worlds is not None else {c[0] for c in by_cell})
-    ds = sorted(set(days) if days is not None else {c[1] for c in by_cell})
-    zs = sorted(planned_by_zone)
-    if not ws or not ds:
-        raise EvalError(f"no {engine} runs on {split} worlds")
-    scored, first, unresolved = [], [], []
-    reruns = {c: 0 for c in conditions}
-
-    def bad(r: Run) -> bool:
-        return r.run_id in invalid or (r.summary is not None and r.summary.status == "infra_invalid")
-
-    for w, d, z in itertools.product(ws, ds, zs):
-        atts = by_cell.get((w, d, z), {})
-        order = sorted(atts)
-        clean = [a for a in order if not any(bad(r) for r in atts[a].values())]
-        chosen = clean[0] if clean else (order[-1] if order else None)
-        if order and not clean:                         # infrastructure-invalid and never cleanly re-run
-            unresolved.append(f"w{w}_d{d}_{z}")
-        for c in conditions:
+def select(runs: Iterable[Run], planned_by_zone: Mapping[str, list[str]], invalid: Mapping[str, dict | None], *,
+           split: str, engine: str, design: Design) -> Selection:
+    """Score every design cell x condition on its scored attempt (intercycle.eval.twin_design.index_cells) and on its
+    first attempt; an absent run is a missing failure."""
+    cells = index_cells(runs, planned_by_zone, invalid, split=split, engine=engine, design=design)
+    scored, first = [], []
+    reruns = {c: 0 for c in design.conditions}
+    for (w, d, z), chosen in cells.chosen.items():
+        atts = cells.by_cell.get((w, d, z), {})
+        a0 = cells.first[(w, d, z)]
+        for c in design.conditions:
             key = (w, d, z, c)
-            for a, sink in ((chosen, scored), (order[0] if order else None, first)):
+            for a, sink in ((chosen, scored), (a0, first)):
                 r = atts[a].get(c) if a is not None else None
                 if r is None:
                     sink.append(missing_mission(key, planned_by_zone[z], "missing run"))
                 else:
-                    sink.append(score_run(r, planned_by_zone, infra_invalid=bad(r), key=key))
-            if chosen is not None and order and chosen != order[0]:
+                    sink.append(score_run(r, planned_by_zone, infra_invalid=is_bad(r, invalid), key=key))
+            if chosen is not None and chosen != a0:
                 reruns[c] += 1
-    return Selection(scored, first, reruns, unresolved, unplaceable, non_primary)
+    return Selection(scored, first, reruns, cells.unresolved, cells.unplaceable, cells.excluded_non_primary)
 
 
 # ------------------------------------------------------------------------------------------------ per-world values
@@ -400,25 +368,60 @@ def paired(values: Mapping[tuple[int, str], float], a: str, b: str) -> tuple[lis
 # ------------------------------------------------------------------------------------------------ H3 and H4
 
 
-def h3_world_shares(count_files: Sequence[dict], margin_m: float) -> dict[int, float]:
+def load_frozen_margin(path: str | Path) -> tuple[Margin, float]:
+    """The frozen M-W7 margin (intercycle.margin_inflate.load_margin: frozen, status ok, the inflation rule) and its
+    calibration unit length unit.episode_s (required: units must be cut as in the calibration)."""
+    margin = load_margin(path)
+    body = json.loads(Path(path).read_text(encoding="utf-8"))
+    ep = (body.get("unit") or {}).get("episode_s")
+    if isinstance(ep, bool) or not isinstance(ep, (int, float)) or not math.isfinite(ep) or ep <= 0:
+        raise EvalError(f"{path}: unit.episode_s must be a number > 0 (the calibration's unit), got {ep!r}")
+    return margin, float(ep)
+
+
+def h3_world_shares(count_files: Sequence[dict], margin_m: float, *, split: str, worlds: Sequence[int],
+                    days: Sequence[int], zones: Sequence[str], episode_s: float,
+                    cell_m: float | None = None) -> dict:
     """Per-world unit-mean miss share at the frozen margin from twin.eval_metrics' per-tick counts (one dict per
-    (world, day, zone) stream: t, slice_id, occ, miss[:, 0] at margin_m, valid, world, day, episode_s)."""
-    parts = []
+    (world, day, zone) stream: t, slice_id, occ, miss at margin_m, valid, world, day, zone, split, cell_m).
+
+    Refuses (EvalError) a stream of another split, of a day that is not scored, of a world or zone outside the design,
+    at another margin or cell size, or a repeated (world, day, zone). A world missing the stream of any of its
+    (day, zone) cells gets share NaN (not evaluable). Returns {"shares": {world: share}, "missing_streams": [...]}."""
+    ws, ds, zs = set(int(w) for w in worlds), set(int(d) for d in days), set(str(z) for z in zones)
+    parts, seen = [], set()
     for c in count_files:
+        name = c.get("stream", "?")
         if not math.isclose(float(c["margin_m"]), margin_m, abs_tol=1e-9):
-            raise EvalError(f"tick counts at margin {c['margin_m']} != frozen margin {margin_m}")
+            raise EvalError(f"H3 stream {name}: tick counts at margin {c['margin_m']} != frozen margin {margin_m}")
+        if cell_m is not None and not math.isclose(float(c["cell_m"]), cell_m, abs_tol=1e-12):
+            raise EvalError(f"H3 stream {name}: grid cell {c['cell_m']} != the frozen margin's cell {cell_m}")
+        if str(c.get("split")) != split:
+            raise EvalError(f"H3 stream {name}: split {c.get('split')!r} is not the evaluated split {split!r}")
+        w, d, z = int(c["world"]), int(c["day"]), str(c["zone"])
+        if d not in ds:
+            raise EvalError(f"H3 stream {name}: day {d} is not a scored day {sorted(ds)} (gate 3 is on test days)")
+        if w not in ws:
+            raise EvalError(f"H3 stream {name}: world {w} is not a design world {sorted(ws)}")
+        if z not in zs:
+            raise EvalError(f"H3 stream {name}: zone {z} is not a tasks.yaml zone {sorted(zs)}")
+        if (w, d, z) in seen:
+            raise EvalError(f"two H3 streams for (world, day, zone) = {(w, d, z)}")
+        seen.add((w, d, z))
         miss = np.asarray(c["miss"], np.int64).reshape(-1, 1)
         parts.append(stream_units(np.asarray(c["t"], float), np.asarray(c["slice_id"], np.int64),
                                   np.asarray(c["occ"], np.int64), miss, np.asarray(c["valid"], bool),
-                                  world=int(c["world"]), day=int(c["day"]), margins_m=(margin_m,),
-                                  episode_s=float(c.get("episode_s", MISSION_T_S))))
-    if not parts:
-        raise EvalError("no H3 tick counts")
-    return per_world_miss_share(UnitCounts.concat(parts), margin_m)
+                                  world=w, day=d, margins_m=(margin_m,), episode_s=episode_s))
+    missing = [(w, d, z) for w in sorted(ws) for d in sorted(ds) for z in sorted(zs) if (w, d, z) not in seen]
+    got = per_world_miss_share(UnitCounts.concat(parts), margin_m) if parts else {}
+    incomplete = {w for w, _, _ in missing}
+    shares = {w: (math.nan if w in incomplete else float(got.get(w, math.nan))) for w in sorted(ws)}
+    return {"shares": shares, "missing_streams": [f"w{w}_d{d}_{z}" for w, d, z in missing], "n_streams": len(seen),
+            "margin_m": margin_m, "episode_s": episode_s}
 
 
 def load_h3_counts(path: str | Path) -> list[dict]:
-    """twin.eval_metrics' output JSON ({"margin_m": m, "streams": [...]}) -> its stream count dicts."""
+    """twin.eval_metrics' output JSON ({"margin_m": m, "cell_m": c, "streams": [...]}) -> its stream count dicts."""
     body = json.loads(Path(path).read_text(encoding="utf-8"))
     if body.get("contract") != "twin.h3_tick_counts/1":
         raise EvalError(f"{path}: not a twin.h3_tick_counts/1 file")
@@ -471,8 +474,8 @@ def _gate(name: str, p: float | None, reject: bool, prev: bool, **kw) -> dict:
             "claimed": bool(prev and reject), **kw}
 
 
-def evaluate(sel: Selection, *, engine: str, split: str, h3_shares: Mapping[int, float] | None = None,
-             h4: dict | None = None) -> dict:
+def evaluate(sel: Selection, *, engine: str, split: str, h3: Mapping[str, Any] | None = None,
+             h4: dict | None = None, design: Design | None = None) -> dict:
     missions = [s.metric for s in sel.scored]
     pm = PrimaryMetric(contract="twin.primary_metric/1", engine=engine, split=split,  # type: ignore[arg-type]
                        missions=missions, per_world=world_values(missions))
@@ -487,18 +490,19 @@ def evaluate(sel: Selection, *, engine: str, split: str, h3_shares: Mapping[int,
     gates.append(_gate(f"H2 non-inferiority: press time lost per mission-hour, learned - static <= {NI_DELTA_S_PER_H}"
                        " s/h", p2, p2 <= ALPHA, gates[-1]["claimed"], d_w=d2.tolist(), delta=NI_DELTA_S_PER_H))
     thr = ALPHA_TARGET + H3_SLACK
-    if h3_shares is None:
+    if h3 is None:
         gates.append(_gate("H3 map unsafe-free share", None, False, gates[-1]["claimed"], status="no input"))
     else:
-        sh = [h3_shares.get(w, math.nan) for w in ws]
+        sh = [float(h3["shares"].get(w, math.nan)) for w in ws]
         if any(not math.isfinite(v) for v in sh):
             gates.append(_gate("H3 map unsafe-free share", None, False, gates[-1]["claimed"], status="not evaluable",
-                               shares=sh, threshold=thr))
+                               shares=sh, threshold=thr, missing_streams=list(h3.get("missing_streams", []))))
         else:
             e3 = np.array(sh) - thr
             p3 = signflip_p(e3, "less")
             gates.append(_gate(f"H3 map mean miss share < alpha_target + {H3_SLACK} = {thr}", p3, p3 <= ALPHA,
-                               gates[-1]["claimed"], shares=sh, threshold=thr))
+                               gates[-1]["claimed"], shares=sh, threshold=thr,
+                               margin_m=h3.get("margin_m"), episode_s=h3.get("episode_s")))
     if h4 is None:
         gates.append(_gate("H4 blind test person recall >= r0", None, False, gates[-1]["claimed"], status="no input"))
     else:
@@ -537,7 +541,8 @@ def evaluate(sel: Selection, *, engine: str, split: str, h3_shares: Mapping[int,
             row = table.setdefault(mm.condition, {}).setdefault(co.checkpoint, {o: 0 for o in OUTCOME_ORDER})
             row[co.outcome] += 1
     first = [s.metric for s in sel.first]
-    return {"contract": CONTRACT, "engine": engine, "split": split, "alpha": ALPHA, "gatekeeping": gates,
+    return {"contract": CONTRACT, "engine": engine, "split": split, "alpha": ALPHA,
+            "design": None if design is None else design.as_dict(), "gatekeeping": gates,
             "reported_outside_gate": outside, "checkpoint_outcomes": table,
             "first_attempt_per_world": [w.model_dump() for w in world_values(first)],
             "reruns_per_condition": sel.reruns, "unresolved_cells": sel.unresolved,
@@ -549,25 +554,32 @@ def evaluate(sel: Selection, *, engine: str, split: str, h3_shares: Mapping[int,
 
 def run_eval(runs_root: str | Path, tasks: str | Path, *, split: str = "test", engine: str = "double",
              invalid: str | Path | None = None, h3_counts: str | Path | None = None,
-             recall_frames: str | Path | None = None, r0: float | None = None,
+             margin_file: str | Path | None = None, recall_frames: str | Path | None = None, r0: float | None = None,
              conditions: Sequence[str] | None = None, worlds: Sequence[int] | None = None,
-             days: Sequence[int] | None = None) -> dict:
+             days: Sequence[int] | None = None, allow_partial_design: bool = False) -> dict:
     planned = mission_orders(tasks)
-    runs = [load_run(d) for d in find_runs(runs_root)]
-    present = {r.summary.condition for r in runs if r.summary is not None}
-    conds = list(conditions) if conditions else [c for c in CONDITIONS if c in present or c in REQUIRED]
-    sel = select(runs, planned, load_invalid(invalid), split=split, engine=engine, conditions=conds, worlds=worlds,
-                 days=days)
-    shares = None
+    inv = load_invalid(invalid)
+    runs = load_runs(runs_root, inv)
+    design = make_design(runs, inv, split=split, engine=engine, worlds=worlds, days=days, conditions=conditions,
+                         allow_partial_design=allow_partial_design)
+    sel = select(runs, planned, inv, split=split, engine=engine, design=design)
+    h3 = None
     if h3_counts is not None:
-        counts = load_h3_counts(h3_counts)
-        shares = h3_world_shares(counts, float(counts[0]["margin_m"])) if counts else None
+        if margin_file is None:
+            raise EvalError("--h3-counts needs --margin-file (the frozen M-W7 margin the counts must be at)")
+        margin, episode_s = load_frozen_margin(margin_file)
+        h3 = h3_world_shares(load_h3_counts(h3_counts), margin.margin_m, split=split, worlds=design.worlds,
+                             days=design.days, zones=sorted(planned), episode_s=episode_s, cell_m=margin.cell_m)
     h4 = None
     if recall_frames is not None:
         if r0 is None:
             raise EvalError("--recall needs --r0 (set from the 20 blind dev frames only)")
         h4 = h4_recall(json.loads(Path(recall_frames).read_text(encoding="utf-8")), r0)
-    return evaluate(sel, engine=engine, split=split, h3_shares=shares, h4=h4)
+    return evaluate(sel, engine=engine, split=split, h3=h3, h4=h4, design=design)
+
+
+def _ints(s: str) -> list[int]:
+    return [int(x) for x in s.split(",") if x.strip()]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -578,14 +590,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--engine", default="double", choices=("double", "isaac"))
     ap.add_argument("--invalid", help="classify_invalid's committed list of infrastructure-invalid run ids")
     ap.add_argument("--h3-counts", help="python -m twin.eval_metrics output (twin.h3_tick_counts/1)")
+    ap.add_argument("--margin-file", help="the frozen M-W7 margin JSON (twin/m7_margin.json); required with --h3-counts")
     ap.add_argument("--recall", help="blind test person-recall frames JSON")
     ap.add_argument("--r0", type=float)
-    ap.add_argument("--worlds", type=lambda s: [int(x) for x in s.split(",")])
-    ap.add_argument("--days", type=lambda s: [int(x) for x in s.split(",")])
+    ap.add_argument("--worlds", type=_ints, help="the design's world indices (required on the test split)")
+    ap.add_argument("--days", type=_ints, help="scored days (default 9,10 on the test split)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     rep = run_eval(a.runs, a.tasks, split=a.split, engine=a.engine, invalid=a.invalid, h3_counts=a.h3_counts,
-                   recall_frames=a.recall, r0=a.r0, worlds=a.worlds, days=a.days)
+                   margin_file=a.margin_file, recall_frames=a.recall, r0=a.r0, worlds=a.worlds, days=a.days)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(rep, indent=1, default=float) + "\n", encoding="utf-8", newline="\n")
     for g in rep["gatekeeping"]:
