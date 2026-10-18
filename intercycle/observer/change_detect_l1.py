@@ -70,12 +70,35 @@ Events: {"kind": "inzone_change", "t", "machine", "cells", "rect"} when cells tu
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import numpy as np
 
 from intercycle.observer import mapping as M
 from intercycle.observer.change_detect import ChangeConfig, ChangeLayer
 
 L1_CFG = ChangeConfig(dilate=2)        # 2 cells = 0.5 m around every UNKNOWN cell on the 0.25 m envelope grid
+
+# Speed (lane obs-speed, no behaviour change): `sync` runs every tick and the UNKNOWN masks rarely change between
+# ticks, so the pure function mapping.safe_box_cover(mask, max_boxes) is memoised on the mask's exact bytes and shape.
+# Module-level (not detector state), so pickled observer snapshots are byte-identical; bounded LRU.
+_COVER_CACHE: OrderedDict[tuple, np.ndarray] = OrderedDict()
+_COVER_CACHE_MAX = 256
+
+
+def _safe_box_cover(mask: np.ndarray, max_boxes: int) -> np.ndarray:
+    G = np.ascontiguousarray(mask, bool)
+    key = (G.shape, int(max_boxes), G.tobytes())
+    hit = _COVER_CACHE.get(key)
+    if hit is None:
+        hit = np.asarray(M.safe_box_cover(G, max_boxes)).copy()
+        hit.setflags(write=False)
+        _COVER_CACHE[key] = hit
+        if len(_COVER_CACHE) > _COVER_CACHE_MAX:
+            _COVER_CACHE.popitem(last=False)
+    else:
+        _COVER_CACHE.move_to_end(key)
+    return hit
 
 
 class L1ChangeDetector:
@@ -206,7 +229,7 @@ class L1ChangeDetector:
             U = self._unknown_flat(i)
             if not U.any():
                 continue
-            for i0, j0, i1, j1 in M.safe_box_cover(U.reshape(layer.shape), max_boxes):
+            for i0, j0, i1, j1 in _safe_box_cover(U.reshape(layer.shape), max_boxes):
                 out.append((float(mp.l1_x0[i] + i0 * res), float(mp.l1_z0[i] + j0 * res),
                             float(mp.l1_x0[i] + i1 * res), float(mp.l1_z0[i] + j1 * res)))
         return out
