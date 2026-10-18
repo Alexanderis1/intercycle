@@ -106,7 +106,7 @@ from twin.schemas.common import MISSION_T_S, TICK_HZ, Condition
 from twin.schemas.dynamics import Dynamics
 from twin.schemas.runs import CameraProvenance, CodeHashes, RealisedMover, Summary
 from twin.schemas.safety import PressSafety, Safety
-from twin.schemas.site import Site, point_in_polygon
+from twin.schemas.site import Site, point_in_polygon, polygon_bbox
 from twin.schemas.tables import LogRow
 from twin.schemas.tasks import Tasks
 from twin.truth_guard import open_truth
@@ -154,9 +154,7 @@ def circles_hit_poly(circles, poly, dilation: float) -> bool:
     return any(poly_dist(x, z, poly) < r + dilation for x, z, r in circles)
 
 
-def _bbox(poly, grow: float = 0.0) -> tuple[float, float, float, float]:
-    xs, zs = [p[0] for p in poly], [p[1] for p in poly]
-    return min(xs) - grow, min(zs) - grow, max(xs) + grow, max(zs) + grow
+_bbox = polygon_bbox   # the pure helper lives in twin/schemas/site.py (truth-free; pixel_adapter shares it)
 
 
 def box_gap(px: float, py: float, r: float, boxes: np.ndarray) -> np.ndarray:
