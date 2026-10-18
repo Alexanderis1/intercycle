@@ -42,6 +42,14 @@ from twin.schemas.site import Site, point_in_polygon  # noqa: E402
 
 OUT = ROOT / "twin" / "stat_v1_roi_occluders.json"
 REPLAY_WORLDS = 40                         # worlds of the held camera replay (one CAL v1 draw per camera each)
+DISCLOSURE = (
+    "fix2 attribution: the fix1 camera kept each ram ROI at its drawn pixels while the press prism and the movers "
+    "were projected through the world's TRUE camera (one CAL v1 draw), so the ROI no longer sat on its press in a "
+    "drawn world (fixed_roi_*: P9a 0 hits in most draws). That was a camera-geometry error, not a DAYGEN library gap: "
+    "with the ROI anchored on the press (stat_v1 since fix2) P9a's library hit share is close to the nominal camera's "
+    "and to TRAIN's in every draw. Only P9b's 0 % is a library gap (0 % even through the nominal camera: its real "
+    "occluders stand in or at the footprint, where the library has no point); it needs at-press operators from the "
+    "day generator (S3a). Draws whose anchored ROI leaves the image make that press MISSING for the whole world.")
 OCC_CONF = 0.4
 TRACK_MATCH_PX = 2.0
 IMG_H = 1080
@@ -318,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         out = real_occluders(site)
     out["twin_replay_daygen_v1_library"] = twin_replay(site)
+    out["twin_replay_daygen_v1_library"]["disclosure"] = DISCLOSURE
     held = twin_replay_held(site)
     for pid, v in held["presses"].items():         # TRAIN's machines MISSING share of the ROI's framing, next to it
         tr = out["by_split_press_framing"].get(f"train:{pid}:{v['framing']}", {})

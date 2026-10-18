@@ -512,22 +512,46 @@
  "twin_replay_daygen_v1_library": {
   "library_points": 13964,
   "n_draws": 200,
+  "roi_mode": "anchored on the press's visible surface (cam_geom.press_anchor: the plane facing the camera where the ROI-centre ray enters the press prism), projected through the same camera as the movers",
   "presses": {
    "P9a": {
     "framing": "c9_f0",
     "stamps": 4703,
+    "roi_w_h_px": [
+     108.0,
+     108.0
+    ],
     "twin_hit_share_unheld_nominal": 0.2581,
     "twin_hit_share_unheld_draws_q5_50_95": [
+     0.24,
+     0.25,
+     0.26
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 0,
+    "roi_abs_shift_px_u_q50_90": [
+     181.62,
+     294.53
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     20.17,
+     35.75
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
      0.0,
      0.0,
      0.23
     ],
-    "draws_with_zero_hits": 123,
+    "fixed_roi_draws_with_zero_hits": 123,
     "library_points_in_a_press_footprint": 0
    },
    "P9b": {
     "framing": "c9_f1",
     "stamps": 4703,
+    "roi_w_h_px": [
+     74.0,
+     90.0
+    ],
     "twin_hit_share_unheld_nominal": 0.0,
     "twin_hit_share_unheld_draws_q5_50_95": [
      0.0,
@@ -535,55 +559,259 @@
      0.0
     ],
     "draws_with_zero_hits": 200,
+    "draws_roi_not_fully_in_image": 0,
+    "roi_abs_shift_px_u_q50_90": [
+     65.29,
+     118.58
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     28.03,
+     50.1
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "fixed_roi_draws_with_zero_hits": 200,
     "library_points_in_a_press_footprint": 0
    },
    "P14a": {
     "framing": "c14_f0",
     "stamps": 432,
+    "roi_w_h_px": [
+     75.0,
+     85.0
+    ],
     "twin_hit_share_unheld_nominal": 0.4144,
     "twin_hit_share_unheld_draws_q5_50_95": [
+     0.37,
+     0.38,
+     0.41
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 2,
+    "roi_abs_shift_px_u_q50_90": [
+     14.75,
+     32.7
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     14.55,
+     47.6
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
      0.34,
      0.37,
      0.41
     ],
-    "draws_with_zero_hits": 0,
+    "fixed_roi_draws_with_zero_hits": 0,
     "library_points_in_a_press_footprint": 0
    },
    "P14b": {
     "framing": "c14_f0",
     "stamps": 432,
+    "roi_w_h_px": [
+     90.0,
+     80.0
+    ],
     "twin_hit_share_unheld_nominal": 0.2801,
     "twin_hit_share_unheld_draws_q5_50_95": [
+     0.21,
+     0.28,
+     0.3
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 0,
+    "roi_abs_shift_px_u_q50_90": [
+     24.85,
+     70.85
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     15.21,
+     47.23
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
      0.15,
      0.27,
      0.29
     ],
-    "draws_with_zero_hits": 0,
+    "fixed_roi_draws_with_zero_hits": 0,
     "library_points_in_a_press_footprint": 0
    },
    "P14c": {
     "framing": "c14_f0",
     "stamps": 432,
+    "roi_w_h_px": [
+     95.0,
+     95.0
+    ],
     "twin_hit_share_unheld_nominal": 0.1667,
     "twin_hit_share_unheld_draws_q5_50_95": [
+     0.1,
+     0.17,
+     0.24
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 2,
+    "roi_abs_shift_px_u_q50_90": [
+     59.37,
+     177.85
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     25.87,
+     54.24
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
      0.01,
      0.15,
      0.25
     ],
-    "draws_with_zero_hits": 6,
+    "fixed_roi_draws_with_zero_hits": 6,
     "library_points_in_a_press_footprint": 0
    },
    "P14d": {
     "framing": "c14_f0",
     "stamps": 432,
+    "roi_w_h_px": [
+     170.0,
+     150.0
+    ],
     "twin_hit_share_unheld_nominal": 0.0833,
     "twin_hit_share_unheld_draws_q5_50_95": [
+     0.01,
+     0.13,
+     0.26
+    ],
+    "draws_with_zero_hits": 1,
+    "draws_roi_not_fully_in_image": 32,
+    "roi_abs_shift_px_u_q50_90": [
+     102.57,
+     303.34
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     45.24,
+     90.8
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
      0.0,
      0.06,
      0.25
     ],
-    "draws_with_zero_hits": 50,
+    "fixed_roi_draws_with_zero_hits": 50,
     "library_points_in_a_press_footprint": 0
+   }
+  },
+  "disclosure": "fix2 attribution: the fix1 camera kept each ram ROI at its drawn pixels while the press prism and the movers were projected through the world's TRUE camera (one CAL v1 draw), so the ROI no longer sat on its press in a drawn world (fixed_roi_*: P9a 0 hits in most draws). That was a camera-geometry error, not a DAYGEN library gap: with the ROI anchored on the press (stat_v1 since fix2) P9a's library hit share is close to the nominal camera's and to TRAIN's in every draw. Only P9b's 0 % is a library gap (0 % even through the nominal camera: its real occluders stand in or at the footprint, where the library has no point); it needs at-press operators from the day generator (S3a). Draws whose anchored ROI leaves the image make that press MISSING for the whole world."
+ },
+ "twin_replay_held_stat_v1_camera": {
+  "n_worlds": 40,
+  "hold_s_by_camera": {
+   "9": 34.0,
+   "14": 7.5
+  },
+  "clips": 346,
+  "presses": {
+   "P9a": {
+    "framing": "c9_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.31,
+     0.32,
+     0.33
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.21,
+     0.22,
+     0.23
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.3845,
+    "train_hit_share_unheld": 0.2927
+   },
+   "P9b": {
+    "framing": "c9_f1",
+    "held_missing_share_worlds_q5_50_95": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "worlds_with_zero_held_missing": 40,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.3414,
+    "train_hit_share_unheld": 0.2509
+   },
+   "P14a": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.5,
+     0.52,
+     0.54
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.21,
+     0.23,
+     0.24
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.3013,
+    "train_hit_share_unheld": 0.185
+   },
+   "P14b": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.36,
+     0.43,
+     0.47
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.11,
+     0.17,
+     0.19
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.2493,
+    "train_hit_share_unheld": 0.1598
+   },
+   "P14c": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.24,
+     0.37,
+     0.41
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.05,
+     0.11,
+     0.16
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.1972,
+    "train_hit_share_unheld": 0.1088
+   },
+   "P14d": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.04,
+     0.27,
+     0.39
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.01,
+     0.07,
+     0.15
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 10,
+    "train_machines_missing_share": 0.1965,
+    "train_hit_share_unheld": 0.0971
    }
   }
  }

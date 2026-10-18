@@ -82,8 +82,11 @@ ASSUMED (a stated value, no data).
     nominal camera (0 % in every draw, against 25.1 % in the TRAIN boxes, whose occluders stand in or at the
     footprint): in generated days no mover stands where P9b's real occluders stand. The camera handles such at-press
     movers (image-only occluders, item 2) once the day generator places operators there (S3a). The held MISSING
-    share the observer gets (`twin_replay_held_stat_v1_camera`, the camera itself on the library clips) is reported
-    next to TRAIN's machines MISSING share in the same file. `MOTION_THR` (FITTED, Youden J) is the matching
+    share the observer gets (`twin_replay_held_stat_v1_camera`, the camera itself on the library clips, 40 worlds)
+    is reported next to TRAIN's machines MISSING share in the same file: world medians P9a 32 % (TRAIN 38.5 %), P9b
+    0 % (34.1 %), P14a-d 52 / 43 / 37 / 27 % (TRAIN 30 / 25 / 20 / 20 %; P14d MISSING in 10 of the 40 worlds, whose
+    ROI is cut by the image border). Zone 14 is held above TRAIN (camera 14's fitted 7.5 s against the ingest's
+    1.33 s, on clips of median ~7 s), the fail-safe direction. `MOTION_THR` (FITTED, Youden J) is the matching
     observer_live motion threshold.
 12. **hold_s (FITTED, per camera).** The smallest hold k (ticks) such that k + 1 consecutive ticks with the occluder
     missed in the image (chain miss, or the occluded-regime extra miss) have probability <= OCC_EPS, at the camera's
