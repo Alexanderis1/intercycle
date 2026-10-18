@@ -1,11 +1,13 @@
 # PREREG v1: press-shop twin, sealed evaluation
 
-Written by lane S1a-prereg (PLAN_TWIN §4 S1a item 5) and finalised by lane PREREG-final, Sun 18 Oct 2026 ~07:50 CEST,
-for the lead to commit on main BEFORE any dev-world run and before FREEZE_REALCLIP (PLAN_TWIN §4 gate "PREREG v1").
+Written by lane S1a-prereg (PLAN_TWIN §4 S1a item 5), finalised by lane PREREG-final, Sun 18 Oct 2026 ~07:50 CEST,
+and made commit-ready by lane PREREG-v1 (~08:10 CEST), for the lead to commit on main BEFORE any dev-world run and
+before FREEZE_REALCLIP (PLAN_TWIN §4 gate "PREREG v1").
 Every value carries its source in brackets:
 [PLAN §n] = docs/PLAN_TWIN.md, [U#] = the user's answer in PLAN §0, [STATUS G0] = docs/STATUS.md gate log,
 [A1+] = prereg/AMENDMENTS.md Amendment 1, [A-cust] = prereg/AMENDMENTS.md "Custodian on the desktop",
-[A2] = prereg/AMENDMENTS.md Amendment 2 (the user decisions of Sun ~07:00 CEST), [code: path::name] = the
+[A2] = prereg/AMENDMENTS.md Amendment 2 (the user decisions of Sun ~07:00 CEST), [A3] = prereg/AMENDMENTS.md
+Amendment 3 (the user decisions of Sun ~08:00 CEST and the PREREG-v1 disclosures), [code: path::name] = the
 implementation on main at 6b0ea6b, [lead] = a lead decision under the user's delegation of Sun ~01:40.
 
 **Not amendable** [PLAN §5 "EVAL"]: §3 (primary), §4 (NI margin, gate order and each test, r0, unsafe-free
@@ -33,8 +35,16 @@ after FREEZE (§2.1). The 11:15 auditor diffs this v1 against the final version 
   arm is at its best possible setting.
 - **Stop entry is asymmetric, by design of the two arms, and disclosed** (§9): the learned arm never enters a STOPPED
   press; the reactive arm can.
+- **How the robot uses the maps, said simply** [A3]: the robot treats the observer's maps as a yes/no "keep out"
+  mask, looking 6 s ahead; on top of that it uses timing gates (enter a press area only in a predicted idle window)
+  and lower speeds in busy areas. It does not weigh areas by how risky they are (no graded costs). A win or a loss
+  is a result of that simple use of the maps, not of the best possible use.
+- **The observer learns by clock time only** [A3]: it learns what usually happens in each time-of-day bin. It does
+  not learn effects triggered by events (for example "after a forklift passes, the press stops"). That is future
+  work, and nothing here tests it.
 - **If the robot part is not ready by FREEZE (~10:15), there is no H1-H3 claim at all**: the robot results are then
-  descriptive dev results (§2.1).
+  descriptive dev results (§2.1). The robot batch's launcher is still being finished (§2.1 "Robot launcher").
+- **Nothing was tuned after looking at results** (§9): no tuning run, no threshold chosen from dev or test data.
 
 ## 1. Code that implements this pre-registration
 
@@ -45,7 +55,8 @@ after FREEZE (§2.1). The 11:15 auditor diffs this v1 against the final version 
 | Constants | `twin_eval.ALPHA = 0.05`, `NI_DELTA_S_PER_H = 30.0`, `ALPHA_TARGET = 0.05`, `H3_SLACK = 0.01`, `MIN_GROUPS = 5`, `BOOT_B = 10000`, `BOOT_SEED = 20261018`, `H3_CONDITION = "learned"`; `twin.schemas.common.MISSION_T_S = 720.0` |
 | M-W7 margin (S7b) | `intercycle/margin_inflate.py`: `load_margin`, `inflation_spec`, `inflate`; frozen file `twin/m7_margin.json` (here: the fixed-margin fallback, §7) |
 | Exclusion list | `scripts/classify_invalid.py`, git blob `b9c293f970fc52c486c388c714c54657f7a46ecb` |
-| Sealed run | `scripts/sealed_run.py`, git blob `c6e7d5306b06e3a8083c4db0ace190e9348307fe` |
+| Sealed run | `scripts/sealed_run.py`, git blob `c6e7d5306b06e3a8083c4db0ace190e9348307fe` (clips stage only, `STAGES = ("clips",)`); container side `scripts/sealed_ingest.py`; image `cloud/modal_perc.py` |
+| Robot batch launcher | not on main: `scripts/run_double.py::run_sealed` and `intercycle/eval/twin_batch.py`, called by the `double` stage of `sealed_run.py` (lane double-modal, being finished; §1 must-change item 7) |
 | Real-clip scoring | `intercycle/eval/realclip.py` (blob `ad04ba3f889601a70f9b5ed64b092c0fd3e83290`); occlusion `intercycle/observer/occlusion.py` (blob `981b697491105f93b20c32c83d31d27334b74852`): `box_hits_roi`, `roi_missing_series`; strokes `intercycle/perception/press_motion.py::detect_strokes` (blob `6fe191a2275975cb95b2bc1e329017809dec1265`) |
 | r0 | `scripts/prereg_r0.py` -> `prereg/r0_v1.json` |
 | Dev worlds | `scripts/gen_dev_worlds.py` |
@@ -60,21 +71,40 @@ and reactive blobs are re-recorded at FREEZE (§9).
 
 **Code that must change to match this text** (the text holds, PLAN §5; each is a bug until fixed).
 
-Must be merged **before FREEZE_REALCLIP (08:30)**, because the 09:15 run uses them:
-2. `sealed_run.py` reads one `prereg/FREEZE` for every stage and requires seeds; the clips stage must be gated by
-   `prereg/FREEZE_REALCLIP` alone and run without seeds, the robot stage by `prereg/FREEZE`, and the seeds must be
-   derived only after `prereg/FREEZE` (§2.1). The clips stage must also refuse unless every real-clip path of §2.1
-   has, in the commit it runs from, the same git blob as at the FREEZE_REALCLIP commit.
-3. `realclip.FRAME_TOL_S = 1/12 s`; the H4 test side must use the r0 rule's nearest-frame tolerance of 0.05 s (§4.1),
-   or the r0 rule and the test side differ.
-4. The real-clip occlusion figure must use the image-space ram-ROI rule (§10), and `detect_strokes` must emit the BDC
-   (bottom) time of each stroke (§10).
+Must be merged **before FREEZE_REALCLIP** (target ~09:15, at the latest 10:15 CEST, §2.1), because the real-clip
+run executes them. They touch only real-clip paths of §2.1 (the "Covers" row), and every real-clip path is frozen by
+that commit:
+2. `scripts/sealed_run.py` (main: blob `c6e7d530…`) reads one `prereg/FREEZE` for every stage and requires seeds;
+   the clips stage must be gated by `prereg/FREEZE_REALCLIP` alone and run without seeds, the robot stages by
+   `prereg/FREEZE`, and the seeds must be derived only after `prereg/FREEZE` (§2.1). The clips stage (and its
+   scoring command) must refuse unless no path changed since the FREEZE_REALCLIP commit (it runs from a detached
+   worktree at that commit), and the robot stages must refuse unless every real-clip path of §2.1 has the same blob
+   at FREEZE_REALCLIP and at FREEZE. It must also carry the sealed real-clip scoring (`sealed_run.py score`: the
+   dev scorer `intercycle/eval/realclip.py::run` on the LABELS-checked test labels, `twin/dev_labels.py`). [lane
+   RC-final implements this: `preflight_clips`, `import_closure`, `CLIPS_STAGE_ROOTS`, `REALCLIP_DATA_PATHS`, `score`]
+3. `intercycle/eval/realclip.py`: `FRAME_TOL_S = 1/12 s` (main and lane RC-final); the H4 test side must use the r0
+   rule's nearest-frame tolerance of 0.05 s (§4.1), or the r0 rule and the test side differ.
+4. The real-clip occlusion figure (`intercycle/eval/realclip.py`, `intercycle/observer/pixel_adapter.py`) must use the
+   image-space ram-ROI rule (§10, `intercycle/observer/occlusion.py`), and the PERC module
+   `intercycle/perception/press_motion.py::detect_strokes` must emit the BDC (bottom) time of each stroke (§10)
+   [lane RC-final: `_bdc_index`].
+6. The H4 frames file that `twin_eval.evaluate(..., recall_frames=...)` passes to `twin_eval.h4_recall` must be
+   written from the sealed scoring output of item 2 (one row per labelled test frame: camera, group, tp, n_gt); no
+   other part of `intercycle/eval/twin_eval.py` belongs to the real-clip test.
 
 Must be merged **before FREEZE (~10:15)**:
 1. `twin_design.make_design` enforces the five-condition design on the sealed CPU double (`cs != CONDITIONS`); it must
    enforce the cut design of §2 (static, learned, reactive; 16 × 2 × 2 × 3 = 192 cells).
 5. No writer enforces the fixed-margin rule of §7 (`conformal_margin.write_margin_file` refuses non-LTT results):
    `scripts/write_fixed_margin.py` must compute margin_m exactly as §7 states and write `twin/m7_margin.json`.
+7. The robot batch has no sealed launcher on main (`scripts/sealed_run.py` on main: `STAGES = ("clips",)`). The
+   `double` stage of `sealed_run.py` (directly, as in lane double-modal, or through `scripts/sealed_robot.py`, as lane
+   RC-final dispatches it) must call `scripts/run_double.py::run_sealed` (plan, order, re-runs, layout and
+   cost in `intercycle/eval/twin_batch.py`) with the 16 revealed seeds, and `run_double.SEALED_BACKEND_READY` must be
+   true; both are being finished in lane double-modal (there `SEALED_BACKEND_READY = False`, so the stage refuses).
+   Lanes double-modal and RC-final both change `sealed_run.py` (a real-clip path): their `sealed_run.py` changes
+   must be reconciled and merged before FREEZE_REALCLIP (§2.1 "Shared files").
+   If this item is not merged and dry-run on dev worlds by 10:15, §2.1 "not ready" applies.
 
 If the code and this text disagree on a not-amendable item, this text holds and the code is a bug to fix before the
 freeze that covers it.
@@ -104,22 +134,36 @@ freeze that covers it.
 | | FREEZE_REALCLIP | FREEZE |
 |---|---|---|
 | File | `prereg/FREEZE_REALCLIP` = the 40-hex sha of the commit it freezes | `prereg/FREEZE` = the 40-hex sha of the commit it freezes |
-| When | 08:30 CEST | ~10:15 CEST |
-| Covers | the real-clip test, frozen as these exact paths (the "real-clip paths"): `scripts/sealed_run.py`, `intercycle/eval/realclip.py`, `intercycle/observer/occlusion.py`, `intercycle/perception/press_motion.py`, `intercycle/perception/esk_ingest.py`, `intercycle/perception/detector.py`, `cloud/modal_perc.py`, `intercycle/eval/twin_eval.py` (for `h4_recall`), `prereg/r0_v1.json`, `sealed/MANIFEST.sha256`, `sealed/LABELS.sha256`; plus the pixel adapter and CAL files these import, as recorded in the FREEZE_REALCLIP commit message | the robot part: twin generator and dynamics (G2 hashes), CPU double, both robot arms at their default configs (§9), the fixed M-W7 margin (§7), EVAL (`twin_eval.py`, `twin_design.py`), `classify_invalid.py` |
-| Run | once at **09:15 CEST**, ephemeral Modal container launched by the custodian agent, on the test clips only | the 192 sealed CPU-double cells, after the seeds |
+| When | target **~09:15 CEST**, at the latest **10:15 CEST** (user allowance, Sun ~08:00, [A3]; it was 08:30 under [A2]) | ~10:15 CEST |
+| Covers | the real-clip test, frozen as these exact paths (the "real-clip paths"). **Code the run executes**: the sealed run `scripts/sealed_run.py` (clips stage and `score`) and its container side `scripts/sealed_ingest.py`; the scorer `intercycle/eval/realclip.py` and `intercycle/observer/pixel_adapter.py`; the PERC modules `cloud/modal_perc.py` (image), `intercycle/perception/esk_ingest.py`, `intercycle/perception/detector.py`, `intercycle/perception/press_motion.py`, `intercycle/perception/tracking.py`, `intercycle/perception/vehicles.py`; the modules these import: `intercycle/observer/occlusion.py`, `intercycle/observer/mapping.py`, `intercycle/observer/watchdog.py`, `intercycle/observer/learn_cycles.py`, `intercycle/framing.py`, `intercycle/scenario.py`, `intercycle/types.py`, `intercycle/esk.py`, `twin/dev_labels.py`, `twin/rng.py`, and the schemas `twin/schemas/*.py` (among them `labels.py` and `prereg.py`; all of `twin/schemas` because `twin/schemas/__init__.py` imports every schema module), plus the `__init__.py` of `intercycle`, `intercycle/eval`, `intercycle/observer`, `intercycle/perception`, `twin`, `twin/schemas`; and **only the function `h4_recall`** of `intercycle/eval/twin_eval.py` (the gate H4). **Data**: `prereg/r0_v1.json`, `sealed/MANIFEST.sha256`, `sealed/LABELS.sha256`, `prereg/ACTIVE_SPLIT` and the split csv it names, `docs/probes/S3a-P4_rois.json`, `twin/site.yaml`, `labels/TEST_RULES.md`. The list is the static import closure of the roots `sealed_run.py`, `sealed_ingest.py`, `modal_perc.py`, `esk_ingest.py`, `realclip.py`, `pixel_adapter.py`, `dev_labels.py` (the roots of lane RC-final's `CLIPS_STAGE_ROOTS`; walked by lane PREREG-v1 over the static imports at lane/RC-final a7a8cdd, ~08:05; RC-final's `sealed_run.import_closure` recomputes it); the FREEZE_REALCLIP commit message lists every path with its blob, recomputed at that commit, and a path the recomputation adds is covered too | the robot part: twin generator and dynamics (G2 hashes), CPU double, both robot arms at their default configs (§9), the fixed M-W7 margin (§7), EVAL (`twin_eval.py` except `h4_recall`, `twin_design.py`), `classify_invalid.py`, the robot launcher (`run_double.py`, `twin_batch.py`, the `double` stage of `sealed_run.py`) |
+| Run | once, **right after the FREEZE_REALCLIP commit**, from a detached worktree at that commit: `sealed_run.py run --stages clips` (ephemeral Modal container launched by the custodian agent, test clips only), then `sealed_run.py score` | the 192 sealed CPU-double cells, after the seeds, through the `double` stage (§2.1 "Robot launcher") |
 | Seeds | none | derived only after the FREEZE commit (§2 "Test seeds") |
 
 - No change to the real-clip code or inputs after FREEZE_REALCLIP; no change to the robot code or inputs after FREEZE.
   The FREEZE commit contains the FREEZE_REALCLIP commit (it is an ancestor).
-- **Shared files** (`scripts/sealed_run.py`, `intercycle/eval/twin_eval.py`): the clips stage checks every real-clip
-  path against its FREEZE_REALCLIP blob (§1 item 2), so none of them changes between 08:30 and the 09:15 run. After
-  the 09:15 run, a robot-side change to these two files must leave the clips-stage code of `sealed_run.py` and the
-  function `twin_eval.h4_recall` textually unchanged; the auditor diffs both against the FREEZE_REALCLIP commit.
-- **The 09:15 outputs go only to the custodian agent until FREEZE is committed** (or until the lead declares the
+- **Shared files.** The real-clip run is made from a detached worktree at the FREEZE_REALCLIP commit, so it runs
+  exactly the frozen code. `scripts/sealed_run.py` is a real-clip path, so after FREEZE_REALCLIP it cannot change:
+  any wiring of the robot `double` stage inside `sealed_run.py` (lane double-modal changes it) must be merged before
+  FREEZE_REALCLIP, and later robot work goes only into files outside the real-clip paths (`scripts/run_double.py`,
+  `intercycle/eval/twin_batch.py`, and `scripts/sealed_robot.py`, the module lane RC-final's `sealed_run.py`
+  dispatches the robot stages to). `intercycle/eval/twin_eval.py` is shared only through `h4_recall`, which must
+  stay textually unchanged after FREEZE_REALCLIP (the auditor diffs it against that commit).
+- **Robot code frozen early** (a consequence, disclosed): `intercycle/observer/learn_cycles.py` (learned arm),
+  `intercycle/observer/mapping.py`, `intercycle/observer/occlusion.py`, `intercycle/scenario.py` and
+  `twin/schemas/*.py` are real-clip paths, so from FREEZE_REALCLIP on they cannot change for the robot part either
+  (the robot stages refuse when a real-clip path differs between FREEZE_REALCLIP and FREEZE).
+- **Robot launcher** [A3]: `scripts/sealed_run.py` on main has no robot stage (`STAGES = ("clips",)`). The sealed
+  192-cell batch is launched by the `double` stage, which calls `scripts/run_double.py::run_sealed` with the 16
+  revealed seeds (`intercycle/eval/twin_batch.py`: plan, order, re-runs, layout, cost); both are being finished in
+  lane double-modal (§1 must-change item 7). **If that launcher is not merged and dry-run on dev worlds by 10:15**,
+  the robot part is "not ready" (bullet "If the robot part is not ready by 10:15" below): descriptive dev results,
+  no H1-H3 claim.
+- **The real-clip outputs go only to the custodian agent until FREEZE is committed** (or until the lead declares the
   robot part descriptive at 10:15): the lead receives only "run completed" and the output hash, so the real-clip
   outcomes cannot inform any robot-part choice (margin, bug-fix amendments, the go/no-go on FREEZE). Any amendment
-  between 09:15 and FREEZE names the dev run that prompted it.
-- **If the robot part is not ready by 10:15**, FREEZE is not committed for the robot part, no test seed is derived and
+  between the real-clip run and FREEZE names the dev run that prompted it.
+- **If the robot part is not ready by 10:15** (among the causes: the robot launcher of §1 item 7 not merged and
+  dry-run on dev worlds), FREEZE is not committed for the robot part, no test seed is derived and
   no sealed robot run happens: the robot results are reported as **descriptive dev results** (dev worlds 0-3), and
   **no H1, H2 or H3 claim is made**. H4 is then still computed on the real-clip run and reported, but it is not
   claimed either, because a hypothesis is claimed only if every earlier one rejected (§4).
@@ -152,7 +196,7 @@ computed on the 192-cell design of §2 (16 worlds, both test days, both zones, c
 | H1 | Primary (§3): learned − best reactive | d_w = V_w(learned) − V_w(reactive) over the 16 worlds; `signflip_p(d_w, "greater") <= ALPHA` |
 | H2 | Non-inferiority on press time: L_w(c) = robot-caused press time lost (stops + holds incl. reset time, plus the remaining T of errored missions) per mission-hour [s/h], pooled like V; learned − static ≤ δ, **δ = 30 s/h** [U14], [PLAN §5] | e_w = L_w(learned) − L_w(static) − 30; `signflip_p(e_w, "less") <= ALPHA` (H1: mean e < 0) [code: per_world(..., "lost"), NI_DELTA_S_PER_H] |
 | H3 | Map unsafe-free share on test days at the frozen fixed margin (§7). **α_target = 0.05** (S7b's α). H0: mean miss share ≥ α_target + 0.01 = **0.06** | per world: the unweighted mean over its test-day units (`episode_s` from the margin file, §7) of the unit miss share at the frozen margin (`stream_units` + `per_world_miss_share`), from the 4 learned runs of each world (days 9-10 × zones 9, 14) that EVAL scored (`check_h3_provenance`); e_w = share_w − 0.06; `signflip_p(e_w, "less") <= ALPHA`. A world missing a stream of any of its 4 (day, zone) cells makes H3 not evaluable (fail closed). Robot safety events are descriptive only. [code: h3_world_shares, check_h3_provenance, ALPHA_TARGET, H3_SLACK, H3_CONDITION] |
-| H4 | Blind test person recall ≥ r0 (r0 in §4.1), from the 09:15 real-clip run | `h4_recall`: if any camera has fewer than `MIN_GROUPS = 5` test groups it rejects only if the lowest per-group recall AND the pooled recall are both ≥ r0, with the frame-level Clopper-Pearson 95 % interval reported as "ignores clustering (only k groups)"; otherwise the one-sided 95 % group-bootstrap lower bound of the pooled recall must be ≥ r0. **Scope**: a group is (camera, test group); the minimum runs over EVERY test group of BOTH cameras with at least one labelled person (n_gt > 0), so camera 14's 12 single-clip groups are included; the pooled recall is over all labelled frames of both cameras; groups with n_gt = 0 are left out of both. |
+| H4 | Blind test person recall ≥ r0 (r0 in §4.1), from the real-clip run (§2.1) | `h4_recall`: if any camera has fewer than `MIN_GROUPS = 5` test groups it rejects only if the lowest per-group recall AND the pooled recall are both ≥ r0, with the frame-level Clopper-Pearson 95 % interval reported as "ignores clustering (only k groups)"; otherwise the one-sided 95 % group-bootstrap lower bound of the pooled recall must be ≥ r0. **Scope**: a group is (camera, test group); the minimum runs over EVERY test group of BOTH cameras with at least one labelled person (n_gt > 0), so camera 14's 12 single-clip groups are included; the pooled recall is over all labelled frames of both cameras; groups with n_gt = 0 are left out of both. |
 
 **Stated in advance for H4** [A1+], [A2]: camera 9 has **4 test groups** (fewer than 5), so the small-group rule
 applies. H4 then needs every one of the (up to 4 + 12) per-group recalls to be ≥ r0; **H4 is expected not to be
@@ -219,8 +263,15 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
 - Risk level **α = 0.05**, confidence **δ = 0.10** (user decision, Sun ~00:45-01:40) [STATUS G0], [PLAN §4 S7b].
   α is H3's α_target (§4).
 - **The fixed-margin fallback is used** [A2], [PLAN §6 Fallback]: the 32-world Learn-then-Test calibration on dev
-  worlds 100-131 is not run. M-W7 is a **fixed latency-p99 margin**: margin_m =
-  ceil(age_p99 × v_max / cell_m) × cell_m [lead, fixed by committing this file], where
+  worlds 100-131 is not run. M-W7 is a **fixed latency-p99 margin**, fixed exactly here [lead, fixed by committing
+  this file; terms from the S7b code on main]:
+
+  k = ceil(age_p99 × v_max / cell_m − 1e-9) (an integer number of cells; the 1e-9 only absorbs float error, as
+  `margin_inflate.R2_EPS` does), margin_m = round(k × cell_m, 2) [m];
+
+  the robot then marks every cell offset (di, dj) with di² + dj² ≤ radius2_cells = floor((margin_m / cell_m)² + 1e-9)
+  = k² (`margin_inflate.radius2_cells`, `ROUNDING`; a disc of k cells, UNKNOWN cells included). Worked check: with
+  v_max = 1.792664 m/s and cell_m = 0.25 m, age_p99 = 0.40 s gives 0.717 m → k = 3 → margin_m = 0.75 m. Where:
   - **age_p99** = `conformal_margin.age_summary(age_s, source)["p99"]` (numpy linear percentile) of the fast-layer
     age the robot holds at each tick (`DAY0_UNIX + t − issue_unix` of the fast layer in use,
     `twin/observer_live.py`, the quantity checked against `ROBOT_FAST_MAX_AGE_S = 30 s`), pooled over **every tick of
@@ -231,9 +282,15 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
     **1.792664 m/s** (forklift, zone 14) at the dynamics file of the FREEZE commit; one value for both zones;
   - **cell_m** = the robot's inflation grid cell, `observer_live` spec `env_res` (default 0.25 m), the `cell_m` that
     `inflate` is called with.
+  **Fail closed, no clipping**: (a) margin_m must lie on the H3 grid `conformal_margin.DEFAULT_MARGINS_M`
+  (0 to 4 m in 0.05 m steps; `_margin_index` refuses any other value), which every multiple of 0.25 m up to 4 m does;
+  (b) margin_m must fit in the observer's L1 grid margin, `twin_spec(margin=1.0)` as `scripts/slice.py::observer_spec`
+  calls it (`observer_live` refuses `margin_m > spec["margin"]`), so with v_max above the robot accepts at most
+  k = 4, margin_m = 1.0 m, i.e. age_p99 ≤ 0.5578 s. If (a) or (b) fails, no margin file is written and the robot part
+  is "not ready" (§2.1): descriptive dev results, no H1-H3 claim. The margin is never cut to fit.
   Disclosed as "fixed latency-p99 margin, not certified". It is computed from dev runs only, before FREEZE, by
-  `scripts/write_fixed_margin.py` (to be written; §1 "must change" item 5), which writes `twin/m7_margin.json` and
-  refuses to overwrite a frozen file.
+  `scripts/write_fixed_margin.py` (not on main yet: §1 "must change" item 5), which computes k and margin_m exactly
+  as above, applies (a) and (b), writes `twin/m7_margin.json` and refuses to overwrite a frozen file.
 - The fallback is written to `twin/m7_margin.json` in the format `twin_eval.load_frozen_margin` reads
   (`margin_inflate.load_margin`: the margin schema, `frozen: true`, `status: "ok"`, `margin_m`, `cell_m`, the
   `inflation` block of `margin_inflate.inflation_spec`, and `unit.episode_s = 720` = one mission), with a `method`
@@ -279,11 +336,15 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
   (ros2/intercycle_nav/test/test_stop_entry.py), so **the learned arm never enters a STOPPED press**; the user-stated
   typical learner TTL is ~2.6 s [A2]. The reactive arm's own-camera still-run (KM) window does, so **the reactive arm
   can enter a STOPPED press**. [code: test_stop_entry.py, twin/observer_live.py tags["stop_entry"]]
-- Order [PLAN §4], [A2]: this PREREG committed → dev worlds generated (`scripts/gen_dev_worlds.py --set robot`) → dev
-  runs (descriptive, no tuning) → FREEZE_REALCLIP 08:30 → real-clip run 09:15 → fixed margin (§7) and G2 → FREEZE
-  ~10:15 → seeds (drand) → sealed CPU-double runs.
+- **How the learned arm uses the maps, disclosed (no code change)** [A3]: the observer maps enter the robot as a
+  binary keep-out mask over a 6 s look-ahead, plus timing gates (entry only in a predicted idle window, §5) and speed
+  limits in busy areas; there are no graded costs. **The observer learns clock-time bins only** (time-of-day
+  slices), not event-triggered effects; event-triggered learning is future work.
+- Order [PLAN §4], [A2], [A3]: this PREREG committed → dev worlds generated (`scripts/gen_dev_worlds.py --set
+  robot`) → dev runs (descriptive, no tuning) → FREEZE_REALCLIP (~09:15, at the latest 10:15) → real-clip run right
+  after it → fixed margin (§7) and G2 → FREEZE ~10:15 → seeds (drand) → sealed CPU-double runs.
 
-## 10. Real-clip test (§5 "Real-clip test"), frozen by FREEZE_REALCLIP, run 09:15
+## 10. Real-clip test (§5 "Real-clip test"), frozen by FREEZE_REALCLIP, run right after it
 
 - Metrics, n reported for every figure: person precision/recall at IoU 0.5; foot-point pixel error; stroke F1 at
   **±0.25 s** tolerance (greedy one-to-one matching); stroke-count error; occlusion → MISSING rate; zone accuracy.
@@ -310,9 +371,17 @@ ASSUMED stops is reported. [PLAN §5 Design], [code: intercycle/scenario.py, ros
   separation, the sealed folder's access log, committed hashes), not a machine boundary as PLAN §4/§6 planned. The test
   labels are made blind by **two fresh labeller agents** (one for person frames, one for stroke windows), both reading
   only `labels/TEST_RULES.md` and the test images; only their hash (`sealed/LABELS.sha256`) enters the repo.
-- Run once, at 09:15, in an ephemeral Modal container launched by the custodian agent, through the same per-clip
-  ingest as dev (`sealed_run.py`). Every figure is stated "against independent Claude-agent labels (vision model), not
-  human labels", with the inter-agent agreement (docs/LABEL_AGREEMENT.md) as its noise floor. [U14]
+- **Test-label format fix, disclosed** [A3]: the person-frame file `labels_frames.json` had no `stroke_windows`
+  field (label contract `twin/schemas/labels.py`). A fresh labeller agent added an empty `stroke_windows` list to it;
+  no label was changed; the file's sha256 before and after are in `C:\intercycle_sealed\access.log` (custodian side;
+  no builder reads it).
+- **P9a test stroke windows: 1 of 13** [A3]: the test split holds only one c9_f0 clip (A1+ "Framings": test c9_f0 1),
+  so the stroke labeller marked 1 test stroke window for press P9a, not the 13 planned. P9a's test stroke figures
+  rest on that one window and are reported with n = 1; a press with fewer than 10 scored windows is reported in
+  `counts.short_presses`, not refused (lane RC-final scoring rule, its AMENDMENTS entry "Sealed real-clip scoring").
+- Run once, right after the FREEZE_REALCLIP commit (§2.1), in an ephemeral Modal container launched by the
+  custodian agent, through the same per-clip ingest as dev (`sealed_run.py`), then scored once by `sealed_run.py
+  score`. Every figure is stated "against independent Claude-agent labels (vision model), not human labels", with the inter-agent agreement (docs/LABEL_AGREEMENT.md) as its noise floor. [U14]
 - Reported per stratum (safe/unsafe per camera) because the split's safe strata fall short [A1+ lead notes].
 
 ## 11. Disclosures so far (collected; each goes to the README or the results)
@@ -333,8 +402,9 @@ From prereg/AMENDMENTS.md (A1+, lead notes, A-cust, A2):
    labels.
 10. The seal is procedural on one machine (desktop custodian and labeller agents), not a machine boundary; two test
     labeller agents instead of one [A-cust].
-11. Split freeze (FREEZE_REALCLIP 08:30, FREEZE ~10:15) and the cut design: 3 conditions, 192 cells, no oracle, no
-    no-map; Isaac, movers and A-lite descriptive outside sealed_run [A2].
+11. Split freeze (FREEZE_REALCLIP planned 08:30, moved to ~09:15 and at the latest 10:15 by user allowance [A3];
+    FREEZE ~10:15) and the cut design: 3 conditions, 192 cells, no oracle, no no-map; Isaac, movers and A-lite
+    descriptive outside sealed_run [A2].
 12. No tuning for either arm; both run their committed defaults [A2].
 13. Fixed latency-p99 margin instead of a certified conformal margin [A2].
 14. Learned never enters a STOPPED press; reactive can [A2].
@@ -358,3 +428,22 @@ From this pre-registration:
     generator (§0).
 26. With 4 camera-9 test groups the small-group rule applies and H4 is expected not to be claimed if any per-group
     recall is below r0 (§4).
+
+From Amendment 3 (prereg/AMENDMENTS.md, [A3]):
+27. Custodian on the desktop (procedural seal on one machine) and two test labeller agents (person frames; stroke
+    windows) instead of one (repeats 10, with the A3 record).
+28. `labels_frames.json` format fix: a fresh labeller agent added an empty `stroke_windows` list; before/after
+    sha256 in `C:\intercycle_sealed\access.log`; no label changed (§10).
+29. P9a test stroke windows: 1 of 13, because the test split has only one c9_f0 clip (§10).
+30. The robot uses the observer maps as a binary keep-out mask (6 s look-ahead) plus timing gates and speed limits in
+    busy areas; no graded costs (§0, §9).
+31. The observer learns clock-time bins only, not event-triggered effects (future work) (§0, §9).
+32. FREEZE_REALCLIP moved from 08:30 to ~09:15 (at the latest 10:15) by user allowance; the real-clip run follows it
+    directly (§2.1).
+33. No tuning of either arm and no value chosen from results (repeats 12).
+34. The robot batch launcher (`run_double.py`, `twin_batch.py`) is not on main at PREREG v1; without it merged and
+    dry-run by 10:15, the robot results are descriptive dev results with no H1-H3 claim (§2.1).
+35. Freezing the real-clip import closure also freezes `learn_cycles.py`, `mapping.py`, `occlusion.py`, `scenario.py`
+    and `twin/schemas` for the robot part from FREEZE_REALCLIP on (§2.1).
+36. The fixed margin must fit the observer grid margin of 1.0 m (age_p99 ≤ 0.5578 s) or the robot part fails closed
+    (§7).
