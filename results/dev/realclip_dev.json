@@ -590,8 +590,14 @@
     "n_windows_with_hidden": 6,
     "observation_ticks": {
      "n": 35,
-     "missing": 35,
-     "rate": 1.0
+     "missing": 32,
+     "rate": 0.9142857142857143
+    },
+    "base_nonhidden_observation_ticks": {
+     "n": 292,
+     "missing": 283,
+     "rate": 0.9691780821917808,
+     "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
     },
     "perc_samples": {
      "n": 428,
@@ -631,6 +637,12 @@
       "missing": 1,
       "rate": 1.0
      },
+     "base_nonhidden_observation_ticks": {
+      "n": 156,
+      "missing": 156,
+      "rate": 1.0,
+      "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
+     },
      "perc_samples": {
       "n": 15,
       "missing": 0,
@@ -665,8 +677,14 @@
      "n_windows_with_hidden": 5,
      "observation_ticks": {
       "n": 34,
-      "missing": 34,
-      "rate": 1.0
+      "missing": 31,
+      "rate": 0.9117647058823529
+     },
+     "base_nonhidden_observation_ticks": {
+      "n": 136,
+      "missing": 127,
+      "rate": 0.9338235294117647,
+      "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
      },
      "perc_samples": {
       "n": 413,
@@ -707,6 +725,12 @@
       "missing": 25,
       "rate": 1.0
      },
+     "base_nonhidden_observation_ticks": {
+      "n": 74,
+      "missing": 74,
+      "rate": 1.0,
+      "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
+     },
      "perc_samples": {
       "n": 310,
       "missing": 291,
@@ -741,8 +765,14 @@
      "n_windows_with_hidden": 3,
      "observation_ticks": {
       "n": 10,
-      "missing": 10,
-      "rate": 1.0
+      "missing": 7,
+      "rate": 0.7
+     },
+     "base_nonhidden_observation_ticks": {
+      "n": 218,
+      "missing": 209,
+      "rate": 0.9587155963302753,
+      "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"
      },
      "perc_samples": {
       "n": 118,
@@ -2268,6 +2298,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 8,
+   "nonhidden_missing_ticks": 8,
    "machines_found": true,
    "offsets_s": [
     -1.1999999999999997,
@@ -2288,6 +2320,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 20,
+   "nonhidden_missing_ticks": 20,
    "machines_found": true,
    "offsets_s": [
     1.0160126067507116,
@@ -2309,6 +2343,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 7,
+   "nonhidden_missing_ticks": 7,
    "machines_found": true,
    "offsets_s": [
     0.7184252597921662,
@@ -2329,6 +2365,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 20,
+   "nonhidden_missing_ticks": 20,
    "machines_found": true,
    "offsets_s": [
     -0.9360004066693779,
@@ -2352,6 +2390,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 20,
+   "nonhidden_missing_ticks": 20,
    "machines_found": true,
    "offsets_s": [
     0.799816998779992,
@@ -2375,6 +2415,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 8,
+   "nonhidden_missing_ticks": 8,
    "machines_found": true,
    "offsets_s": [
     0.4414125200642055,
@@ -2395,6 +2437,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 13,
+   "nonhidden_missing_ticks": 13,
    "machines_found": true,
    "offsets_s": [
     0.8061365927419355,
@@ -2417,6 +2461,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 13,
+   "nonhidden_missing_ticks": 13,
    "machines_found": true,
    "offsets_s": [
     0.36258820564516125,
@@ -2439,6 +2485,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 13,
+   "nonhidden_missing_ticks": 13,
    "machines_found": true,
    "offsets_s": [
     0.7658140120967741,
@@ -2461,6 +2509,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 20,
+   "nonhidden_missing_ticks": 20,
    "machines_found": true,
    "offsets_s": [
     -1.0068465565847766,
@@ -2485,6 +2535,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 20,
+   "nonhidden_missing_ticks": 20,
    "machines_found": true,
    "offsets_s": []
   },
@@ -2502,6 +2554,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 14,
+   "nonhidden_missing_ticks": 14,
    "machines_found": true,
    "offsets_s": [
     0.7993605115907274,
@@ -2523,6 +2577,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 20,
+   "nonhidden_missing_ticks": 20,
    "machines_found": true,
    "offsets_s": [
     -0.9200386335908908,
@@ -2546,6 +2602,8 @@
    "hidden_missing_ticks": 0,
    "hidden_perc_samples": 0,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 20,
+   "nonhidden_missing_ticks": 20,
    "machines_found": true,
    "offsets_s": [
     -0.8946726311508741,
@@ -2569,6 +2627,8 @@
    "hidden_missing_ticks": 1,
    "hidden_perc_samples": 15,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 19,
+   "nonhidden_missing_ticks": 19,
    "machines_found": true,
    "offsets_s": [
     0.5199776331842213,
@@ -2590,6 +2650,8 @@
    "hidden_missing_ticks": 5,
    "hidden_perc_samples": 49,
    "hidden_perc_missing": 49,
+   "nonhidden_ticks": 13,
+   "nonhidden_missing_ticks": 13,
    "machines_found": true,
    "offsets_s": []
   },
@@ -2607,6 +2669,8 @@
    "hidden_missing_ticks": 4,
    "hidden_perc_samples": 45,
    "hidden_perc_missing": 45,
+   "nonhidden_ticks": 16,
+   "nonhidden_missing_ticks": 16,
    "machines_found": true,
    "offsets_s": []
   },
@@ -2624,6 +2688,8 @@
    "hidden_missing_ticks": 11,
    "hidden_perc_samples": 144,
    "hidden_perc_missing": 144,
+   "nonhidden_ticks": 5,
+   "nonhidden_missing_ticks": 5,
    "machines_found": true,
    "offsets_s": []
   },
@@ -2638,9 +2704,11 @@
    "n_pred": 3,
    "tp": 0,
    "hidden_ticks": 5,
-   "hidden_missing_ticks": 5,
+   "hidden_missing_ticks": 2,
    "hidden_perc_samples": 58,
    "hidden_perc_missing": 0,
+   "nonhidden_ticks": 15,
+   "nonhidden_missing_ticks": 6,
    "machines_found": true,
    "offsets_s": [
     0.5235602094240837,
@@ -2663,6 +2731,8 @@
    "hidden_missing_ticks": 9,
    "hidden_perc_samples": 117,
    "hidden_perc_missing": 98,
+   "nonhidden_ticks": 8,
+   "nonhidden_missing_ticks": 8,
    "machines_found": true,
    "offsets_s": []
   }

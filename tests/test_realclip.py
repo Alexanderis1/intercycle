@@ -99,6 +99,31 @@ def test_score_window_ignores_spans_and_counts_missing():
     b = RC.stroke_block([r])
     assert b["f1"] == 1.0 and b["count_error"]["mean_signed"] == 0.0
     assert b["occlusion_to_missing"]["observation_ticks"]["rate"] == pytest.approx(2 / 3)
+    assert (r.nonhidden_ticks, r.nonhidden_missing_ticks) == (1, 0)               # base: tick 1.0 outside [3, 4]
+    assert b["occlusion_to_missing"]["base_nonhidden_observation_ticks"]["rate"] == 0.0
+    r2 = RC.score_window(win, m, ignore=[], hidden=[], meta=meta, tick_missing=ticks)
+    assert (r2.hidden_ticks, r2.nonhidden_ticks, r2.nonhidden_missing_ticks) == (0, 4, 2)   # no hidden span: all base
+
+
+def test_pooled_small_group_label_names_the_camera():
+    fr = [_frec(f"g{i}", 1, 2, camera=9) for i in range(4)] + [_frec(f"h{i}", 1, 2, camera=14) for i in range(6)]
+    s = RC.summarise(fr, [])
+    ci = s["person"]["pooled"]["recall_ci"]
+    assert ci["label"] == "ignores clustering (camera 9 has only 4 groups)" and s["person"]["pooled"]["n_groups"] == 10
+    assert s["person"]["per_camera"]["c9"]["recall_ci"]["label"] == "ignores clustering (only 4 groups)"
+    assert s["person"]["per_camera"]["c14"]["recall_ci"]["method"].startswith("bootstrap by group")
+
+
+def test_train_references_fail_closed(tmp_path):
+    inv = pd.DataFrame({"clip_id": ["a", "b"], "framing_id": ["f", "g"], "split": ["train", "dev"]})
+    with pytest.raises(FileNotFoundError, match="no loadable keyframe reference"):
+        RC.train_references(inv, tmp_path, ["f"])
+    assert RC.train_references(inv, tmp_path, ["g"]) == {"g": None}       # no train clip: no H, no Observation
+    import cv2
+
+    (tmp_path / "keyframes").mkdir()
+    cv2.imwrite(str(tmp_path / "keyframes" / "a_k1.jpg"), _frame(3))
+    assert RC.train_references(inv, tmp_path, ["f"])["f"] is not None
 
 
 def test_clip_meta_refuses_other_splits():
@@ -167,3 +192,50 @@ def test_site_geometry_from_site_yaml():
     assert set(g) == {"c9_f0", "c9_f1", "c14_f0"}
     assert g["c9_f1"].press_ids == ["P9a", "P9b"] and g["c9_f1"].share.shape == (2, 1)
     assert all(v.H is not None for v in g.values())
+    # zone_vis from the ram ROIs: c9_f0 measures only P9a; c9_f1 both; c14_f0 all four (every ROI fully in frame)
+    assert g["c9_f0"].share[:, 0].tolist() == [1.0, 0.0]
+    assert g["c9_f1"].share[:, 0].tolist() == [1.0, 1.0]
+    assert g["c14_f0"].press_ids == ["P14a", "P14b", "P14c", "P14d"] and g["c14_f0"].share[:, 0].tolist() == [1.0] * 4
+    assert PA.roi_in_image([[0, 0], [1920, 1080]], (1920, 1080))
+    assert not PA.roi_in_image([[0, 0], [1921, 10]], (1920, 1080)) and not PA.roi_in_image([], (1920, 1080))
+
+
+def _site_adapter(framing: str):
+    from twin.schemas import load
+    from twin.schemas.site import Site
+
+    g = PA.site_geometry(load(Site, ROOT / "twin" / "site.yaml"))[framing]
+    ref = WD.reference_from_frames([_frame(i) for i in range(3)])
+    return g, PA.PixelAdapter(g, ref, WD.WatchdogParams(recover_s=0.0))
+
+
+NO_DETS = pd.DataFrame({"class": pd.Series([], dtype=str), "u": pd.Series([], dtype=float),
+                        "v": pd.Series([], dtype=float)})
+
+
+@pytest.mark.parametrize("framing", ["c9_f0", "c9_f1", "c14_f0"])
+def test_site_adapter_unoccluded_tick_is_finite(framing):
+    """Real site geometry: an unoccluded, watchdog-ok tick with a finite PERC ROI energy gives a finite zone_motion
+    and zone_vis 1 for every press the framing has a ram ROI for (the always-MISSING bug of the first build)."""
+    g, ad = _site_adapter(framing)
+    motion = {p: 0.4 + 0.1 * i for i, p in enumerate(g.press_ids)}
+    o = ad.step(0.0, NO_DETS, _frame(11), motion)
+    OM.check_obs_v2(o, len(g.press_ids), 1)
+    assert bool(np.asarray(o.cam_floor_ok)[0])
+    zm, zv = np.asarray(o.zone_motion), np.asarray(o.zone_vis)
+    seen = g.share[:, 0] == 1.0
+    assert seen.any()
+    assert np.isfinite(zm[seen]).all() and np.allclose(zm[seen], [motion[p] for p, s in zip(g.press_ids, seen) if s])
+    assert (zv[seen] == 1.0).all() and np.isnan(zm[~seen]).all() and (zv[~seen] == 0.0).all()
+
+
+def test_site_adapter_person_in_zone_is_missing():
+    g, ad = _site_adapter("c9_f1")
+    uu, vv = np.meshgrid(np.arange(0, 1920, 16.0), np.arange(0, 1080, 16.0))
+    uv = np.c_[uu.ravel(), vv.ravel()]
+    m = PA.machine_of(PA.project_uv(uv, g), g.rects)
+    j = int(np.flatnonzero(m == 0)[0])                        # a pixel whose foot point lands in P9a's machine zone
+    det = pd.DataFrame({"class": ["person"], "u": [uv[j, 0]], "v": [uv[j, 1]]})
+    o = ad.step(0.0, det, _frame(12), {"P9a": 0.5, "P9b": 0.5})
+    assert bool(np.asarray(o.cam_floor_ok)[0]) and o.machine[0] == 0
+    assert np.isnan(np.asarray(o.zone_motion)[0])                                  # T-W6: occluded -> MISSING

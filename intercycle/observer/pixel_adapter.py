@@ -8,7 +8,11 @@ Real-clip PERC output -> Observation v2, one framing (= one camera polygon) at a
   machines $INTERCYCLE_DATA/machines/<press>/<clip>.parquet (ROI motion energy, PERC's image-space occlusion flag)
            -> zone_motion: the ROI energy of the nearest sample, NaN (MISSING) where PERC marked it missing or no
            sample lies within half a tick. Zones = the presses of the framing's site zone, as the plant's ObsAdapter
-           (machine zone = danger polygon bbox grown by dilation_m; camera polygon = the zone's floor polygon).
+           (machine zone = danger polygon bbox grown by dilation_m). zone_vis: the real-clip motion evidence is the
+           press's ram ROI in the image, so a framing sees a press (share 1) when the site gives the press a ram ROI on
+           that framing lying fully inside the image, else share 0 (MISSING, fail closed). The zone floor polygon is
+           not used for this: it is the traced visible FLOOR, which leaves out the press bodies and the floor they hide,
+           so it covers only 2-40 % of each machine zone and made every tick MISSING (S4-pixel audit).
   frames   the clip decoded at 2 Hz -> the M-W10 image watchdog (reference = `reference_from_frames` on the framing's
            TRAIN keyframes) -> floor_ok, ANDed into cam_floor_ok by `mapping.ObsV2Converter` (which also applies the
            T-W6 occlusion hold on the person / vehicle detections).
@@ -30,7 +34,7 @@ import pandas as pd
 from intercycle.observer import mapping as OM
 from intercycle.observer import watchdog as WD
 from intercycle.perception.esk_ingest import project_tracks
-from twin.plant import _bbox, floor_share
+from twin.plant import _bbox
 from twin.schemas.site import Site
 
 TICK_S = 1.0 / OM.FRAME_HZ
@@ -47,7 +51,26 @@ class FramingGeom:
     k1: float
     press_ids: list[str]
     rects: list[tuple[float, float, float, float]]
-    share: np.ndarray                 # (M, 1) share of each machine zone's floor inside this camera's floor polygon
+    share: np.ndarray                 # (M, 1) 1 = the press's ram ROI on this framing lies fully in the image, else 0
+
+
+def roi_in_image(polygon_px, size_px) -> bool:
+    """True if the full-res pixel polygon is non-empty, finite and every vertex lies in the image [0, w] x [0, h]."""
+    w, h = (float(v) for v in size_px)
+    pts = np.asarray(polygon_px, float).reshape(-1, 2)
+    if not len(pts) or not np.isfinite(pts).all():
+        return False
+    return bool(((pts[:, 0] >= 0) & (pts[:, 0] <= w) & (pts[:, 1] >= 0) & (pts[:, 1] <= h)).all())
+
+
+def roi_share(press_list, framing_id: str, size_px) -> np.ndarray:
+    """(M, 1) zone_camera_share of one real framing: 1 where the press has a ram ROI on the framing fully inside the
+    image, 0 otherwise (no ROI = this framing does not measure that press's motion)."""
+    out = np.zeros((len(press_list), 1))
+    for i, p in enumerate(press_list):
+        rois = [r for r in p.ram_roi.value if r.framing == framing_id]
+        out[i, 0] = 1.0 if rois and all(roi_in_image(r.polygon_px, size_px) for r in rois) else 0.0
+    return out
 
 
 def site_geometry(site: Site) -> dict[str, FramingGeom]:
@@ -58,9 +81,9 @@ def site_geometry(site: Site) -> dict[str, FramingGeom]:
     for z in site.zones:
         pids = [p.id for p in site.presses if p.zone == z.id]
         rects = [_bbox(presses[p].danger_polygon.value, presses[p].dilation_m.value) for p in pids]
-        share = floor_share(rects, [z.floor_polygon.value]) if rects else np.zeros((0, 1))
         for fid in z.framings:
             f = fr[fid]
+            share = roi_share([presses[p] for p in pids], fid, f.image_size_px.value)
             H = np.asarray(f.H_img_to_floor.value, float).reshape(3, 3) if f.H_img_to_floor.value is not None else None
             out[fid] = FramingGeom(fid, z.id, H, float(f.k1.value or 0.0), pids, rects, share)
     return out

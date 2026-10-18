@@ -11,7 +11,8 @@ Figures, each with its n, pooled and per stratum (camera x safe/unsafe; unsafe =
                              are not scored (labels/RULES.md r2)
   stroke-count error         per window n_pred - n_label (mean signed, mean absolute)
   occlusion -> MISSING rate  inside the labelled hidden spans: share of 2 Hz Observation ticks (pixel adapter) whose
-                             zone_motion is MISSING for the window's press; PERC's per-sample flag is reported beside it
+                             zone_motion is MISSING for the window's press; PERC's per-sample flag is reported beside it,
+                             and the base MISSING rate on the window's non-hidden ticks (the rate means little alone)
 A framing with no fitted H (or no train framing) gets no H: its frames are excluded from foot-point error and zone
 accuracy, n excluded reported. Recall CIs: bootstrap by group if >= 5 groups for the camera, else per-group recall with
 n plus a frame-level Clopper-Pearson interval labelled "ignores clustering (only k groups)".
@@ -135,6 +136,8 @@ class WindowRec:
     hidden_missing_ticks: int = 0
     hidden_perc_samples: int = 0
     hidden_perc_missing: int = 0
+    nonhidden_ticks: int = 0          # base: window ticks outside the hidden spans (the rate above means little alone)
+    nonhidden_missing_ticks: int = 0
     machines_found: bool = True
     offsets_s: list[float] = field(default_factory=list)   # diagnostic: label - nearest prediction, |dt| <= OFFSET_DIAG_S
 
@@ -234,11 +237,16 @@ def score_window(win, machines: pd.DataFrame | None, ignore: Sequence[Sequence[f
             d = min((g - p for p in pred), key=abs)
             if abs(d) <= OFFSET_DIAG_S:
                 rec.offsets_s.append(float(d))
-    if tick_missing is not None and len(hidden):
+    if tick_missing is not None:
         for t, miss in tick_missing:
-            if win.t0 - 1e-9 <= t <= win.t1 + 1e-9 and in_spans(t, hidden):
+            if not (win.t0 - 1e-9 <= t <= win.t1 + 1e-9):
+                continue
+            if len(hidden) and in_spans(t, hidden):
                 rec.hidden_ticks += 1
                 rec.hidden_missing_ticks += int(bool(miss))
+            else:
+                rec.nonhidden_ticks += 1
+                rec.nonhidden_missing_ticks += int(bool(miss))
     return rec
 
 
@@ -258,7 +266,10 @@ def _boot_recall(frames: Sequence[FrameRec], rng: np.random.Generator) -> tuple[
     return (float(np.quantile(vals, a)), float(np.quantile(vals, 1 - a))) if vals else (math.nan, math.nan)
 
 
-def person_block(frames: Sequence[FrameRec], n_groups_camera: int | None = None) -> dict:
+def person_block(frames: Sequence[FrameRec], n_groups_camera: int | None = None,
+                 rule_camera: int | None = None) -> dict:
+    """`n_groups_camera` = the group count the small-group rule is applied on; `rule_camera` = the camera that count
+    comes from when it is not this block's own (pooled: the camera with the fewest groups), named in the CI label."""
     tp = sum(f.tp for f in frames)
     ng = sum(f.n_gt for f in frames)
     npred = sum(f.n_pred for f in frames)
@@ -280,7 +291,9 @@ def person_block(frames: Sequence[FrameRec], n_groups_camera: int | None = None)
                             "ci95": _boot_recall(frames, np.random.default_rng(BOOT_SEED))}
     else:
         rec["recall_ci"] = {"method": "frame-level Clopper-Pearson",
-                            "label": f"ignores clustering (only {k} groups)", "ci95": clopper_pearson(tp, ng)}
+                            "label": (f"ignores clustering (only {k} groups)" if rule_camera is None else
+                                      f"ignores clustering (camera {rule_camera} has only {k} groups)"),
+                            "ci95": clopper_pearson(tp, ng)}
     vals = [r["recall"] for r in rec["per_group_recall"].values() if r["recall"] is not None]
     rec["lowest_group_recall"] = min(vals) if vals else None
     withH = [f for f in frames if f.has_H]
@@ -306,6 +319,8 @@ def stroke_block(wins: Sequence[WindowRec]) -> dict:
     hm = sum(w.hidden_missing_ticks for w in wins)
     ps = sum(w.hidden_perc_samples for w in wins)
     pm = sum(w.hidden_perc_missing for w in wins)
+    bt = sum(w.nonhidden_ticks for w in wins)
+    bm = sum(w.nonhidden_missing_ticks for w in wins)
     return {
         "n_windows": len(wins), "n_windows_no_machines_file": sum(not w.machines_found for w in wins),
         "n_gt_strokes": ng, "n_pred_strokes": npred, "tp": tp, "precision": p, "recall": r, "f1": f1,
@@ -314,6 +329,9 @@ def stroke_block(wins: Sequence[WindowRec]) -> dict:
         "occlusion_to_missing": {
             "n_windows_with_hidden": sum(1 for w in wins if w.hidden_ticks or w.hidden_perc_samples),
             "observation_ticks": {"n": ht, "missing": hm, "rate": _ratio(hm, ht)},
+            "base_nonhidden_observation_ticks": {
+                "n": bt, "missing": bm, "rate": _ratio(bm, bt),
+                "note": "window ticks outside the hidden spans; the hidden-span rate is only meaningful against this"},
             "perc_samples": {"n": ps, "missing": pm, "rate": _ratio(pm, ps)}},
         "diagnostic_offset_label_minus_pred_s": {
             "n": len(off := [o for w in wins for o in w.offsets_s]),
@@ -336,8 +354,9 @@ def stratum_key(it) -> str:
 
 def summarise(frames: Sequence[FrameRec], wins: Sequence[WindowRec]) -> dict:
     ncam = {c: len({f.group for f in frames if f.camera == c}) for c in sorted({f.camera for f in frames})}
+    cmin = min(ncam, key=lambda c: (ncam[c], c)) if ncam else None
     out = {"label_caveat": LABEL_CAVEAT,
-           "person": {"pooled": person_block(frames, min(ncam.values()) if ncam else 0),
+           "person": {"pooled": person_block(frames, ncam[cmin] if cmin is not None else 0, cmin),
                       "per_camera": {f"c{c}": person_block([f for f in frames if f.camera == c], ncam[c]) for c in ncam},
                       "per_stratum": {k: person_block(v, ncam[v[0].camera]) for k, v in strata(frames, stratum_key).items()}},
            "strokes": {"pooled": stroke_block(wins),
@@ -364,6 +383,22 @@ def _read(p: Path) -> pd.DataFrame | None:
     return pd.read_parquet(p) if p.exists() else None
 
 
+def train_references(inv: pd.DataFrame, data: Path, framings: Iterable[str]) -> dict[str, object]:
+    """{framing: M-W10 watchdog reference from its TRAIN keyframes (k1, k2)}. A framing with train clips but no
+    loadable keyframe raises (fail closed: without a reference the watchdog drops its BLURRED / OBSTRUCTED checks);
+    a framing with no train clip gets None (it has no H either, so it gets no Observation)."""
+    from intercycle.observer import pixel_adapter as PA
+
+    refs: dict[str, object] = {}
+    for f in framings:
+        ids = sorted(inv.loc[(inv["split"] == "train") & (inv["framing_id"] == f), "clip_id"].astype(str))
+        refs[f] = PA.train_reference([data / "keyframes" / f"{c}_k{k}.jpg" for c in ids for k in (1, 2)])
+        if ids and refs[f] is None:
+            raise FileNotFoundError(f"framing {f}: {len(ids)} train clips but no loadable keyframe reference "
+                                    "(fail closed)")
+    return refs
+
+
 def run(labels_dir: Path, data: Path, site_path: Path, allowed_splits: Sequence[str] = ("dev",),
         watchdog: bool = True) -> dict:
     """Score the scored DEV labels (twin.dev_labels.load_scored) against PERC output under `data`, running the pixel
@@ -386,11 +421,7 @@ def run(labels_dir: Path, data: Path, site_path: Path, allowed_splits: Sequence[
             return None
         return g
 
-    refs: dict[str, object] = {}
-    if watchdog:
-        for f in sorted(geoms):
-            ids = sorted(inv.loc[(inv["split"] == "train") & (inv["framing_id"] == f), "clip_id"].astype(str))
-            refs[f] = PA.train_reference([data / "keyframes" / f"{c}_k{k}.jpg" for c in ids for k in (1, 2)])
+    refs: dict[str, object] = train_references(inv, data, sorted(geoms)) if watchdog else {}
 
     # pixel adapter over every labelled clip
     clips = sorted({f.clip_id for f in sd.frames} | {w.clip_id for w in sd.windows})
@@ -507,7 +538,9 @@ def compact(res: dict) -> str:
         lines.append(f"strokes {name}: windows {b['n_windows']} gt {b['n_gt_strokes']} pred {b['n_pred_strokes']} "
                      f"tp {b['tp']} P {b['precision']} R {b['recall']} F1 {b['f1']} | count err signed "
                      f"{b['count_error']['mean_signed']} abs {b['count_error']['mean_abs']} | occ->MISSING obs "
-                     f"{o['observation_ticks']} perc {o['perc_samples']} (windows w/ hidden {o['n_windows_with_hidden']})")
+                     f"{o['observation_ticks']} base non-hidden "
+                     f"{ {k: v for k, v in o['base_nonhidden_observation_ticks'].items() if k != 'note'} } "
+                     f"perc {o['perc_samples']} (windows w/ hidden {o['n_windows_with_hidden']})")
 
     pb("pooled", res["person"]["pooled"])
     pb("DETECTOR-secondary pooled", res["person_detector_secondary"]["pooled"])
