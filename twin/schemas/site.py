@@ -127,3 +127,10 @@ def point_in_polygon(x: float, z: float, poly: list[Point]) -> bool:
             if x < xc:
                 inside = not inside
     return inside
+
+
+def polygon_bbox(poly, grow: float = 0.0) -> tuple[float, float, float, float]:
+    """Axis-aligned (x0, z0, x1, z1) box of a floor polygon grown by `grow` metres on every side (stdlib only, no
+    truth access: the plant and the real-clip pixel adapter share it)."""
+    xs, zs = [p[0] for p in poly], [p[1] for p in poly]
+    return min(xs) - grow, min(zs) - grow, max(xs) + grow, max(zs) + grow

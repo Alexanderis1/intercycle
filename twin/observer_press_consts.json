@@ -1,0 +1,12 @@
+{
+  "contract": "twin.observer_press_consts/1",
+  "kind": "press",
+  "debounce_s": {
+    "value": 0.25,
+    "source": "probe P4 (docs/probes/S3a-P4.md): the shortest measured press period is P9b p10 1.61 s = 3.2 samples at 2 Hz, so an in-cycle idle run can be ONE sample; the debounce must keep one-sample idle runs, i.e. stay below one sample (0.5 s): 0.25 s = half a sample"
+  },
+  "p_min": {
+    "value": 1.288,
+    "source": "probe P4 (docs/probes/S3a-P4.md): 0.8 x the smallest measured p10 period (P9b 1.61 s; P9a 1.77 s) = 1.288 s, above the 1.0 s Nyquist period at 2 Hz; the ASSUMED P14a-d priors (twin/dynamics.json sweep lo 2.0 s) lie above it"
+  }
+}
