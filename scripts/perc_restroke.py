@@ -72,8 +72,8 @@ def main(argv: list[str] | None = None) -> int:
             if not dst.exists():
                 shutil.copy2(f, dst)
             new.to_parquet(f, index=False)
-            report.append({"press": f.parent.name, "clip": c, "n_old": int(df["stroke"].sum()),
-                           "n_new": int(new["stroke"].sum())})
+            report.append({"press": f.parent.name, "clip": c, "n_old": int(df["stroke"].to_numpy(bool).sum()),
+                           "n_new": int(new["stroke"].to_numpy(bool).sum())})
     print(json.dumps({"n_files": len(report), "n_old": sum(r["n_old"] for r in report),
                       "n_new": sum(r["n_new"] for r in report), "files": report}, indent=1))
     return 0
