@@ -1,3 +1,4 @@
+# twin.sealed/1 MANIFEST
 8bad1dd46d4554d4303e84caea3579c15e25d490e8c5b26ff9008900675a1f40  clips/0_te7.mp4
 f6b5371af35e9fe3ed010bc9f287fe3dd9f3a3d8a46d60ff0ce2e624abb24ab9  clips/0_te8.mp4
 08417650b38fb354164da00d170f2343fac2244df2f0f9d9dae724135663e47f  clips/0_te9.mp4
@@ -124,13 +125,11 @@ d7a1069288fe03631fea5de01245e4bbf439da83de9d95e12e04f4b372cdd31b  clips/5_tr23.m
 37a357cf69ac970ee369831ad9c3b5245e56091c5a0466ed41b88d215584f6cc  clips/7_te5.mp4
 86f301485074d22fd1df5024ec53d1f293d40b2bcdc374fbeb20fbe38e468cb8  clips/7_tr1.mp4
 3f7d8f45a980c50228a04536c07d9a9c059286d796c95456c26010f00cb9ff3d  clips/7_tr14.mp4
-# ids 126: 0_te7 0_te8 0_te9 0_tr15 0_tr16 0_tr17 0_tr18 0_tr19 0_tr45 0_tr46 0_tr48 0_tr49 0_tr50 0_tr51 0_tr52 0_tr53 0_tr54 0_tr55 0_tr56 0_tr57 0_tr58 0_tr59 0_tr60 0_tr61 0_tr62 0_tr63 0_tr64 0_tr65 0_tr66 0_tr67 0_tr68 0_tr69 0_tr70 0_tr71 0_tr72 0_tr73 0_tr74 0_tr75 0_tr79 0_tr80 0_tr81 0_tr82 0_tr83 0_tr84 0_tr85 0_tr86 0_tr87 0_tr88 0_tr89 0_tr90 0_tr91 1_te1 1_te11 1_te2 1_te3 1_te6 1_tr1 1_tr10 1_tr11 1_tr12 1_tr13 1_tr14 1_tr15 1_tr16 1_tr17 1_tr18 1_tr19 1_tr2 1_tr20 1_tr21 1_tr22 1_tr23 1_tr24 1_tr25 1_tr26 1_tr27 1_tr28 1_tr3 1_tr30 1_tr31 1_tr35 1_tr37 1_tr4 1_tr49 1_tr5 1_tr50 1_tr6 1_tr68 1_tr69 1_tr7 1_tr70 1_tr71 1_tr72 1_tr79 1_tr8 1_tr80 1_tr82 1_tr83 1_tr84 1_tr85 1_tr86 1_tr87 1_tr9 1_tr91 1_tr93 1_tr94 1_tr95 1_tr96 1_tr97 3_te3 3_te7 3_tr15 3_tr17 3_tr19 3_tr29 3_tr37 3_tr42 3_tr43 5_te15 5_tr21 5_tr22 5_tr23 6_tr12 7_te5 7_tr1 7_tr14
-# camera 9: 114
-# camera 14: 12
-# class 0: 51
-# class 1: 58
-# class 3: 9
-# class 5: 4
-# class 6: 1
-# class 7: 3
-# split_a1.csv sha256: 8c98e3ed1bb84a1e2347f65692bb5d6cd35d0fd4145ae54770f16f500f55952b
+#ids 0_te7,0_te8,0_te9,0_tr15,0_tr16,0_tr17,0_tr18,0_tr19,0_tr45,0_tr46,0_tr48,0_tr49,0_tr50,0_tr51,0_tr52,0_tr53,0_tr54,0_tr55,0_tr56,0_tr57,0_tr58,0_tr59,0_tr60,0_tr61,0_tr62,0_tr63,0_tr64,0_tr65,0_tr66,0_tr67,0_tr68,0_tr69,0_tr70,0_tr71,0_tr72,0_tr73,0_tr74,0_tr75,0_tr79,0_tr80,0_tr81,0_tr82,0_tr83,0_tr84,0_tr85,0_tr86,0_tr87,0_tr88,0_tr89,0_tr90,0_tr91,1_te1,1_te11,1_te2,1_te3,1_te6,1_tr1,1_tr10,1_tr11,1_tr12,1_tr13,1_tr14,1_tr15,1_tr16,1_tr17,1_tr18,1_tr19,1_tr2,1_tr20,1_tr21,1_tr22,1_tr23,1_tr24,1_tr25,1_tr26,1_tr27,1_tr28,1_tr3,1_tr30,1_tr31,1_tr35,1_tr37,1_tr4,1_tr49,1_tr5,1_tr50,1_tr6,1_tr68,1_tr69,1_tr7,1_tr70,1_tr71,1_tr72,1_tr79,1_tr8,1_tr80,1_tr82,1_tr83,1_tr84,1_tr85,1_tr86,1_tr87,1_tr9,1_tr91,1_tr93,1_tr94,1_tr95,1_tr96,1_tr97,3_te3,3_te7,3_tr15,3_tr17,3_tr19,3_tr29,3_tr37,3_tr42,3_tr43,5_te15,5_tr21,5_tr22,5_tr23,6_tr12,7_te5,7_tr1,7_tr14
+#count camera=9 class=0 n=51
+#count camera=9 class=1 n=58
+#count camera=9 class=5 n=4
+#count camera=9 class=6 n=1
+#count camera=14 class=3 n=9
+#count camera=14 class=7 n=3
+#aggregate 2419a8969597ee26eeb39e4563ecb538e4d4a59dedf543aeca42ef5eab58dab5
