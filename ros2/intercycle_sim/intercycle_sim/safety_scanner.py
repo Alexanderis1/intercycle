@@ -160,6 +160,32 @@ class ProtectiveField:
                 "stopped_s": round(self.stopped_s, 3), "events": self.events}
 
 
+def is_twin_run(cfg: dict, world_meta: dict | None) -> bool:
+    """A press-shop twin run: the runner cfg says so ("twin": true) or the world files were built as a twin world
+    (world.json "twin": true, written by world.build_world_files(rects=...))."""
+    return bool(cfg.get("twin", False)) or bool((world_meta or {}).get("twin", False))
+
+
+def scanner_enabled(cfg: dict, world_meta: dict | None) -> bool:
+    """R-W13 switch. Twin runs: ON by default, and an explicit "safety_scanner": false is refused (fail closed: no twin
+    run goes ahead without the protective field). Other runs (body shop, A-lite): cfg "safety_scanner", default off."""
+    twin = is_twin_run(cfg, world_meta)
+    if "safety_scanner" not in cfg:
+        return twin
+    on = bool(cfg["safety_scanner"])
+    if twin and not on:
+        raise ValueError("a twin run needs the R-W13 safety scanner; cfg safety_scanner=false is refused")
+    return on
+
+
+def assert_scanner_ran(sim_summary: dict) -> dict:
+    """For sealed_run.py and the EVAL runner: a twin episode's sim_summary must carry the scanner record (raises)."""
+    rec = sim_summary.get("safety_scanner")
+    if not isinstance(rec, dict) or "field" not in rec or "n_protective_stops" not in rec:
+        raise ValueError("sim_summary has no R-W13 safety_scanner record: the episode ran without the protective field")
+    return rec
+
+
 def scanned_part_index(parts) -> list[int]:
     """Indices of the mover parts the scanner sees (people and vehicles; never the machine-part collider pool)."""
     return [k for k, p in enumerate(parts) if str(p.cls) in SCANNED_CLASSES]

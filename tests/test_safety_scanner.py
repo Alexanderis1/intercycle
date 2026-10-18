@@ -92,3 +92,32 @@ def test_only_people_and_vehicles_are_scanned():
                           {"id": "MC_arm_00", "cls": "cyl:0.4:2.0"}, {"id": "t1", "cls": "tugger_train"}])
     idx = SS.scanned_part_index(parts)
     assert [parts[k].mover_id for k in idx] == ["p1", "f1", "f1", "t1", "t1", "t1", "t1"]
+
+
+def test_twin_runs_get_the_scanner_by_default_and_cannot_turn_it_off():
+    """Audit fix 7: no twin run goes ahead without the R-W13 field."""
+    assert SS.scanner_enabled({}, {"twin": True}) is True                   # twin world: on by default
+    assert SS.scanner_enabled({"twin": True}, {}) is True                   # twin cfg: on by default
+    assert SS.scanner_enabled({"twin": True, "safety_scanner": True}, None) is True
+    with pytest.raises(ValueError):
+        SS.scanner_enabled({"safety_scanner": False}, {"twin": True})
+    with pytest.raises(ValueError):
+        SS.scanner_enabled({"twin": True, "safety_scanner": False}, None)
+    assert SS.scanner_enabled({}, {}) is False                              # body shop / A-lite: unchanged default
+    assert SS.scanner_enabled({"safety_scanner": True}, None) is True
+
+
+def test_assert_scanner_ran_for_the_runners():
+    f = SS.ProtectiveField()
+    assert SS.assert_scanner_ran({"safety_scanner": f.summary()})["n_protective_stops"] == 0
+    for bad in ({}, {"safety_scanner": None}, {"safety_scanner": {"n_protective_stops": 0}}):
+        with pytest.raises(ValueError):
+            SS.assert_scanner_ran(bad)
+
+
+def test_runner_uses_the_twin_default():
+    """The sim runner decides through scanner_enabled with the world's world.json (no ROS / Isaac needed to check)."""
+    src = (Path(__file__).resolve().parents[1] / "ros2" / "intercycle_sim" / "intercycle_sim" / "runner.py").read_text(
+        encoding="utf-8")
+    assert "if scanner_enabled(cfg, wmeta):" in src and 'os.path.join(wd, "world.json")' in src
+    assert 'cfg.get("safety_scanner", False)' not in src

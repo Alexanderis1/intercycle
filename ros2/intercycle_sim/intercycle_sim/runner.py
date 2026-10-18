@@ -5,8 +5,9 @@
 cfg keys: sim ("isaac" | "fake"), world_dir, sock, out_dir, seconds (sim-time limit), start [x, y, psi],
 max_rtf (pace to <= this real-time factor so Nav2 gets real compute time; 0 = free-running), seed,
 movers (scripted list) or mover_source ("pkg.mod:factory" for R3), stop_file (orchestrator ends the episode),
-log_hz (true-pose log rate, default 10), safety_scanner (R-W13: fixed ISO 13855 protective field, default false;
-summary key "safety_scanner").
+log_hz (true-pose log rate, default 10), twin (press-shop twin run; also taken from world_dir/world.json "twin"),
+safety_scanner (R-W13: fixed ISO 13855 protective field; default ON for a twin run and refused off there, default off
+otherwise; summary key "safety_scanner", checked by safety_scanner.assert_scanner_ran).
 
 Outputs in out_dir: sim_summary.json, truth_log.(parquet|json) with the TRUE pose at log_hz (EVALUATION ONLY: it
 never reaches ROS), contacts.json.
@@ -115,10 +116,15 @@ def main() -> None:
     if hook("attach"):
         src.attach(caster=caster, dt=be.dt)
 
-    # R-W13: plant-side safety scanner with a fixed ISO 13855 protective field (cfg "safety_scanner": true); it gates
-    # the command the locomotion layer executes, from the true pose and the true people / vehicle primitives
+    # R-W13: plant-side safety scanner with a fixed ISO 13855 protective field; it gates the command the locomotion
+    # layer executes, from the true pose and the true people / vehicle primitives. ON by default for a twin run (cfg
+    # "twin" or world.json "twin"), refused off there; otherwise cfg "safety_scanner" (default off).
+    from intercycle_sim.safety_scanner import scanner_enabled
+
+    wmeta_p = os.path.join(wd, "world.json")
+    wmeta = json.load(open(wmeta_p)) if os.path.exists(wmeta_p) else {}
     scanner, sc_parts, sc_idx = None, [], np.zeros(0, int)
-    if cfg.get("safety_scanner", False):
+    if scanner_enabled(cfg, wmeta):
         from intercycle_sim.safety_scanner import ProtectiveField, scanned_part_index
 
         scanner = ProtectiveField()
