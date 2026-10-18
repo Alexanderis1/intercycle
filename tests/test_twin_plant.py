@@ -28,7 +28,7 @@ from intercycle.observer import mapping as OM
 
 REPO = Path(__file__).resolve().parents[1]
 SITE_PATH = daygen_stub.SITE_V0
-SAFETY_PATH = REPO / "twin" / "safety.yaml"
+SAFETY_PATH = REPO / "twin" / "safety_v0.yaml"          # site_v0's (twin/safety.yaml is the v1 site's)
 T0 = 86_400.0
 OUT = (6.25, 3.0)            # outside P9a's danger polygon (z 5.0-6.0, dilation 0.3)
 IN = (6.25, 4.6)             # footprint inside the dilated polygon
@@ -701,3 +701,31 @@ def test_site_and_safety_files_validate():
     assert sfty.site_id == site.site_id
     assert {p.press for p in sfty.presses} == {p.id for p in site.presses}
     assert all(p.guard.type == "ASSUMED" for p in sfty.presses)
+
+
+def test_capture_of_a_thermal_checkpoint_needs_the_thermal_shot_too(monkeypatch):
+    """S2 TASKS hook (twin/inspect_model.py): a thermal checkpoint passes only if the zoom capture AND the thermal shot
+    pass; the thermal record is kept in the capture and in the log row; a non-thermal checkpoint takes no thermal shot."""
+    from types import SimpleNamespace
+
+    from twin import inspect_model as IM
+
+    calls: list = []
+    th_pass = [False]
+    monkeypatch.setattr(PL.RC, "capture", lambda *a, **k: {"t": a[0], "pass": True, "checks": {"in_image": True}})
+    monkeypatch.setattr(IM, "thermal_capture", lambda *a, **k: calls.append(a) or {"pass": th_pass[0], "checks": {}})
+    cps = {n: SimpleNamespace(target_xzh=(1.0, 2.0, 1.5), normal_xz=(1.0, 0.0), zoom=20.0, thermal=(n == "th"))
+           for n in ("th", "zoom")}
+    log: list = []
+    fake = SimpleNamespace(pending=[], checkpoints=cps, robot=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3), caster=None,
+                           cap_rng=None, t0=0.0, zone="z9", passed=set(), errors=[], captures=[], outbox_cap=[],
+                           mover_prims=lambda T: {}, _log_row=lambda t, kind, ent, **kw: log.append((kind, kw)))
+    for target, want_pass in (("th", False), ("zoom", True)):
+        PL.Plant._capture(fake, 1.0, {"target": target, "inside": False, "t_start": 0.0}, True)  # type: ignore[arg-type]
+        assert fake.captures[-1]["pass"] is want_pass
+    assert len(calls) == 1 and "thermal" in fake.captures[0] and "thermal" not in fake.captures[1]
+    assert log[0][0] == "checkpoint_fail" and "thermal" in log[0][1]["detail"]
+    assert "thermal" not in log[1][1]["detail"]
+    th_pass[0] = True
+    PL.Plant._capture(fake, 2.0, {"target": "th", "inside": False, "t_start": 0.0}, True)  # type: ignore[arg-type]
+    assert fake.captures[-1]["pass"] is True and fake.passed == {"zoom", "th"}

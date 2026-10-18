@@ -96,6 +96,7 @@ import numpy as np
 
 from intercycle.observer import mapping as OM
 from twin import camera_gate as CG
+from twin import inspect_model as IM
 from twin import robot_camera as RC
 from twin.camera import CameraStatV1, Detections
 from twin.engine import Engine, RealisedWriter, load_day_script
@@ -1077,14 +1078,19 @@ class Plant:
         else:
             xyz = np.array(cp.target_xzh, float)
             n = np.array((cp.normal_xz[0], cp.normal_xz[1], 0.0))
-            rec.update(RC.capture(t, RC.cam_pose(rx, ry, rz, rpsi), xyz, n, np.array((vx, vy, 0.0)), wz,
-                                  self.caster, self.mover_prims(self.t0 + t), self.cap_rng, zoom=cp.zoom))
+            cam, v3, prims = RC.cam_pose(rx, ry, rz, rpsi), np.array((vx, vy, 0.0)), self.mover_prims(self.t0 + t)
+            rec.update(RC.capture(t, cam, xyz, n, v3, wz, self.caster, prims, self.cap_rng, zoom=cp.zoom))
+            if cp.thermal:                       # S2 TASKS (twin/inspect_model.py): a thermal checkpoint needs both
+                rec["thermal"] = IM.thermal_capture(t, cam, xyz, n, v3, wz, self.caster, prims, self.cap_rng)
+                rec["pass"] = bool(rec["pass"] and rec["thermal"]["pass"])
         ok = bool(rec.get("pass"))
         if ok:
             self.passed.add(str(pc["target"]))
+        detail = {k: rec.get(k) for k in ("settled", "range_m", "incidence_deg", "px_per_m", "blur_px", "checks", "zoom")}
+        if "thermal" in rec:
+            detail["thermal"] = rec["thermal"]
         self._log_row(t, "checkpoint_pass" if ok else "checkpoint_fail", ROBOT_ID, checkpoint=str(pc["target"]),
-                      zone=self.zone, detail={k: rec.get(k) for k in ("settled", "range_m", "incidence_deg",
-                                                                        "px_per_m", "blur_px", "checks", "zoom")})
+                      zone=self.zone, detail=detail)
         self.captures.append(rec)
         self.outbox_cap.append({"t": rec.get("t"), "target": rec["target"], "pass": ok, "checks": rec.get("checks"),
                                 "settled": settled, "source": RC.CAPTURE_SOURCE})

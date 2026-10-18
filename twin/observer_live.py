@@ -325,6 +325,18 @@ def config_for_stat_v1(margin_path: str, params_path: str | os.PathLike = STAT_V
     return ObserverLiveConfig(margin_path=margin_path, motion_thr=thr, motion_thr_source=src, **kw)
 
 
+def config_for_camera(camera_model: str, margin_path: str, **kw) -> ObserverLiveConfig:
+    """The observer config of a twin run, chosen by the camera model that wrote its obs_v2.jsonl (the plant's
+    `camera.provenance()["model"]`, recorded in summary.json `camera.model` and in the broadcaster's
+    observer_spec.json). Only "stat_v1" is a twin-run camera (`config_for_stat_v1`); any other name (camera_v0, the
+    G0 reference, an empty or unknown model) is refused, so a twin run never falls back to the placeholder
+    threshold (fail closed)."""
+    if camera_model != "stat_v1":
+        raise ValueError(f"camera model {camera_model!r}: a twin run's observer needs the stat_v1 camera "
+                         "(config_for_stat_v1); no other camera model has a twin-run config")
+    return config_for_stat_v1(margin_path, **kw)
+
+
 def is_sealed(cfg: ObserverLiveConfig) -> bool:
     return bool(cfg.sealed) or os.environ.get(SEALED_ENV) == "1"
 

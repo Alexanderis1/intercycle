@@ -122,8 +122,10 @@ def _rect_aabb(r: dict) -> tuple[float, float, float, float]:
 def static_rects(site: Site, zid: str) -> list[tuple[float, float, float, float]]:
     """The zone's static bodies exactly as twin/compile.py builds them (press boxes + unseen-floor walls), as AABBs."""
     zone = next(z for z in site.zones if z.id == zid)
-    rects = [footprint_rect(q) for q in site.presses if q.zone == zid]
-    rects += unseen_floor_rects(zone.floor_polygon.value, zone_extent(zone), f"UNSEEN_{zid}")
+    presses = [q for q in site.presses if q.zone == zid]
+    rects = [footprint_rect(q) for q in presses]
+    rects += unseen_floor_rects(zone.floor_polygon.value, zone_extent(zone, [q.footprint.value for q in presses]),
+                                f"UNSEEN_{zid}")
     return [_rect_aabb(r) for r in rects]
 
 
