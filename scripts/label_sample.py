@@ -22,11 +22,21 @@ Reproduce the committed, hashed lists (GPU env: needs PyAV for the PTS lists; no
 labels/dev/sample.json was drawn before the fix-round-1 dedupe (dedupe=False, `--legacy-base`); without that flag the
 base draw dedupes by sha256 and gives a DIFFERENT list. A new list is written only with `--out` to a path that does not
 exist yet: an existing hashed list is never overwritten.
+
+SEALED mode (custodian session only; `build_sealed_list`): the TEST sample list, drawn by the same rules as the dev
+base list with the fix-round-1 dedupe (same grid, round-robin, window rule, reserve count 3, P9a on c9_f0 only as in
+the dev supplement), from the TEST rows of the active split (group and framing from the split, camera from the class
+prefix) and the container PTS of the sealed clips (demux only, no pixel decode), with the committed seed SEALED_SEED.
+A stratum with fewer eligible items than its target is drawn whole and the shortfall is written in the list's rule.
+
+    python scripts/label_sample.py --sealed [--clips C:\\intercycle_sealed\\clips] [--out C:\\intercycle_sealed\\labels\\sample.json]
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import sys
 from pathlib import Path
@@ -57,6 +67,16 @@ S1_PRESSES = {"P9a": ["c9_f0"], "P9b": ["c9_f1"]}
 S1_WINDOWS = {"P9a": 4, "P9b": 5}
 S1_RESERVE = {"P9a": 8, "P9b": 12}
 S1_FRAMES = {9: 1}
+# Sealed TEST list (custodian; PLAN_TWIN §5, U14). The seed is fixed here, before the list is drawn, and differs from
+# the dev seed. Volumes: 20 person frames per camera, 10 + 10 stroke windows (+ the dev base reserve count per press).
+SEALED_SEED = 7318502
+SEALED_ROOT = Path(r"C:\intercycle_sealed")
+SEALED_CLIPS = SEALED_ROOT / "clips"
+SEALED_OUT = SEALED_ROOT / "labels" / "sample.json"
+SEALED_FRAMES = {9: 20, 14: 20}
+SEALED_WINDOWS = {"P9a": 10, "P9b": 10}
+SEALED_RESERVE = DEFAULT_RESERVE
+SEALED_PRESSES = S1_PRESSES
 
 PtsFn = Callable[[str], list[float]]
 
@@ -265,6 +285,168 @@ def build_supplement(inv: pd.DataFrame, pts_fn: PtsFn, presses: dict[str, list[s
                       items_sha256=sample_items_sha256(items))
 
 
+# ------------------------------------------------------------------------------------------------ sealed TEST list
+
+
+def _round_robin_upto(pools: dict[str, list], order: list[str], n: int, rng: np.random.Generator) -> list:
+    """`_round_robin` without the supply check: the same draws while supply lasts (identical to `_round_robin` when
+    the pools hold >= n items), and every remaining item when they hold fewer (the caller records the shortfall)."""
+    picked: list = []
+    while len(picked) < n and any(pools[g] for g in order):
+        for g in order:
+            if pools[g] and len(picked) < n:
+                picked.append(pools[g].pop(int(rng.integers(len(pools[g])))))
+    return picked
+
+
+def sealed_inventory(split_csv: Path) -> pd.DataFrame:
+    """The TEST rows of a split CSV (prereg format, with a framing_id column) as an inventory frame: clip_id,
+    group_id, split, sha256, framing_id and camera (from the class prefix). Train/dev rows are never returned."""
+    from twin.schemas.prereg import camera_class_of, parse_split
+
+    text = split_csv.read_text(encoding="utf-8")
+    rows = parse_split(text)                                   # header, sha256 and uniqueness checks
+    rd = list(csv.DictReader(io.StringIO(text)))
+    if not rd or "framing_id" not in rd[0]:
+        raise ValueError(f"{split_csv.name} has no framing_id column (fail closed)")
+    test = [r for r in rd if r["clip_id"] in rows and rows[r["clip_id"]].split == "test"]
+    if not test:
+        raise ValueError(f"{split_csv.name} has no test rows")
+    return pd.DataFrame({
+        "clip_id": [r["clip_id"] for r in test], "group_id": [r["group_id"] for r in test],
+        "split": ["test"] * len(test), "sha256": [r["sha256"] for r in test],
+        "framing_id": [r["framing_id"] for r in test], "camera": [camera_class_of(r["clip_id"])[0] for r in test]})
+
+
+def check_sealed_clips(clips_dir: Path, test_ids: set[str], split_of: dict[str, str]) -> None:
+    """Fail closed unless `clips_dir` holds exactly <test id>.mp4 for every test id: a dev/train id, an unknown id or
+    a missing test clip refuses the draw. Only file names are read."""
+    if not clips_dir.is_dir():
+        raise SystemExit(f"sealed clips folder {clips_dir} does not exist")
+    names = sorted(p.name for p in clips_dir.iterdir())
+    for name in names:
+        stem, _, ext = name.rpartition(".")
+        if split_of.get(stem, "test") != "test":
+            raise SystemExit(f"refusing: {name} is a {split_of[stem]} clip, not a test clip")
+        if ext != "mp4" or stem not in test_ids:
+            raise SystemExit(f"refusing: {name} is not <test clip id>.mp4 of the active split")
+    missing = sorted(test_ids - {n[:-4] for n in names})
+    if missing:
+        raise SystemExit(f"refusing: {len(missing)} test clips are missing from {clips_dir}")
+
+
+def sealed_rule_text(seed: int, n_frames: dict[int, int], n_windows: dict[str, int], n_reserve: int,
+                     presses: dict[str, list[str]], shortfall: list[str]) -> str:
+    return (
+        f"scripts/label_sample.py --sealed, seed {seed} (SEALED_SEED, committed before the draw), split test, from the "
+        f"test rows of the active split and the container PTS of the sealed clips (demux only). Test inventory reduced "
+        f"to one clip per sha256 (smallest clip_id) before sampling. Frames: per camera "
+        f"{dict(sorted(n_frames.items()))} (stratified, equal allocation); grid 1 frame every {GRID_STEP_S:g} s per "
+        f"clip at t = pts0 + {GRID_OFFSET_S:g} + {GRID_STEP_S:g}k snapped to the nearest PTS; seeded round-robin over "
+        f"the camera's test groups in seeded order (rng [seed, 1, camera]), one random remaining grid frame of the "
+        f"group per turn; every sampled frame is labelled, empty frames included. Stroke windows: per press "
+        f"{n_windows} primary + {n_reserve} reserve (ids -r1..), press framings {presses}; seeded round-robin over the "
+        f"test groups of those framings (rng [seed, 2, press index]), one window per (press, clip): whole clip if <= "
+        f"{MAX_WINDOW_S:g} s, else {MAX_WINDOW_S:g} s from a seeded-random start snapped to a PTS; no motion detector, "
+        f"track or proposal is read. Reserves replace, in list order, primary windows whose press the labeller finds "
+        f"not running or not scorable; every item is labelled. A stratum with fewer eligible items than its target is "
+        f"drawn whole and never filled from another stratum. Shortfall: "
+        + ("; ".join(shortfall) if shortfall else "none") + ". Times are container PTS seconds."
+    )
+
+
+def build_sealed_list(inv: pd.DataFrame, pts_fn: PtsFn, *, seed: int = SEALED_SEED,
+                      n_frames: dict[int, int] | None = None, n_windows: dict[str, int] | None = None,
+                      n_reserve: int = SEALED_RESERVE,
+                      presses: dict[str, list[str]] | None = None) -> tuple[SampleList, list[str]]:
+    """The sealed TEST sample list and its shortfall lines (also written in its rule). Same draws as
+    build_sample_list(dedupe=True), except: split test, ids "test-...", and a short stratum is drawn whole."""
+    n_frames = SEALED_FRAMES if n_frames is None else n_frames
+    n_windows = SEALED_WINDOWS if n_windows is None else n_windows
+    presses = SEALED_PRESSES if presses is None else presses
+    if seed == DEFAULT_SEED:
+        raise ValueError("the sealed list must not use the dev seed")
+    if set(inv["split"]) - {"test"}:
+        raise ValueError(f"sealed inventory rows outside test: {sorted(set(inv['split']) - {'test'})}")
+    inv = dedupe_by_sha(inv)
+    pts_cache: dict[str, list[float]] = {}
+
+    def pts(cid: str) -> list[float]:
+        if cid not in pts_cache:
+            pts_cache[cid] = sorted(float(x) for x in pts_fn(cid))
+        return pts_cache[cid]
+
+    items: list[SampleItem] = []
+    short: list[str] = []
+    for cam in sorted(n_frames):
+        rng = np.random.default_rng([seed, 1, cam])
+        sub = inv[inv["camera"] == cam]
+        groups = sorted(set(sub["group_id"]))
+        order = [groups[i] for i in rng.permutation(len(groups))]
+        pools = {g: [(c, t) for c in sub.loc[sub["group_id"] == g, "clip_id"] for t in frame_grid(pts(c))]
+                 for g in groups}
+        picked = _round_robin_upto(pools, order, n_frames[cam], rng)
+        if len(picked) < n_frames[cam]:
+            short.append(f"camera {cam} frames {len(picked)} of {n_frames[cam]}")
+        gid = dict(zip(sub["clip_id"], sub["group_id"]))
+        for k, (c, t) in enumerate(picked, 1):
+            items.append(SampleItem(sample_id=f"test-f-c{cam}-{k:02d}", kind="frame", clip_id=c, group_id=gid[c],
+                                    camera=_cam(cam), split="test", t_pts=t))
+    names = sorted(presses)
+    for pi, press in enumerate(names):
+        if press not in n_windows:
+            continue
+        rng = np.random.default_rng([seed, 2, pi])
+        sub = inv[inv["framing_id"].isin(presses[press])]
+        groups = sorted(set(sub["group_id"]))
+        order = [groups[i] for i in rng.permutation(len(groups))]
+        pools = {g: list(sub.loc[sub["group_id"] == g, "clip_id"]) for g in groups}
+        n = n_windows[press]
+        picked = _round_robin_upto(pools, order, n + n_reserve, rng)
+        if len(picked) < n + n_reserve:
+            short.append(f"press {press} windows {len(picked)} of {n} primary + {n_reserve} reserve "
+                         f"({min(len(picked), n)} primary, {max(0, len(picked) - n)} reserve)")
+        row = sub.set_index("clip_id")
+        for k, c in enumerate(picked, 1):
+            t0, t1 = window_for(pts(c), rng)
+            sid = f"test-sw-{press}-{k:02d}" if k <= n else f"test-sw-{press}-r{k - n}"
+            items.append(SampleItem(sample_id=sid, kind="stroke_window", clip_id=c,
+                                    group_id=str(row.loc[c, "group_id"]), camera=_cam(row.loc[c, "camera"]),
+                                    split="test", press=press, t0=t0, t1=t1))
+    test_ids = set(inv["clip_id"])
+    if any(i.clip_id not in test_ids for i in items):
+        raise ValueError("a sampled clip is not a test row (fail closed)")
+    rule = sealed_rule_text(seed, n_frames, n_windows, n_reserve, presses, short)
+    return (SampleList(contract="twin.label_samples/1", split="test", seed=seed, rule=rule, items=items,
+                       items_sha256=sample_items_sha256(items)), short)
+
+
+def main_sealed(clips_dir: Path, out: Path, split_csv: Path | None = None) -> int:
+    """Draw and write the sealed TEST list (custodian only). Prints counts and hashes only."""
+    from twin.schemas.prereg import active_split_path, parse_split
+
+    if out.exists() or out.with_suffix(".sha256").exists():
+        raise SystemExit(f"refusing to overwrite {out} (or its .sha256): a hashed sample list is never redrawn")
+    split_csv = split_csv or active_split_path()
+    rows = parse_split(split_csv.read_text(encoding="utf-8"))
+    inv = sealed_inventory(split_csv)
+    check_sealed_clips(clips_dir, set(inv["clip_id"]), {k: v.split for k, v in rows.items()})
+    sl, short = build_sealed_list(inv, lambda c: container_pts(clips_dir / f"{c}.mp4"))
+    data = dump_list(sl)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+    out.with_suffix(".sha256").write_text(hash_text(sl, data, out.name), encoding="utf-8", newline="\n")
+    fr = [i for i in sl.items if i.kind == "frame"]
+    sw = [i for i in sl.items if i.kind == "stroke_window"]
+    per = {p: sum(i.press == p for i in sw) for p in sorted(SEALED_WINDOWS)}
+    print(f"sealed test list: {len(fr)} frames (camera 9: {sum(i.camera == 9 for i in fr)}, camera 14: "
+          f"{sum(i.camera == 14 for i in fr)}), {len(sw)} stroke windows {per}; shortfall: "
+          f"{'; '.join(short) if short else 'none'}")
+    print(f"items_sha256 {sl.items_sha256}")
+    print(f"file sha256 {hashlib.sha256(data).hexdigest()}")
+    return 0
+
+
 def hash_text(sl: SampleList, file_bytes: bytes, name: str = "sample.json") -> str:
     return (f"{sl.items_sha256}  {name}#items (twin.labels sample_items_sha256)\n"
             f"{hashlib.sha256(file_bytes).hexdigest()}  {name}\n")
@@ -327,12 +509,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default=None, help="write the list here (refused if the file already exists)")
     ap.add_argument("--check", default=None, metavar="COMMITTED_JSON",
                     help="rebuild and compare with this committed list; writes nothing; exit 1 on a difference")
-    ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    ap.add_argument("--seed", type=int, default=None, help=f"dev seed (default {DEFAULT_SEED}; not with --sealed)")
     ap.add_argument("--legacy-base", action="store_true",
                     help="the base list as committed (labels/dev/sample.json, drawn before the dedupe fix)")
     ap.add_argument("--supplement", default=None, metavar="BASE_SAMPLE_JSON",
                     help="draw the fix-round-1 supplementary list (S1_*) against this base sample list")
+    ap.add_argument("--sealed", action="store_true",
+                    help=f"custodian only: draw the sealed TEST list (seed SEALED_SEED) to --out (default {SEALED_OUT})")
+    ap.add_argument("--clips", default=str(SEALED_CLIPS), help="--sealed: the sealed test clips folder")
     a = ap.parse_args(argv)
+    if a.sealed:
+        if a.check or a.legacy_base or a.supplement or a.seed is not None:
+            ap.error("--sealed takes only --clips and --out (its seed is the committed SEALED_SEED)")
+        return main_sealed(Path(a.clips), Path(a.out) if a.out else SEALED_OUT)
+    if a.seed is None:
+        a.seed = DEFAULT_SEED
     if bool(a.out) == bool(a.check):
         ap.error("give exactly one of --out (a new file) or --check (a committed list)")
     if a.supplement and a.legacy_base:
