@@ -40,12 +40,13 @@ python scripts/custodian_fetch.py
   its labels to `C:\intercycle_sealed\labels\`.
 - **LABELS.sha256:** hash every label file (plus the frame/stroke-window sample list) into `sealed/LABELS.sha256` and
   commit only that file, before FREEZE (08:30).
-- **Split freeze (USER DECISION, Sun ~07:00 CEST).** Two freezes: `prereg/FREEZE_REALCLIP` (08:30, the real-clip
+- **Split freeze (USER DECISION, Sun ~07:00 CEST).** Two freezes: `prereg/FREEZE_REALCLIP` (target ~09:15, at the latest 10:15 (user allowed), the real-clip
   test) and `prereg/FREEZE` (~10:15, the robot part). `sealed_run.py` checks each stage against its own freeze; the
   robot stages also refuse if any real-clip input (the clips stage's import closure, `twin/schemas/labels.py`,
   `sealed/*`, the active split, the press ROI file) differs between the two.
-- **Real-clip run at 09:15 (from a DETACHED WORKTREE, never from main).** The lead commits `prereg/FREEZE_REALCLIP`
-  (one line: the sha of the frozen code commit) at 08:30; call the commit that writes it `<RCW>`. The custodian then
+- **Real-clip run right after FREEZE_REALCLIP (from a DETACHED WORKTREE, never from main).** The exact commands,
+  the results commit and the dev dry run of the same path: `docs/probes/REALCLIP_RUN.md`. The lead commits `prereg/FREEZE_REALCLIP`
+  (one line: the sha of the frozen code commit) at ~09:15; call the commit that writes it `<RCW>`. The custodian then
   runs, with no other change:
   `git worktree add --detach C:\intercycle_rc <RCW>` ;
   `cd C:\intercycle_rc` ;

@@ -9,7 +9,7 @@
 
 SPLIT FREEZE (USER DECISION, Sun ~07:00 CEST). There are two freezes and each stage checks its own:
 
-* the REAL-CLIP freeze `prereg/FREEZE_REALCLIP` (08:30; the sha of the commit whose code runs the real-clip test). The
+* the REAL-CLIP freeze `prereg/FREEZE_REALCLIP` (target ~09:15 CEST, at the latest 10:15; the sha of the commit whose code runs the real-clip test). The
   `clips` stage checks ONLY it (no G2 files, no seeds: the real-clip test uses none):
   C1. the tree is clean (as 1 below);
   C2. prereg/FREEZE_REALCLIP holds a 40-hex commit sha, and that commit is an ancestor of HEAD;
@@ -18,9 +18,9 @@ SPLIT FREEZE (USER DECISION, Sun ~07:00 CEST). There are two freezes and each st
   C3b. RUNLOG append-only from the FREEZE_REALCLIP tree (as 3b);
   C4. MANIFEST and LABELS are tracked in the FREEZE_REALCLIP tree and the working files hash to those blobs, then the
       clip and label files of the sealed root are checked against them exactly as in 4.
-  The 09:15 real-clip run is therefore made from a DETACHED WORKTREE at the commit that wrote prereg/FREEZE_REALCLIP
+  The real-clip run (right after that freeze) is therefore made from a DETACHED WORKTREE at the commit that wrote prereg/FREEZE_REALCLIP
   (`git worktree add --detach <dir> <that commit>`, then `run --stages clips` from <dir>), never from main once the
-  robot work has moved on (docs/probes/CUSTODIAN_STEPS.md, "Real-clip run at 09:15").
+  robot work has moved on (docs/probes/REALCLIP_RUN.md: the custodian commands).
   `score` (same detached worktree, right after `run --stages clips`) re-checks C1-C4, takes the last `done` clips
   attempt of RUNLOG (or --attempt N), re-hashes its PERC outputs against the RUNLOG's outputs_sha256, loads the
   LABELS-checked test labels (twin.dev_labels.load_scored_test: same status rules as dev) and runs the SAME scorer as
