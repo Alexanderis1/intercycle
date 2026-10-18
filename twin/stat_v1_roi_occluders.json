@@ -1,0 +1,818 @@
+{
+ "_doc": "Where do the real ram-ROI occluders stand? (lane S3b fix1; WEAKNESSES T-W6; audit finding \"zone-9 ROI occlusion\ncan never happen in the twin\").",
+ "occ_conf": 0.4,
+ "roi_pad_frac": 0.15,
+ "camera": "nominal (twin/site.yaml)",
+ "by_split_press_framing": {
+  "dev:P14a:c14_f0": {
+   "clips": 19,
+   "sampled_frames": 1212,
+   "hit_share_unheld": 0.2525,
+   "machines_missing_share": 0.3544,
+   "hit_boxes": 311,
+   "share_foot_on_zone_floor": 1.0,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.0,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 1.0,
+   "d_footprint_m_q5_25_50_75_95": [
+    4.78,
+    7.44,
+    9.07,
+    10.14,
+    11.28
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    296.23,
+    374.8,
+    426.93,
+    469.25,
+    536.52
+   ],
+   "foot_x_q5_50_95": [
+    20.22,
+    20.94,
+    22.15
+   ],
+   "foot_z_q5_50_95": [
+    -1.85,
+    2.68,
+    4.81
+   ]
+  },
+  "dev:P14b:c14_f0": {
+   "clips": 19,
+   "sampled_frames": 1212,
+   "hit_share_unheld": 0.4876,
+   "machines_missing_share": 0.6594,
+   "hit_boxes": 649,
+   "share_foot_on_zone_floor": 0.9861,
+   "share_foot_in_press_footprint": 0.0015,
+   "share_foot_off_floor_and_footprint": 0.0123,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 0.9985,
+   "d_footprint_m_q5_25_50_75_95": [
+    1.07,
+    5.36,
+    6.84,
+    7.96,
+    9.39
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    183.36,
+    428.56,
+    493.16,
+    551.29,
+    686.01
+   ],
+   "foot_x_q5_50_95": [
+    16.57,
+    21.09,
+    22.57
+   ],
+   "foot_z_q5_50_95": [
+    0.82,
+    4.69,
+    7.05
+   ]
+  },
+  "dev:P14c:c14_f0": {
+   "clips": 19,
+   "sampled_frames": 1212,
+   "hit_share_unheld": 0.387,
+   "machines_missing_share": 0.638,
+   "hit_boxes": 474,
+   "share_foot_on_zone_floor": 1.0,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.0,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 1.0,
+   "d_footprint_m_q5_25_50_75_95": [
+    3.65,
+    4.2,
+    4.82,
+    5.41,
+    6.46
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    468.65,
+    502.19,
+    542.61,
+    600.32,
+    708.12
+   ],
+   "foot_x_q5_50_95": [
+    20.64,
+    21.16,
+    22.67
+   ],
+   "foot_z_q5_50_95": [
+    4.12,
+    5.93,
+    7.39
+   ]
+  },
+  "dev:P14d:c14_f0": {
+   "clips": 19,
+   "sampled_frames": 1212,
+   "hit_share_unheld": 0.1898,
+   "machines_missing_share": 0.409,
+   "hit_boxes": 231,
+   "share_foot_on_zone_floor": 0.9957,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.0043,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 1.0,
+   "d_footprint_m_q5_25_50_75_95": [
+    2.99,
+    3.17,
+    3.41,
+    4.18,
+    4.95
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    520.94,
+    544.94,
+    589.58,
+    647.15,
+    709.9
+   ],
+   "foot_x_q5_50_95": [
+    20.63,
+    21.2,
+    22.72
+   ],
+   "foot_z_q5_50_95": [
+    6.19,
+    7.01,
+    7.6
+   ]
+  },
+  "dev:P9a:c9_f0": {
+   "clips": 59,
+   "sampled_frames": 5638,
+   "hit_share_unheld": 0.0858,
+   "machines_missing_share": 0.1481,
+   "hit_boxes": 510,
+   "share_foot_on_zone_floor": 0.1863,
+   "share_foot_in_press_footprint": 0.7647,
+   "share_foot_off_floor_and_footprint": 0.049,
+   "share_foot_cut_by_image_bottom": 0.6824,
+   "share_in_front_of_press": 0.998,
+   "d_footprint_m_q5_25_50_75_95": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.57
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    220.73,
+    317.59,
+    327.16,
+    346.15,
+    400.23
+   ],
+   "foot_x_q5_50_95": [
+    4.2,
+    5.37,
+    5.84
+   ],
+   "foot_z_q5_50_95": [
+    4.2,
+    4.86,
+    4.96
+   ]
+  },
+  "dev:P9a:c9_f1": {
+   "clips": 71,
+   "sampled_frames": 8812,
+   "hit_share_unheld": 0.1489,
+   "machines_missing_share": 0.162,
+   "hit_boxes": 1351,
+   "share_foot_on_zone_floor": 0.9452,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.0548,
+   "share_foot_cut_by_image_bottom": 0.8986,
+   "share_in_front_of_press": 0.0,
+   "d_footprint_m_q5_25_50_75_95": [
+    0.22,
+    0.27,
+    0.38,
+    0.46,
+    0.68
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    108.19,
+    152.37,
+    164.46,
+    194.66,
+    266.1
+   ],
+   "foot_x_q5_50_95": [
+    4.63,
+    4.9,
+    5.11
+   ],
+   "foot_z_q5_50_95": [
+    2.69,
+    2.81,
+    2.92
+   ]
+  },
+  "dev:P9b:c9_f1": {
+   "clips": 71,
+   "sampled_frames": 8812,
+   "hit_share_unheld": 0.34,
+   "machines_missing_share": 0.4187,
+   "hit_boxes": 3320,
+   "share_foot_on_zone_floor": 0.0,
+   "share_foot_in_press_footprint": 0.8148,
+   "share_foot_off_floor_and_footprint": 0.1852,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 0.0187,
+   "d_footprint_m_q5_25_50_75_95": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    3.87
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    53.2,
+    107.55,
+    123.84,
+    129.09,
+    136.54
+   ],
+   "foot_x_q5_50_95": [
+    11.83,
+    12.39,
+    15.9
+   ],
+   "foot_z_q5_50_95": [
+    -7.01,
+    -4.23,
+    -4.04
+   ]
+  },
+  "train:P14a:c14_f0": {
+   "clips": 55,
+   "sampled_frames": 5200,
+   "hit_share_unheld": 0.185,
+   "machines_missing_share": 0.3013,
+   "hit_boxes": 991,
+   "share_foot_on_zone_floor": 0.999,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.001,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 0.999,
+   "d_footprint_m_q5_25_50_75_95": [
+    4.11,
+    5.63,
+    7.18,
+    8.83,
+    10.39
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    203.4,
+    327.32,
+    371.37,
+    417.46,
+    491.13
+   ],
+   "foot_x_q5_50_95": [
+    19.53,
+    20.61,
+    21.44
+   ],
+   "foot_z_q5_50_95": [
+    -2.75,
+    0.53,
+    4.06
+   ]
+  },
+  "train:P14b:c14_f0": {
+   "clips": 55,
+   "sampled_frames": 5200,
+   "hit_share_unheld": 0.1598,
+   "machines_missing_share": 0.2493,
+   "hit_boxes": 910,
+   "share_foot_on_zone_floor": 1.0,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.0,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 1.0,
+   "d_footprint_m_q5_25_50_75_95": [
+    1.5,
+    5.0,
+    6.37,
+    7.59,
+    9.34
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    204.42,
+    412.09,
+    467.32,
+    542.36,
+    682.56
+   ],
+   "foot_x_q5_50_95": [
+    17.39,
+    20.99,
+    22.22
+   ],
+   "foot_z_q5_50_95": [
+    1.01,
+    4.13,
+    7.03
+   ]
+  },
+  "train:P14c:c14_f0": {
+   "clips": 55,
+   "sampled_frames": 5200,
+   "hit_share_unheld": 0.1088,
+   "machines_missing_share": 0.1972,
+   "hit_boxes": 588,
+   "share_foot_on_zone_floor": 0.9813,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.0187,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 0.9847,
+   "d_footprint_m_q5_25_50_75_95": [
+    3.44,
+    4.12,
+    4.69,
+    5.39,
+    6.39
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    441.31,
+    488.57,
+    548.23,
+    619.42,
+    699.01
+   ],
+   "foot_x_q5_50_95": [
+    20.51,
+    21.1,
+    22.43
+   ],
+   "foot_z_q5_50_95": [
+    3.95,
+    5.85,
+    7.52
+   ]
+  },
+  "train:P14d:c14_f0": {
+   "clips": 55,
+   "sampled_frames": 5200,
+   "hit_share_unheld": 0.0971,
+   "machines_missing_share": 0.1965,
+   "hit_boxes": 582,
+   "share_foot_on_zone_floor": 0.4296,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.5704,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 0.4674,
+   "d_footprint_m_q5_25_50_75_95": [
+    3.03,
+    3.39,
+    7.12,
+    12.35,
+    17.33
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    70.72,
+    114.57,
+    135.42,
+    614.95,
+    693.22
+   ],
+   "foot_x_q5_50_95": [
+    -1.13,
+    8.49,
+    22.34
+   ],
+   "foot_z_q5_50_95": [
+    2.18,
+    6.09,
+    7.77
+   ]
+  },
+  "train:P9a:c9_f0": {
+   "clips": 252,
+   "sampled_frames": 22091,
+   "hit_share_unheld": 0.2927,
+   "machines_missing_share": 0.3845,
+   "hit_boxes": 7764,
+   "share_foot_on_zone_floor": 0.232,
+   "share_foot_in_press_footprint": 0.699,
+   "share_foot_off_floor_and_footprint": 0.069,
+   "share_foot_cut_by_image_bottom": 0.425,
+   "share_in_front_of_press": 0.8922,
+   "d_footprint_m_q5_25_50_75_95": [
+    0.0,
+    0.0,
+    0.0,
+    0.27,
+    0.42
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    181.87,
+    216.04,
+    320.56,
+    346.06,
+    444.03
+   ],
+   "foot_x_q5_50_95": [
+    4.47,
+    5.36,
+    5.93
+   ],
+   "foot_z_q5_50_95": [
+    3.54,
+    4.74,
+    4.97
+   ]
+  },
+  "train:P9a:c9_f1": {
+   "clips": 109,
+   "sampled_frames": 12654,
+   "hit_share_unheld": 0.1411,
+   "machines_missing_share": 0.1691,
+   "hit_boxes": 1856,
+   "share_foot_on_zone_floor": 0.4962,
+   "share_foot_in_press_footprint": 0.0,
+   "share_foot_off_floor_and_footprint": 0.5038,
+   "share_foot_cut_by_image_bottom": 0.9833,
+   "share_in_front_of_press": 0.0,
+   "d_footprint_m_q5_25_50_75_95": [
+    0.18,
+    0.2,
+    0.22,
+    0.31,
+    0.54
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    77.19,
+    114.75,
+    136.74,
+    166.96,
+    202.83
+   ],
+   "foot_x_q5_50_95": [
+    4.71,
+    5.11,
+    5.33
+   ],
+   "foot_z_q5_50_95": [
+    2.75,
+    2.92,
+    3.03
+   ]
+  },
+  "train:P9b:c9_f1": {
+   "clips": 109,
+   "sampled_frames": 12654,
+   "hit_share_unheld": 0.2509,
+   "machines_missing_share": 0.3414,
+   "hit_boxes": 3454,
+   "share_foot_on_zone_floor": 0.0,
+   "share_foot_in_press_footprint": 0.6992,
+   "share_foot_off_floor_and_footprint": 0.3008,
+   "share_foot_cut_by_image_bottom": 0.0,
+   "share_in_front_of_press": 0.009,
+   "d_footprint_m_q5_25_50_75_95": [
+    0.0,
+    0.0,
+    0.0,
+    1.63,
+    3.81
+   ],
+   "box_h_px_q5_25_50_75_95": [
+    61.86,
+    79.12,
+    117.21,
+    130.27,
+    137.29
+   ],
+   "foot_x_q5_50_95": [
+    11.88,
+    12.51,
+    15.9
+   ],
+   "foot_z_q5_50_95": [
+    -7.16,
+    -4.28,
+    -4.06
+   ]
+  }
+ },
+ "twin_replay_daygen_v1_library": {
+  "library_points": 13964,
+  "n_draws": 200,
+  "roi_mode": "anchored on the press's visible surface (cam_geom.press_anchor: the plane facing the camera where the ROI-centre ray enters the press prism), projected through the same camera as the movers",
+  "presses": {
+   "P9a": {
+    "framing": "c9_f0",
+    "stamps": 4703,
+    "roi_w_h_px": [
+     108.0,
+     108.0
+    ],
+    "twin_hit_share_unheld_nominal": 0.2581,
+    "twin_hit_share_unheld_draws_q5_50_95": [
+     0.24,
+     0.25,
+     0.26
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 0,
+    "roi_abs_shift_px_u_q50_90": [
+     181.62,
+     294.53
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     20.17,
+     35.75
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
+     0.0,
+     0.0,
+     0.23
+    ],
+    "fixed_roi_draws_with_zero_hits": 123,
+    "library_points_in_a_press_footprint": 0
+   },
+   "P9b": {
+    "framing": "c9_f1",
+    "stamps": 4703,
+    "roi_w_h_px": [
+     74.0,
+     90.0
+    ],
+    "twin_hit_share_unheld_nominal": 0.0,
+    "twin_hit_share_unheld_draws_q5_50_95": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "draws_with_zero_hits": 200,
+    "draws_roi_not_fully_in_image": 0,
+    "roi_abs_shift_px_u_q50_90": [
+     65.29,
+     118.58
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     28.03,
+     50.1
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "fixed_roi_draws_with_zero_hits": 200,
+    "library_points_in_a_press_footprint": 0
+   },
+   "P14a": {
+    "framing": "c14_f0",
+    "stamps": 432,
+    "roi_w_h_px": [
+     75.0,
+     85.0
+    ],
+    "twin_hit_share_unheld_nominal": 0.4144,
+    "twin_hit_share_unheld_draws_q5_50_95": [
+     0.37,
+     0.38,
+     0.41
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 2,
+    "roi_abs_shift_px_u_q50_90": [
+     14.75,
+     32.7
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     14.55,
+     47.6
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
+     0.34,
+     0.37,
+     0.41
+    ],
+    "fixed_roi_draws_with_zero_hits": 0,
+    "library_points_in_a_press_footprint": 0
+   },
+   "P14b": {
+    "framing": "c14_f0",
+    "stamps": 432,
+    "roi_w_h_px": [
+     90.0,
+     80.0
+    ],
+    "twin_hit_share_unheld_nominal": 0.2801,
+    "twin_hit_share_unheld_draws_q5_50_95": [
+     0.21,
+     0.28,
+     0.3
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 0,
+    "roi_abs_shift_px_u_q50_90": [
+     24.85,
+     70.85
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     15.21,
+     47.23
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
+     0.15,
+     0.27,
+     0.29
+    ],
+    "fixed_roi_draws_with_zero_hits": 0,
+    "library_points_in_a_press_footprint": 0
+   },
+   "P14c": {
+    "framing": "c14_f0",
+    "stamps": 432,
+    "roi_w_h_px": [
+     95.0,
+     95.0
+    ],
+    "twin_hit_share_unheld_nominal": 0.1667,
+    "twin_hit_share_unheld_draws_q5_50_95": [
+     0.1,
+     0.17,
+     0.24
+    ],
+    "draws_with_zero_hits": 0,
+    "draws_roi_not_fully_in_image": 2,
+    "roi_abs_shift_px_u_q50_90": [
+     59.37,
+     177.85
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     25.87,
+     54.24
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
+     0.01,
+     0.15,
+     0.25
+    ],
+    "fixed_roi_draws_with_zero_hits": 6,
+    "library_points_in_a_press_footprint": 0
+   },
+   "P14d": {
+    "framing": "c14_f0",
+    "stamps": 432,
+    "roi_w_h_px": [
+     170.0,
+     150.0
+    ],
+    "twin_hit_share_unheld_nominal": 0.0833,
+    "twin_hit_share_unheld_draws_q5_50_95": [
+     0.01,
+     0.13,
+     0.26
+    ],
+    "draws_with_zero_hits": 1,
+    "draws_roi_not_fully_in_image": 32,
+    "roi_abs_shift_px_u_q50_90": [
+     102.57,
+     303.34
+    ],
+    "roi_abs_shift_px_v_q50_90": [
+     45.24,
+     90.8
+    ],
+    "fixed_roi_hit_share_unheld_draws_q5_50_95": [
+     0.0,
+     0.06,
+     0.25
+    ],
+    "fixed_roi_draws_with_zero_hits": 50,
+    "library_points_in_a_press_footprint": 0
+   }
+  },
+  "disclosure": "fix2 attribution: the fix1 camera kept each ram ROI at its drawn pixels while the press prism and the movers were projected through the world's TRUE camera (one CAL v1 draw), so the ROI no longer sat on its press in a drawn world (fixed_roi_*: P9a 0 hits in most draws). That was a camera-geometry error, not a DAYGEN library gap: with the ROI anchored on the press (stat_v1 since fix2) P9a's library hit share is close to the nominal camera's and to TRAIN's in every draw. Only P9b's 0 % is a library gap (0 % even through the nominal camera: its real occluders stand in or at the footprint, where the library has no point); it needs at-press operators from the day generator (S3a). Draws whose anchored ROI leaves the image make that press MISSING for the whole world."
+ },
+ "twin_replay_held_stat_v1_camera": {
+  "n_worlds": 40,
+  "hold_s_by_camera": {
+   "9": 34.0,
+   "14": 7.5
+  },
+  "clips": 346,
+  "presses": {
+   "P9a": {
+    "framing": "c9_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.31,
+     0.32,
+     0.33
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.21,
+     0.22,
+     0.23
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.3845,
+    "train_hit_share_unheld": 0.2927
+   },
+   "P9b": {
+    "framing": "c9_f1",
+    "held_missing_share_worlds_q5_50_95": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "worlds_with_zero_held_missing": 40,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.3414,
+    "train_hit_share_unheld": 0.2509
+   },
+   "P14a": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.5,
+     0.52,
+     0.54
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.21,
+     0.23,
+     0.24
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.3013,
+    "train_hit_share_unheld": 0.185
+   },
+   "P14b": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.36,
+     0.43,
+     0.47
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.11,
+     0.17,
+     0.19
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.2493,
+    "train_hit_share_unheld": 0.1598
+   },
+   "P14c": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.24,
+     0.37,
+     0.41
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.05,
+     0.11,
+     0.16
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 0,
+    "train_machines_missing_share": 0.1972,
+    "train_hit_share_unheld": 0.1088
+   },
+   "P14d": {
+    "framing": "c14_f0",
+    "held_missing_share_worlds_q5_50_95": [
+     0.04,
+     0.27,
+     0.39
+    ],
+    "unheld_detected_hit_share_worlds_q5_50_95": [
+     0.01,
+     0.07,
+     0.15
+    ],
+    "worlds_with_zero_held_missing": 0,
+    "worlds_roi_cut_by_image_border": 10,
+    "train_machines_missing_share": 0.1965,
+    "train_hit_share_unheld": 0.0971
+   }
+  }
+ }
+}

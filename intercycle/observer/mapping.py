@@ -451,18 +451,21 @@ class ObsV2Converter:
       * a v2 observation (a camera model that already writes zone_motion, e.g. twin/camera.py stat_v1) gets the
         observer-side occlusion rule applied on its own person / vehicle detections (its NaNs are kept).
     `zones` = the M zone rects / polygons in zone order; `hold_s` keeps a zone MISSING after the last occluder
-    detection (default OCC_HOLD_S, sized for MEASURED_SHIM's iid misses)."""
+    detection (default OCC_HOLD_S, sized for MEASURED_SHIM's iid misses): one hold for every zone, or one per zone
+    (shape (M,): the twin camera's per-press hold, S3b fix2)."""
 
     def __init__(self, share: np.ndarray, zones, vis_min: float = ZONE_VIS_MIN, margin: float = ZONE_MARGIN_M,
-                 pad: float = OCC_PAD_M, hold_s: float = OCC_HOLD_S, occ_classes=OCC_CLASSES, res: float = 0.25):
+                 pad: float = OCC_PAD_M, hold_s: float | np.ndarray = OCC_HOLD_S, occ_classes=OCC_CLASSES,
+                 res: float = 0.25):
         self.share = np.asarray(share, float)
         self.zones = list(zones)
         if len(self.zones) != self.share.shape[0]:
             raise ValueError(f"{len(self.zones)} zones but share has {self.share.shape[0]} rows")
-        self.vis_min, self.margin, self.pad, self.hold_s = vis_min, margin, pad, hold_s
+        self.vis_min, self.margin, self.pad = vis_min, margin, pad
         self.occ_classes = tuple(occ_classes)
         self.cells = ZoneCells(self.zones, margin=margin, res=res)
         self.gate = HoldGate(len(self.zones), hold_s)
+        self.hold_s = self.gate.hold_s                       # float, or (M,) array: one hold per zone
 
     def reset(self) -> None:
         self.gate.reset()
