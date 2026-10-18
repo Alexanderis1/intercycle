@@ -310,7 +310,11 @@ class ObserverLiveConfig:
     learn_every_s: float = 300.0
     learn_window_s: float = 1200.0                      # the slice's 20 min of learning
     stale_s: float = 1.5                                # fast layer UNKNOWN when the newest tick is older than this
-    misfit_hold_s: float = 120.0                        # STOPPED suppressed this long after a contradicted stop
+    misfit_hold_s: float = 120.0                        # every state UNKNOWN this long after a contradiction
+    # lane observer-fix-fix1 (PENDING lead approval, a choice, not a measurement): a confident model kept over
+    # non-confident, mostly-MISSING re-fits lives at most this long after its last confident fit, then decays below
+    # MIN_CONF (one learn window: the model never outlives the evidence span it was fitted on)
+    keep_max_s: float = 1200.0
     latency_s: float = 0.0                              # zone_motion is stamped at capture (t_cap): no extra shift
     sealed: bool = False
     hz: float = M.FRAME_HZ
@@ -408,7 +412,12 @@ class ObserverLive:
         self._quiet = np.zeros(self.M)                  # observed seconds without motion since the last motion or gap
         self._misfit_t = np.full(self.M, -np.inf)       # last time an observed quiet run > stop threshold ended in motion
         self.n_misfit = np.zeros(self.M, int)
-        self.n_dup = 0                                  # duplicated / reordered ticks dropped by advance()
+        self._prev_y = np.full(self.M, np.nan)          # last tick's motion (NaN: MISSING / none / after a stream gap)
+        self._rise_t = np.full(self.M, np.nan)          # last observed rise, gap-free since (NaN: none)
+        self._fall_t = np.full(self.M, np.nan)          # last observed fall, gap-free since (NaN: none)
+        self._fit_t = np.full(self.M, -np.inf)          # time of the last re-fit that set a confident model
+        self.n_kept_decay = np.zeros(self.M, int)
+        self.n_dup = 0                                 # duplicated / reordered ticks dropped by advance()
         self.t_first: float | None = None
         self.t_last: float | None = None
         self._next_learn: float | None = None
@@ -450,9 +459,31 @@ class ObserverLive:
         return (1 - b) * P + 3 * max(1.4 * md.jitter * P, 0.5)
 
     def misfit(self, i: int, t: float) -> bool:
-        """Press i's model was contradicted within misfit_hold_s of t: a quiet run past its stop threshold ended in
-        motion (a restart, or a cycle longer than the model: the stale model would read every new idle as STOPPED)."""
+        """Press i's model was contradicted within misfit_hold_s of t (see `_contradicts`). While it holds, every state
+        of the press is UNKNOWN (confidence 0) and its map conditioning is unknown (-1). A press that keeps
+        contradicting the model refreshes the hold at every contradicting stroke, so the hold lasts until a re-fit
+        matches the press (or the press returns to the model) and misfit_hold_s passes without a contradiction."""
         return t - float(self._misfit_t[i]) < self.cfg.misfit_hold_s
+
+    def _contradicts(self, i: int, md: MachineModel, t: float, rise: bool) -> bool:
+        """Press i's confident model is contradicted by the observed tick at t (gap-free evidence only):
+          * a quiet run longer than the model's stop threshold ended in motion (a restart, or a cycle LONGER than the
+            model: the stale model would read every new idle as STOPPED);
+          * observer-fix-fix1: a rise earlier than the model's next start -- the gap-free observed rise-to-rise cycle
+            is shorter than period x (1 - cycle_tol_frac), or the observed idle run (fall to rise) is shorter than the
+            model's idle - 3 sigma -- a cycle SHORTER than the model: the stale model's IDLE windows (left = idle - age)
+            would contain the next stroke start."""
+        if not (rise and md.confidence >= LC.MIN_CONF):
+            return False
+        if self._quiet[i] > self._stop_after(md):
+            return True
+        P, b = md.period_s, md.busy_fraction
+        tol = self.consts[i].cycle_tol_frac
+        tol = 0.3 if tol is None else float(tol)
+        sig = max(1.4 * md.jitter * P, 0.5)
+        if np.isfinite(self._rise_t[i]) and t - self._rise_t[i] < P * (1.0 - tol):
+            return True
+        return bool(np.isfinite(self._fall_t[i]) and t - self._fall_t[i] < (1 - b) * P - 3 * sig)
 
     def _cond(self, t: float, y: np.ndarray) -> M.Cond:
         bins = np.full(self.M, -1, np.int16)
@@ -477,10 +508,22 @@ class ObserverLive:
         # observed seconds without motion since the last motion OR gap (MISSING tick, or ticks absent from the stream):
         # the same gap-free evidence learn_cycles.forecast needs for STOPPED (a stroke may hide inside any gap)
         gap = self.t_last is not None and t - self.t_last > 1.5 * dt
-        for i, md in enumerate(self.models):           # misfit: an observed would-be STOPPED that ended in motion
-            if y[i] == 1.0 and md.confidence >= LC.MIN_CONF and self._quiet[i] > self._stop_after(md):
+        relearn_now = False
+        for i, md in enumerate(self.models):           # misfit: the press contradicts its confident model
+            prev = np.nan if gap else self._prev_y[i]
+            if not np.isfinite(y[i]) or gap:            # no gap-free evidence across a MISSING tick or a stream gap
+                self._rise_t[i] = self._fall_t[i] = np.nan
+            rise = bool(prev == 0.0 and y[i] == 1.0)
+            if self._contradicts(i, md, t, rise):
+                if not self.misfit(i, t):               # a new contradiction: re-fit at once
+                    relearn_now = True
                 self._misfit_t[i] = t
                 self.n_misfit[i] += 1
+            if rise:
+                self._rise_t[i] = t
+            elif prev == 1.0 and y[i] == 0.0:
+                self._fall_t[i] = t
+            self._prev_y[i] = y[i]
         q = np.where(y == 0.0, self._quiet + dt, 0.0)
         self._quiet = np.where(y == 0.0, dt, q) if gap else q
         self._t.append(t)
@@ -497,7 +540,7 @@ class ObserverLive:
             # (almost) only post-gap ticks, so restart the schedule instead of re-fitting on them now
             self._next_learn = t + self.cfg.learn_every_s
         self.t_last = t
-        if self._next_learn is not None and t >= self._next_learn:
+        if self._next_learn is not None and (t >= self._next_learn or (relearn_now and len(self._t) >= 20)):
             self.relearn()
             self._next_learn = t + self.cfg.learn_every_s
         cond = self._cond(t, y)
@@ -512,14 +555,21 @@ class ObserverLive:
         for i in range(self.M):
             L = LC.learn(T[k], Y[k, i], index=i, latency_s=self.cfg.latency_s, consts=self.consts[i])
             observed_s = float(np.isfinite(Y[k, i]).sum()) / self.cfg.hz
-            if (L.model.confidence < LC.MIN_CONF and self.models[i].confidence >= LC.MIN_CONF
+            old = self.models[i]
+            if (L.model.confidence < LC.MIN_CONF and old.confidence >= LC.MIN_CONF
                     and observed_s < 0.5 * self.cfg.learn_window_s):
                 # a non-confident re-fit on a window less than half OBSERVED (MISSING bursts, a stream gap) is no
-                # evidence against the confident model: keep it.
-                # MISSING ticks stay UNKNOWN in the fast layer, and a contradicted model is caught by `misfit`
+                # evidence against the confident model: keep it, for at most keep_max_s after its last confident fit
+                # (then it decays below MIN_CONF). MISSING ticks stay UNKNOWN in the fast layer, and a kept model the
+                # press contradicts (a longer or shorter cycle) is held UNKNOWN by `misfit`
+                if float(T[-1]) - float(self._fit_t[i]) > self.cfg.keep_max_s:
+                    self.models[i] = replace(old, confidence=min(old.confidence, LC.MIN_CONF - 1))
+                    self.n_kept_decay[i] += 1
                 continue
             self.learned[i] = L
             self.models[i] = L.model
+            if L.model.confidence >= LC.MIN_CONF:
+                self._fit_t[i] = float(T[-1])
 
     def advance(self, t: float) -> int:
         """Ingest every tick of obs_v2.jsonl that has ARRIVED by t (obs.t <= t: capture + latency). Returns the count."""
@@ -552,7 +602,7 @@ class ObserverLive:
                 continue
             k = T >= t - max(6 * md.period_s, 200.0) - 20.0
             now = LC.nowcast(md, T[k], Y[k, i], t, seq=self.seq, latency_s=self.cfg.latency_s, consts=self.consts[i])
-            if now.state == State.STOPPED and self.misfit(i, t):        # a contradicted model: never a STOPPED
+            if self.misfit(i, t):         # a contradicted model: no state of it is sent (STOPPED, IDLE, ACTIVE)
                 now = MachineNow(i, State.UNKNOWN, 0.0, 0.0, 0.0, 0, self.seq)
             out.append(now)
         return FastLayer(self.spec["site_id"], self.spec["key_id"], DAY0_UNIX + t, self.seq, out)
@@ -647,7 +697,7 @@ class ObserverLive:
             return None if L is None else L.diag.get("missing_share")
 
         return dict(n_ticks=self.n_ticks, t_first=self.t_first, t_last=self.t_last, tags=self.tags,
-                    n_misfit=self.n_misfit.tolist(), n_dup=self.n_dup,
+                    n_misfit=self.n_misfit.tolist(), n_kept_decay=self.n_kept_decay.tolist(), n_dup=self.n_dup,
                     models=[dict(id=self.ids[i], period_s=m.period_s, confidence=m.confidence,
                                  missing_share=miss(self.learned[i])) for i, m in enumerate(self.models)],
                     availability=self.availability(), events=len(self.events))

@@ -573,3 +573,10 @@ timing_planner (ours: which target, WHEN to enter)  --Nav2 goals-->  Nav2 Humble
 4. Production units (jobs lost, interventions) with recovery-time sensitivity.
 5. A large CPU batch for safety rates and transients; Isaac for realism.
 6. Fresh event-sim numbers, then held-out once on disjoint seeds.
+
+## Observer twin disclosures (pre-freeze, lanes observer-fix and observer-fix-fix1)
+
+- **M-W7**: STOP_BIN never opens on the twin (STOPPED TTL pinned at the 2 s floor by an inflated learned stops_per_h; the robot's lookup needs >= 8 s). The learned arm never enters a stopped press (user decision). The fixed S7b margin file `twin/m7_margin.json` has no writer yet.
+- **M-W4**: the map layer is packed once per mission, so M-W4 alarms during a mission cannot change the map the robot holds; they act only through the fast / slow layers.
+- **T-W11**: the TTL bounds stop starts, not stop ends: a restart inside the 6 s horizon is not guarded. IDLE precision on the twin probe was 0.77 before fix1; fix1 holds a contradicted press UNKNOWN from its first observed contradiction (shorter or longer cycle), but windows sent before that contradiction can still contain a stroke. A single motion dropout inside a stroke reads as a short cycle and starts a hold (fail closed, costs availability). A kept model decays below MIN_CONF keep_max_s = 1200 s after its last confident fit (a choice pending lead approval).
+- **M-W10**: one camera's invalid floor view makes every zone MISSING in `twin/observer_live.py` (no camera-to-zone map in the spec). Fail closed; on real clips it can blank the whole observer.
