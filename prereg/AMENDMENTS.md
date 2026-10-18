@@ -129,3 +129,41 @@ record and is never edited.
   therefore procedural on one machine (agent separation, `C:\intercycle_sealed\access.log`, committed hashes), not a
   machine boundary as PLAN §4/§6 planned. The test labels are made by two fresh labeller agents (person frames;
   stroke windows) instead of one, to fit before FREEZE; both read only `labels/TEST_RULES.md` and the test images.
+
+## Amendment 2 (A2): split freeze, cut design, three user decisions, no tuning
+
+- **Decided:** Sun 18 Oct 2026, ~07:00 CEST. Items 1-5 by the user; item 6 by the lead (session intercycle-74, under
+  the user's autonomy grant of ~01:40). Written into PREREG v1 (`prereg/PREREG_TWIN.md`) by lane PREREG-final before
+  PREREG v1 is committed on main, so before any dev-world run, any dev robot run and any test seed.
+- **Evidence:** the time left before the planned single FREEZE at 08:30 (PLAN_TWIN §4) is too short for the five-
+  condition, 320-cell robot design, the 32-world S7b calibration and the tuning runs, while the real-clip part
+  (PERC, labels, scoring) is ready earlier. No dev-world or test result was seen before this amendment.
+
+1. **Split freeze (user).** `prereg/FREEZE_REALCLIP` = the sha of the commit that freezes the real-clip test, at 08:30
+   CEST; the real-clip test runs once at 09:15 CEST. `prereg/FREEZE` = the sha of the commit that freezes the robot
+   part, at ~10:15 CEST. Test seeds come from drand only after the robot FREEZE. If the robot part is not ready by
+   10:15 it is reported as descriptive dev results, with no H1-H3 claim (PREREG §2.1).
+   *Deviation:* PLAN §4 has one FREEZE at 08:30 for everything; the 09:55 last re-run moves to the time the lead
+   writes into the FREEZE commit (PREREG §6).
+2. **Cut design (user).** CPU double: 3 conditions (static, learned, best reactive) × 16 test worlds × days 9-10 ×
+   zones 9 and 14 = 192 cells; no timing oracle, no no-map. H1-H3 as `twin_eval` implements them on that design; the
+   oracle share is not reported. The S7b fixed-margin fallback (latency p99, PREREG §7) replaces the 32-world
+   calibration on dev worlds 100-131 (not run). Isaac, movers and A-lite are descriptive only and outside
+   `sealed_run.py`. *Deviation:* U12's 320 runs (5 conditions) and PLAN §5's oracle share; S7b's LTT certificate.
+3. **Stop entry (user): keep as is and disclose.** The learned arm never enters a STOPPED press (learner TTL ≤ ~2.6 s,
+   below need_s); the reactive arm does (own-camera KM still-run window). Pinned by
+   `ros2/intercycle_nav/test/test_stop_entry.py` (lane S5b-entry fix1).
+4. **Real-clip occlusion (user).** For REAL clips the image-space ram-ROI rule
+   (`intercycle/observer/occlusion.py` `box_hits_roi` / `roi_missing_series`) replaces the floor rule; the twin keeps
+   its rule.
+5. **Stroke time (user).** PERC `detect_strokes` emits the BDC (bottom) time, the label definition; the stroke
+   tolerance stays ±0.25 s.
+6. **No tuning (lead).** Neither arm is tuned: both run their committed default configs, hashed in PREREG §9
+   (reactive `ReactiveConfig().sha256()` = `8e9dbfee6379f212931f6da750c27632f14df8705e270afb0a52da70258c262a`; learned
+   = the git blobs of its code at main 6b0ea6b). Equal for both arms and disclosed. *Deviation:* PLAN §5's equal
+   tuning budget (8 configs × 4 dev worlds per arm) and the separate baseline tuner are not used.
+
+- **PREREG v1 also records** (same lane, no rule change): the desktop-custodian amendment above (procedural seal on one
+  machine, two test labeller agents), the `scripts/sealed_run.py` blob on main (`c6e7d530…`, replacing the
+  lane/S1a-slice-fix1 blob `6d87cefc…` that the S1a-prereg draft cited), and the code that must change before FREEZE to
+  match the text (PREREG §1).
