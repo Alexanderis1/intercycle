@@ -45,8 +45,6 @@ BODY_SHOP_BUILDERS = {"SiteGraph", "build_rects"}
 KNOWN = {
     ("intercycle/observer/mapping.py", "data_hall"):
         "S4: _Camera floor (l.605) and build_spec (l.1182) read scn.data_hall['x'][1]; use scn.site_extent[2]",
-    ("ros2/intercycle_nav/intercycle_nav/masks.py", "data_hall"):
-        "S3b: Masks.from_scenario (l.196) builds ext from scn.data_hall; use ext = scn.site_extent",
 }
 # (file, body-shop reach) -> owner and patch: the SiteGraph / build_rects rule applied to the SHARED modules.
 KNOWN_REACH = {
