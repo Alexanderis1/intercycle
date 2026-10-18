@@ -1,4 +1,4 @@
-﻿# Label agreement: two independent Claude-agent labellers on 20 DEV frames (U14)
+# Label agreement: two independent Claude-agent labellers on 20 DEV frames (U14)
 
 Lane S4-labels-blind, Sun 18 Oct 2026 ~03:15 CEST. PLAN_TWIN Â§0 U14 rule (1) and Â§5 "Split and labels".
 
