@@ -42,8 +42,7 @@ import pandas as pd
 from intercycle.observer import mapping as OM
 from intercycle.observer import watchdog as WD
 from intercycle.perception.esk_ingest import project_tracks
-from twin.plant import _bbox
-from twin.schemas.site import Site
+from twin.schemas.site import Site, polygon_bbox
 
 TICK_S = 1.0 / OM.FRAME_HZ
 WATCH_WIDTH = 960                     # train keyframes are 960 px wide; live frames are resized to it (sharpness scale)
@@ -88,7 +87,7 @@ def site_geometry(site: Site) -> dict[str, FramingGeom]:
     out: dict[str, FramingGeom] = {}
     for z in site.zones:
         pids = [p.id for p in site.presses if p.zone == z.id]
-        rects = [_bbox(presses[p].danger_polygon.value, presses[p].dilation_m.value) for p in pids]
+        rects = [polygon_bbox(presses[p].danger_polygon.value, presses[p].dilation_m.value) for p in pids]
         for fid in z.framings:
             f = fr[fid]
             share = roi_share([presses[p] for p in pids], fid, f.image_size_px.value)
