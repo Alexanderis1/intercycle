@@ -236,6 +236,17 @@ def test_camera_9_has_no_forklift_and_fresh_tracker_per_clip(clip_path):
     assert (g.loc[g["kind"] == "gap", "n_frames"] == 3).any() or a.stats["n_tracks"]["person"] >= 3
 
 
+def test_clip_without_detections_writes_typed_empty_tables(tmp_path, clip_path):
+    from twin.schemas.tables import TrackRow, validate_table
+
+    r = ei.ingest_clip(clip_path, "3_tr1", "dev", 9, "c9_f0", {"PX": ROI}, lambda ims: [Dets.empty() for _ in ims])
+    assert len(r.tracks) == 0 and len(r.boxes) == 0
+    ei.write_outputs(r, tmp_path)
+    assert validate_table(tmp_path / "tracks" / "3_tr1.parquet", TrackRow) == 0
+    import pyarrow.parquet as pq
+    assert str(pq.read_schema(tmp_path / "boxes" / "3_tr1.parquet").field("class").type) != "null"
+
+
 def test_write_outputs(tmp_path, clip_path):
     r = _run(clip_path, 14)
     paths = ei.write_outputs(r, tmp_path)

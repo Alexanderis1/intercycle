@@ -294,11 +294,12 @@ def ingest_clip(path: str | Path, clip_id: str, split: str, camera: int, framing
                              float(min(max(s, 0.0), 1.0)), framing))
     track_s = time.perf_counter() - a
     tracks = pd.DataFrame(rows, columns=pd.Index(TRACK_COLUMNS))
-    tracks = tracks.astype({"t": "float64", "track_id": "int64", "u": "float64", "v": "float64", "x": "float64",
-                            "y": "float64", "conf": "float64"})
+    # explicit dtypes, so a clip with no track / no box still writes typed (string, not null) parquet columns
+    tracks = tracks.astype({"split": "str", "t": "float64", "track_id": "int64", "class": "str", "u": "float64",
+                            "v": "float64", "x": "float64", "y": "float64", "conf": "float64", "framing": "str"})
     boxes = pd.DataFrame(box_rows, columns=pd.Index(BOX_COLUMNS)).astype(
-        {"frame": "int64", "t": "float64", "conf": "float64", "x1": "float64", "y1": "float64", "x2": "float64",
-         "y2": "float64", "suppressed": "bool"})
+        {"split": "str", "clip_id": "str", "framing": "str", "frame": "int64", "t": "float64", "class": "str",
+         "conf": "float64", "x1": "float64", "y1": "float64", "x2": "float64", "y2": "float64", "suppressed": "bool"})
 
     a = time.perf_counter()
     machines: dict[str, pd.DataFrame] = {}
