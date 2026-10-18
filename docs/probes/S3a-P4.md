@@ -1,57 +1,99 @@
-# Probe P4: press strokes (lane S3a-P4)
+# Probe P4: press strokes (lane S3a-P4, rerun S3a-P4b)
 
-Sat 17 Oct, ~23:15-00:00 CEST. Plan: PLAN_TWIN §3 P4 and the §2 machines contract.
+Sun 18 Oct, ~01:00-02:00 CEST. Plan: PLAN_TWIN §3 P4 and the §2 machines contract. Split in force: `prereg/ACTIVE_SPLIT`
+(A1). Clips read only through `esk.load("train")`; every script refuses a clip id outside train. No test clip, frame
+or keyframe was opened.
 
-## Status: BLOCKED on data. The code is ready; no press was measured.
+## Result
 
-No train video is available to this lane:
-- `$INTERCYCLE_DATA` (`F:\intercycle\data\esk`) has no `inventory.parquet`, no `clips/` and no `keyframes/`.
-- The Modal volume `intercycle-esk` holds only `esk/{meta,frame05,feat,det,split}`. There are no clips, because
-  Pass 2 is on hold (see `docs/probes/G0_PROBES.md`, "STOP": the committed split is degenerate and the lead and user
-  must choose A0, A1 or A2).
-- I waited 20 minutes for Pass 2 (polling every 60 s). It did not land.
+**2 presses pass the rule (P9a, P9b), both on camera 9. "Press shop" wording: eligible (≥ 2 presses pass).**
+The four camera-14 presses do not pass: they are idle in every sampled train clip, so they take the ASSUMED fallback.
 
-I did not work around this, for two reasons:
-1. **Sealed-test risk.** Under A1 or A2, clips that are train under the committed `prereg/split.csv` can become
-   test. That is certain for camera 14, which has no test clips today but would get about 7 test groups under A1.
-   Looking at any camera-14 frame now could mean looking at a future test clip, and that cannot be undone.
-2. **No HF access.** The plan says "agents never call the HF dataset after Pass 1", so I did not download clips myself.
+| press | what | framings (ROI) | clips | running (≥ 2 strokes) | learned | intervals | period median | p10-p90 | running fraction |
+|---|---|---|---|---|---|---|---|---|---|
+| P9a | 100 t eccentric press, camera-9 foreground (coil-fed) | c9_f0, c9_f1 | 10 (8 c9_f0, 2 c9_f1) | 9 | **yes** | 24 | **1.96 s** | 1.77-2.00 s | 0.9 |
+| P9b | C-frame press behind P9a (white, round dial) | c9_f1 only | 10 | 8 | **yes** | 31 | **1.69 s** | 1.61-1.73 s | 0.8 |
+| P14a | camera-14 C-frame press 1 (left) | c14_f0 | 10 | 0 | no (ASSUMED) | 0 | — | — | 0.0 |
+| P14b | camera-14 C-frame press 2 | c14_f0 | 10 | 0 | no (ASSUMED) | 0 | — | — | 0.0 |
+| P14c | camera-14 C-frame press 3 | c14_f0 | 10 | 0 | no (ASSUMED) | 0 | — | — | 0.0 |
+| P14d | camera-14 press 4 (right, blue guard) | c14_f0 | 10 | 0 | no (ASSUMED) | 0 | — | — | 0.0 |
 
-Because of this, the presses are **not identified yet**. There are no ROI polygons, period estimates or
-running-clip counts. **The pass rule was not evaluated.** The plan's fallback (fewer than 2 presses pass: running
-fraction plus a censored period prior, labelled ASSUMED) is **not taken by me**. Without measurements it would only be
-a prior. Whether to declare it now or re-run P4 after Pass 2 is the lead's call.
+- The two learned periods differ (1.96 vs 1.69 s), so they are two machines, not one artefact seen twice.
+- Short intervals (1.32, 1.41, 1.49, 1.52 s) are single outliers at clip starts. Every clip also has a right-censored
+  tail (1.2-3.6 s); these are in `out/p4/summary.json` per clip.
+- The 2 non-running P9a/P9b clips (0_tr114, 0_te25) have ROI flow p99 ≈ 3 px/s: the press is stopped there, which is
+  not a detector miss. P9b 0_tr44 (5 s) has 1 stroke only.
+- Camera 14: in all 10 clips the ROI flow p99 is 1-3 px/s when no forklift or person crosses the ROI. There are 3
+  single strokes in 3 clips, on a forklift or person pass (p99 24-42 px/s, no person boxes yet). No clip has 2.
+  The 15 other camera-14 train clips used for the ROI search also show no periodic motion on any press.
+- Not measured: the fifth large press at the top right of c14_f0 (no ram identifiable in the keyframe), and P9b in
+  c9_f0 (its slide is hidden behind the P9a crown in that framing).
 
-## What is ready
+## Lamp beat
 
-| Path | What |
-|---|---|
-| `intercycle/perception/press_motion.py` | The per-clip press-motion ingest, shared by dev and test. Steps: (1) decode with PyAV; times come from the container PTS (`frame.time`), never index/fps. (2) ECC (Euclidean) stabilisation onto frame 0, with the ROI masked out of the fit. (3) Farneback vertical flow inside the ROI polygon, giving `flow_v` in full-res px/s (+ = down), plus `roi_energy`. (4) MISSING (NaN, no stroke) on every frame whose ROI touches a person box. (5) Stroke starts: a Schmitt trigger on the down lobe, with an adaptive threshold (5 × noise σ from the 20th percentile of \|v\|, floor 25 px/s), confirmed by an up lobe within 3 s and debounced at 0.3 s. (6) Lamp beat: the dominant frequency and power share of the ROI-masked global luma, and of the ROI luma. (7) In-clip intervals plus the right-censored tail. The output columns are exactly the `MachineRow` contract (`twin/schemas/tables.py`, lane S1a). |
-| `tests/test_press_motion.py` | Synthetic clips: a textured ram, camera shake, a 0.5 Hz lamp beat and person boxes. 7 pass; the contract check is skipped on this branch (`twin` is not merged here). |
-| `scripts/p4_press_probe.py` | `motion`: per-clip vertical-flow σ grids (the top cells in full-res px), to find rams with numbers before an ROI is drawn on a keyframe. `run`: a seeded sample (seed 20261017) of N train clips per camera, the ingest per press ROI, `$INTERCYCLE_DATA/machines/<press>/<clip>.parquet`, and a JSON summary with the pass rule (≥ 8 clips with ≥ 2 strokes). Both commands refuse any clip id that is not in `esk.load("train")`. |
+Global luma beat (ROI masked out), per clip: 0.10-0.57 Hz, changing from clip to clip, with power share 0.2-0.85.
+Stroke rates are 0.51 Hz (P9a) and 0.59 Hz (P9b). **No press has a stroke rate equal to the global beat**:
+- The closest clips are P9a 2_tr18 (beat 0.57 Hz against 0.51 Hz) and P9b 0_tr177 (0.51 Hz against 0.58 Hz).
+  Those differences are larger than the frequency resolution.
+- The two presses have different, fixed periods in clips whose global beat varies, which a lamp would not give.
+- The ROI luma beat does equal the stroke rate (0.51-0.61 Hz, share 0.6-0.86), as expected from a moving ram.
 
-A smoke test on a synthetic H.264 mp4 (1920×1080, 25 fps, PyAV encode → `ingest_clip`) recovered PTS times
-0, 0.04, 0.08 … and strokes at 0.04, 1.64 and 3.24 s, for a true period of 1.6 s.
+## How the presses and ROIs were found
 
-## How to finish P4 once Pass 2 has staged train clips and keyframes (about 35 min)
+1. Train keyframes of the three train framings (c9_f0, c9_f1, c14_f0) named the machines (P6 also lists them).
+2. Per-cell periodicity of stabilised vertical Farneback flow, on 15-16 train clips per framing (cells 96 px, then
+   36 px full-res). A cell counts when one 0.15-3 Hz peak holds ≥ 40 % of the non-DC power and sd ≥ 4 px/s.
+   - c9_f0: the cells at (468-576, 612-720) count in 8/8 clips at 0.48-0.60 Hz (P9a).
+   - c9_f1: the cells at (396-468, 360-432) count in 8/8 clips at 0.56-0.62 Hz (P9b). The slide of the press behind
+     is visibly moving in a train time-montage.
+   - c9_f1: the P9a cell sits at the bottom edge (576-720, 960-1078), 0.5-0.6 Hz. Fewer clips count there, because
+     people stand in front of it.
+   - c9_f0 also has a fixed 2.01 Hz signal at (110-180, 470-580), on the P9a flywheel guard, in 15/16 clips. That is
+     rotation, not a stroke, and it is outside every ROI.
+   - c14_f0: no press cell is periodic across clips. The only periodic areas are forklift passes.
+3. The ROIs are in `docs/probes/S3a-P4_rois.json`, in full-res px per framing. The P9a c9_f0 ROI is on ram-coupled
+   motion at the side of the press: the die opening is not in view (P6). The montage alone cannot confirm that it is
+   the slide, but the 0.5 Hz periodicity in every clip is clear.
 
-1. Look at train keyframes of camera 9 and camera 14 (train only, after the split is final). Name each press and
-   draw its ram ROI in full-res px per framing in `docs/probes/S3a-P4_rois.json`.
-2. Optional: `python scripts/p4_press_probe.py motion --clips <5 train clips per camera>` to confirm that the ROI
-   sits on the highest vertical-flow σ cells.
-3. Take the heavy lock, then run `python scripts/p4_press_probe.py run --rois docs/probes/S3a-P4_rois.json
-   --per-camera 10`. Run it with the GPU env python, which has PyAV, and with `PYTHONPATH` set to the worktree.
-4. Fill this report: presses found, which passed, period median and p10-p90, running fraction, and lamp beat (flag
-   any press whose stroke rate equals the global luma beat).
+## Detector fix (root cause, in `intercycle/perception/press_motion.py`)
+
+The first run gave 0 strokes everywhere, also on P9a and P9b, where the ROI luma beat was clear. The cause had two
+parts:
+1. **The noise estimate.** The noise sigma came from the 20th percentile of |v|. A press in continuous run moves on
+   every frame, as a smooth near-sinusoid with no dwell, so that estimate is the stroke amplitude itself. The
+   threshold (25-45 px/s) sat above the whole signal (p99 ≈ 10 px/s).
+2. **The fixed floor.** The 25 px/s floor was above the real ram speed. At this distance and with an ROI mean, the
+   ram moves 8-17 px/s.
+
+What changed:
+- **Noise.** It is now the MAD of the frame-to-frame differences of v, divided by √2. A smooth stroke barely changes
+  between frames, so the differences carry the noise.
+- **Smoothing.** `flow_v` gets a centred 0.2 s moving mean before the trigger (strokes are below 3 Hz). The noise
+  sigma is divided by √(samples in the window).
+- **Floor.** `min_thr` is now 4 px/s. Idle camera-14 ROIs with no occluder have p99 1-3 px/s. This floor was set
+  from train data: it is a probe choice, disclosed here.
+- **Test.** New test `test_continuous_sinusoidal_ram_is_counted`: a continuous-run ram with 3 px working travel
+  (peak ≈ 16 px/s full-res) gives 5 strokes at the true period. The old code gave 0. All earlier tests still pass.
+
+`flow_v` in the machines table is still the raw (unsmoothed) value; only the trigger sees the smoothed one.
+
+## Run
+
+- `python scripts/p4_press_probe.py run --rois docs/probes/S3a-P4_rois.json --per-camera 10` (GPU env, under the
+  heavy lock). It writes `out/p4/summary.json` and `$INTERCYCLE_DATA/machines/<press>/<clip>.parquet`.
+- The script now takes ROIs per framing (`"rois": {framing: polygon}`). Each press draws 10 train clips (seed
+  20261017, a fresh generator per press) from its own framings. Each clip uses the ROI of its own framing (`framing`
+  per row). The old version sampled by camera only, so it would have put a c9_f0 ROI on c9_f1 clips.
+- Person boxes: none (PERC not available), so MISSING is 0 % everywhere.
 
 ## Interpretations
 
-1. "Running" = ≥ 2 detected strokes in the clip (the pass rule's own threshold).
-2. The probe runs without person boxes, because the PERC batch is not available. Its MISSING share is therefore 0.
-   The ingest takes boxes once PERC exists.
-3. The sealed rule is read as covering any clip that may become test under the pending split decision, not only
-   the current test rows.
+1. "10 camera-9 and 10 camera-14 clips" is read as 10 clips per press, drawn from that press's framings. P9b exists
+   only in c9_f1, so its 10 clips are all c9_f1. The 4 camera-14 presses share the same 10 clips.
+2. "Running" means ≥ 2 detected strokes in the clip (the pass rule's own threshold).
+3. Fallback for P14a-d: running fraction 0/10 in sampled train clips, plus the censored period prior, labelled
+   ASSUMED. Nothing was measured for them, so no period is reported.
 
 ## Modal cost
 
-$0.00 (only `modal volume ls` was run).
+$0.00. Everything ran locally.

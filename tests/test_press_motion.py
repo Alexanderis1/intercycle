@@ -111,3 +111,27 @@ def test_rows_satisfy_contract():
 def test_lamp_beat_flat_series():
     f, frac, amp = pm.lamp_beat(np.arange(100) / 25.0, np.full(100, 100.0))
     assert frac == 0.0 or amp < 1e-6
+
+
+def test_continuous_sinusoidal_ram_is_counted():
+    """An eccentric press in continuous run: the slide moves on every frame (no dwell), small travel (P4 rerun)."""
+    import cv2
+    rng = np.random.default_rng(5)
+    bg = _texture(rng, H, W)
+    ram = _texture(rng, 120, 60)
+    period, dur, travel = 1.8, 9.0, 3.0              # working px; peak speed ~16 full-res px/s
+    n = int(dur * FPS)
+    t = np.arange(n) / FPS
+    frames = np.empty((n, H, W), np.uint8)
+    x0 = int(1000 * SCALE)
+    for i, ti in enumerate(t):
+        y = 60 + travel * (1 - np.cos(2 * np.pi * ti / period)) / 2
+        canvas = bg.astype(np.float32).copy()
+        m = np.float32([[1, 0, x0], [0, 1, y]])
+        patch = cv2.warpAffine(ram.astype(np.float32), m, (W, H), flags=cv2.INTER_LINEAR, borderValue=-1)
+        canvas = np.where(patch >= 0, patch, canvas)
+        frames[i] = np.clip(canvas, 0, 255).astype(np.uint8)
+    r = run(pm.Clip(t=t, frames=frames, scale=SCALE))
+    assert len(r.strokes_t) == 5                     # down lobes start at 0, 1.8, 3.6, 5.4, 7.2 s
+    iv, _ = pm.intervals(r.strokes_t, r.extra["duration"])
+    assert np.all(np.abs(iv - period) < 0.15)

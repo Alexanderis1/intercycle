@@ -45,11 +45,12 @@ class Clip:
 @dataclass
 class PressParams:
     k_mad: float = 5.0             # threshold = max(min_thr, k_mad * robust sigma of flow_v)
-    min_thr: float = 25.0          # full-res px/s
+    min_thr: float = 4.0           # full-res px/s; idle train ROIs (c14, no occluder) have |flow_v| p99 1-3 px/s
     release: float = 0.4           # Schmitt release level as a fraction of the threshold
     max_stroke_s: float = 3.0      # the up lobe must follow the down lobe within this
     min_gap_s: float = 0.3         # debounce between stroke starts
     require_return: bool = True
+    smooth_s: float = 0.2          # centred moving-mean window on flow_v before the trigger (s)
     farneback: tuple = (0.5, 3, 15, 3, 5, 1.2, 0)
 
 
@@ -186,9 +187,25 @@ def detect_strokes(t: np.ndarray, flow_v: np.ndarray, params: PressParams | None
     ok = np.isfinite(v)
     if ok.sum() < 3:
         return np.zeros(0, int), float("nan")
-    # Noise sigma from the 20th percentile of |v| (0.253 sigma for Gaussian noise): a running press moves for a
-    # large share of frames, so a median/MAD estimate would be inflated by the strokes themselves.
-    sig = float(np.percentile(np.abs(v[ok] - np.median(v[ok])), 20)) / 0.253
+    # Noise sigma from the frame-to-frame differences of v (MAD / 0.6745 / sqrt 2 for white noise). A running
+    # eccentric press moves on every frame (a smooth near-sinusoid with no dwell), so any estimate taken from the
+    # level of v (a percentile of |v|, a MAD of v) is the stroke amplitude itself and the trigger never fires
+    # (P4 rerun: train ROIs with a clear 0.5-0.6 Hz ram beat gave thresholds 25-45 px/s above a 10 px/s signal).
+    # The smooth stroke changes little between frames, so the differences carry the noise.
+    d = np.diff(v[ok])
+    sig = float(np.median(np.abs(d - np.median(d)))) / 0.6745 / np.sqrt(2.0) if len(d) else 0.0
+    # Low-pass: a centred moving mean over smooth_s (finite samples only; NaN samples stay NaN). Strokes are slower
+    # than ~3 Hz, so this keeps the lobes and divides the white-noise sigma by sqrt(samples in the window).
+    if p.smooth_s > 0:
+        tt = np.asarray(t, float)
+        vs = np.full(len(v), np.nan)
+        cnt = np.zeros(len(v))
+        for i in np.nonzero(ok)[0]:
+            w = ok & (np.abs(tt - tt[i]) <= p.smooth_s / 2)
+            vs[i] = v[w].mean()
+            cnt[i] = w.sum()
+        sig = sig / np.sqrt(max(float(np.median(cnt[ok])), 1.0))
+        v = vs
     thr = max(p.min_thr, p.k_mad * sig)
     rel = p.release * thr
     starts: list[int] = []

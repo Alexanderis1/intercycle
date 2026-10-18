@@ -1,0 +1,14 @@
+{
+ "_note": "Probe P4 ram ROIs, full-resolution px (1920x1080), per train framing (P6 framing ids). Drawn from TRAIN keyframes plus per-cell vertical-flow periodicity on 15-16 train clips per framing (see docs/probes/S3a-P4.md). P9a = the 100 t eccentric press in the camera-9 foreground; P9b = the C-frame press behind it (visible with its slide only in c9_f1; in c9_f0 its slide is hidden behind the P9a crown). P14a-d = the four C-frame presses of camera 14, left to right; the fifth large press at the top right of c14_f0 has no identifiable ram and is not measured.",
+ "presses": [
+  {"id": "P9a", "camera": 9, "rois": {
+    "c9_f0": [[468, 612], [576, 612], [576, 720], [468, 720]],
+    "c9_f1": [[576, 960], [720, 960], [720, 1078], [576, 1078]]}},
+  {"id": "P9b", "camera": 9, "rois": {
+    "c9_f1": [[396, 350], [470, 350], [470, 440], [396, 440]]}},
+  {"id": "P14a", "camera": 14, "rois": {"c14_f0": [[555, 130], [630, 130], [630, 215], [555, 215]]}},
+  {"id": "P14b", "camera": 14, "rois": {"c14_f0": [[860, 160], [950, 160], [950, 240], [860, 240]]}},
+  {"id": "P14c", "camera": 14, "rois": {"c14_f0": [[1145, 150], [1240, 150], [1240, 245], [1145, 245]]}},
+  {"id": "P14d", "camera": 14, "rois": {"c14_f0": [[1520, 110], [1690, 110], [1690, 260], [1520, 260]]}}
+ ]
+}

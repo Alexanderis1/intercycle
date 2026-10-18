@@ -10,7 +10,9 @@ $INTERCYCLE_DATA/machines/<press>/<clip>.parquet and prints/saves a JSON summary
 censored tails, lamp beat, stabilisation) plus the pass rule: a press is learned if >= 8 train clips show it running
 with >= 2 strokes each.
 
-ROI file: {"presses": [{"id": "P9a", "camera": 9, "framing": "c9_f0", "roi_px": [[x, y], ...]}, ...]}.
+ROI file: {"presses": [{"id": "P9a", "camera": 9, "rois": {"c9_f0": [[x, y], ...], "c9_f1": [...]}}, ...]}
+(or the single-framing form "framing": "c9_f0", "roi_px": [...]). Each press samples --per-camera clips from the train
+clips of its own framings (same seed per press) and uses the ROI of each clip's framing.
 Only train clips are read (esk.load("train")); a clip id outside train raises.
 """
 from __future__ import annotations
@@ -56,22 +58,38 @@ def motion_map(clip_id: str, cell: int = 16) -> dict:
             "grid_sd": np.round(sd, 1).tolist()}
 
 
+def _press_rois(pr: dict) -> dict[str, list]:
+    """{framing_id: roi polygon} of one press: the "rois" map, or the single "framing"/"roi_px" pair."""
+    if "rois" in pr:
+        return {str(k): v for k, v in pr["rois"].items()}
+    return {str(pr["framing"]): pr["roi_px"]}
+
+
 def run(rois: dict, per_camera: int, seed: int, out_json: Path, write_parquet: bool) -> dict:
     inv = esk.load("train")
-    rng = np.random.default_rng(seed)
+    train_ids = set(inv["clip_id"].astype(str))
+    framing_of = dict(zip(inv["clip_id"].astype(str), inv["framing_id"].astype(str)))
     summary: dict = {"seed": seed, "per_camera": per_camera, "presses": []}
     for pr in rois["presses"]:
         cam = int(pr["camera"])
-        pool = sorted(inv.loc[inv["camera"] == cam, "clip_id"].astype(str))
+        proi = _press_rois(pr)
+        # the sample is drawn only from the framings where this press has an ROI; a fresh generator per press, so
+        # presses with the same framings get the same clips
+        rng = np.random.default_rng(seed)
+        sel = (inv["camera"] == cam) & inv["framing_id"].astype(str).isin(list(proi))
+        pool = sorted(inv.loc[sel, "clip_id"].astype(str))
         pool = [c for c in pool if esk.clip_path(c).exists()]
         pick = list(pr.get("clips") or rng.choice(pool, size=min(per_camera, len(pool)), replace=False))
         rows = []
         for cid in pick:
-            if cid not in set(inv["clip_id"].astype(str)):
+            if cid not in train_ids:
                 raise PermissionError(f"{cid} is not a train clip")
-            r = pm.ingest_clip(esk.clip_path(cid), cid, "train", pr["id"], pr["framing"], pr["roi_px"])
+            fr = framing_of[cid]
+            if fr not in proi:
+                raise ValueError(f"{pr['id']}: no ROI for framing {fr} of {cid}")
+            r = pm.ingest_clip(esk.clip_path(cid), cid, "train", pr["id"], fr, proi[fr])
             iv, cens = pm.intervals(r.strokes_t, r.extra["duration"])
-            rows.append({"clip_id": cid, "duration": r.extra["duration"], "n_strokes": int(len(r.strokes_t)),
+            rows.append({"clip_id": cid, "framing": fr, "duration": r.extra["duration"], "n_strokes": int(len(r.strokes_t)),
                          "strokes_t": np.round(r.strokes_t, 3).tolist(), "intervals": np.round(iv, 3).tolist(),
                          "censored_tail": cens, "threshold": r.threshold, "stab_px": r.stab_px,
                          "beat_hz": r.beat_hz, "beat_frac": r.beat_frac, "beat_amp": r.beat_amp,
@@ -87,7 +105,7 @@ def run(rois: dict, per_camera: int, seed: int, out_json: Path, write_parquet: b
         running = [x for x in rows if x["n_strokes"] >= RUNNING_MIN_STROKES]
         iv_all = np.concatenate([np.asarray(x["intervals"]) for x in rows]) if rows else np.zeros(0)
         summary["presses"].append({
-            "id": pr["id"], "camera": cam, "framing": pr["framing"], "roi_px": pr["roi_px"],
+            "id": pr["id"], "camera": cam, "rois": proi,
             "n_clips": len(rows), "n_running": len(running), "learned": len(running) >= LEARNED_MIN_CLIPS,
             "running_fraction": len(running) / len(rows) if rows else 0.0,
             "n_intervals": int(len(iv_all)),
