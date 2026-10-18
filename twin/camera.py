@@ -18,12 +18,20 @@ ASSUMED (a stated value, no data).
 2. **Frustum and visible floor.** A mover is seen only when it stands on its zone's floor polygon (site.yaml, the
    floor the observer believes visible) and its foot pixel lies inside the image of one of the zone's framings, in
    front of the camera. Zone 9 is the union of framings c9_f0 and c9_f1 (as in site.yaml): a point inside the traced
-   c9_f0 floor (twin/cal/site_trace_v1.json) is seen through c9_f0, else through c9_f1.
+   c9_f0 floor (twin/cal/site_trace_v1.json) is seen through c9_f0, else through c9_f1. A mover OFF the visible floor
+   (zone None, or out of its framings' floor frustum, e.g. a truncated person below the image bottom) within
+   OFFFLOOR_MAX_M = 5 m (ASSUMED) of a zone's floor polygon or press footprint, whose box overlaps one of that zone's
+   framing images, is an IMAGE-ONLY occluder: it has its own miss chain and visibility, occludes other movers and the
+   ram ROIs, but gives no floor detection (the observer models the visible floor only). Real zone-9 ROI occluders
+   stand there (twin/stat_v1_roi_occluders.json, TRAIN boxes over the ROI: P9a c9_f0 70 % of the feet in the
+   footprint, 23 % on the floor, 43 % cut by the image bottom; P9b c9_f1 70 % in the footprint, 30 % off the floor,
+   0 % on it).
 3. **Occlusion by footprints and movers (image space).** Each mover is a box from its foot circle to its height
    (person 1.75 m, forklift 2.2 m, robot 0.8 m; ASSUMED), each press a prism of its footprint (PRESS_H_M = 3.0 m,
    ASSUMED). The visible share of a mover's image box = 1 - the share covered by closer objects (raster). Visible
    share >= 0.8 (labels/RULES.md: "occluded" = more than ~20 % hidden): clean recall; 0.2-0.8: the occluded recall
-   (FITTED ratio occluded / clean, per camera); < 0.2: hidden.
+   (FITTED ratio occluded / clean, per camera); < 0.2: hidden. A mover inside a press footprint stands at that
+   press's working opening: that press's own prism does not hide it (ASSUMED).
 4. **Misses (FITTED, per camera).** A 2 Hz Gilbert chain per mover: stationary miss = 1 - clean recall (DEV labels,
    per camera x class, Jeffreys posterior mean: camera 9 person 27/27, camera 14 person 13/15; the forklift has
    labels on camera 14 only (11/17), used on both cameras, ASSUMED on camera 9; the robot uses the person value,
@@ -52,13 +60,18 @@ ASSUMED (a stated value, no data).
     TRAIN quantiles: "moving" while the press runs unfrozen and its ram moves (ram > 0 or a stroke starts this tick),
     "quiet" while it runs with the ram at rest, "idle" otherwise. Camera-14 presses never run in the footage: their
     moving / quiet pools are the pooled P9a + P9b pools (ASSUMED). The press is seen through the framing of its first
-    ram ROI. T-W6: when a mover's padded image box (ROI_PAD_FRAC) covers the ROI from in front of the press, the
-    sample is MISSING (NaN) if that mover is detected this tick, and stays MISSING for `hold_s` after the last such
+    ram ROI. T-W6: when a DETECTED mover's padded image box (ROI_PAD_FRAC) in the ROI's framing covers the ROI (any
+    depth, as the real ingest, which has no depth), the sample is MISSING (NaN) this tick, and stays MISSING for `hold_s` after the last such
     tick, in image space, whatever the occluder's floor position (as `occlusion.roi_missing_series` in the real
     ingest; the observer-side floor hold only arms on detections near the press zone). A blocked ROI outside that
     hold (the occluder missed on its first ticks, before any detection) reads the "idle" pool for a standing mover
     (fail-dangerous, as the real pipeline) or the "moving" pool for a walking one: the arrival leak, counted in
-    `stats["roi_blocked_unseen"]`. `MOTION_THR` (FITTED, Youden J) is the matching
+    `stats["roi_blocked_unseen"]`. DISCLOSED GAP (zone 9): the DAYGEN v1 path library has no point at a press (0 of
+    13,217 zone-9 points in a footprint, all on the visible floor), so in generated days no zone-9 mover stands where
+    the real occluders stand; replaying the library through this camera gives ROI-hit shares (unheld) of 0 % for P9a
+    and P9b against 29.3 % / 25.1 % in the TRAIN boxes (machines MISSING 38.5 % / 34.1 %); zone 14: 15-34 % against
+    10-19 % (twin/stat_v1_roi_occluders.json). The camera handles at-press movers (image-only occluders) once the
+    day generator places operators there (S3a). `MOTION_THR` (FITTED, Youden J) is the matching
     observer_live motion threshold.
 12. **hold_s (FITTED).** The smallest hold k (ticks) such that k + 1 consecutive ticks with the occluder missed in
     the image (chain miss, or the occluded-regime extra miss) have probability <= OCC_EPS, at the per-camera
@@ -116,6 +129,7 @@ MOVING_WIN = 4                                       # ticks (2 s) for the noisy
 LOST_TRACK_S = 3.0                                   # intercycle.perception.tracking.TrackerConfig.lost_track_s
 RASTER = (8, 16)                                     # occlusion raster (u, v samples) of a mover's image box
 CLASS_OUT = {"person": "person", "forklift": "vehicle", "robot": "other"}
+OFFFLOOR_MAX_M = 5.0                                 # ASSUMED: off-floor image occluders within this of a zone
 
 
 def load_params(path: str | Path = PARAMS_PATH) -> dict:
@@ -303,6 +317,18 @@ def _pip_px(u: float, v: float, poly: np.ndarray) -> bool:
     return point_in_polygon(u, v, [(float(a), float(b)) for a, b in poly])
 
 
+def _dist_poly(x: float, z: float, poly) -> float:
+    """Distance (m) from a plan point to a polygon (0 inside)."""
+    if point_in_polygon(x, z, poly):
+        return 0.0
+    p = np.asarray(poly, float).reshape(-1, 2)
+    a, b = p, np.roll(p, -1, axis=0)
+    ab = b - a
+    q = np.array([x, z], float)
+    t = np.clip(((q - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    return float(np.min(np.hypot(*(q - (a + t[:, None] * ab)).T)))
+
+
 def _bbox(pts: np.ndarray) -> tuple[float, float, float, float]:
     return float(pts[:, 0].min()), float(pts[:, 1].min()), float(pts[:, 0].max()), float(pts[:, 1].max())
 
@@ -426,15 +452,16 @@ class CameraStatV1:
             self.roi_vis[pid] = {self.cam_of_framing[fid]: (inside / area) if area > 0 else 0.0}
         self.press_centre = {p.id: np.asarray(p.footprint.value, float).mean(0) for p in site.presses}
         self.press_prism = {p.id: _poly_prism(p.footprint.value, PRESS_H_M) for p in site.presses}
+        self.zone_presses = {z.id: [p.id for p in site.presses if p.zone == z.id] for z in site.zones}
         self.tracks: dict[str, _Track] = {}
-        self._pboxes: dict[str, list[tuple[tuple, float]]] | None = None
+        self._pboxes: dict[str, list[tuple[tuple, float, str]]] | None = None
         self.hold_s = self._hold_s()
         self.hold_ticks = int(round(self.hold_s * self.hz))
         self.roi_last_hit: dict[str, int] = {}       # press -> last tick a DETECTED occluder covered its ROI (image)
         self.err_log: list[tuple[str, float, float]] | None = None   # tests: (mover, dx, dz) per true detection
         self.stats = {"ticks": 0, "true": 0, "seen": 0, "hidden": 0, "occluded": 0, "missed": 0, "gross": 0,
                       "fp": 0, "idsw": 0, "forklift_as_person_c9": 0, "roi_missing": 0, "roi_held": 0,
-                      "roi_blocked_unseen": 0}
+                      "roi_blocked_unseen": 0, "image_only": 0}
 
     # ---------------------------------------------------------------- fitted hold
     def _hold_s(self) -> float:
@@ -462,21 +489,42 @@ class CameraStatV1:
                 cand.append((fid, raw[0]))
         return cand[0] if cand else None
 
+    def _image_only(self, m: RealisedMover) -> tuple[str, str, tuple[float, float, float, float]] | None:
+        """(zone, framing, image box) of a mover OFF the visible floor (or out of its framings' floor frustum) that
+        stands within OFFFLOOR_MAX_M of a zone's floor polygon or press footprint (the nearest such zone) and whose
+        box (through the TRUE camera, every prism point in front) overlaps one of that zone's framing images; else
+        None. Such a mover can occlude the ram ROI and other movers in the image, but gives no floor detection."""
+        best: tuple[float, str] | None = None
+        for zid, zo in self.zones.items():
+            d = min([_dist_poly(m.x, m.z, zo.floor_polygon.value)]
+                    + [_dist_poly(m.x, m.z, self.presses[p].footprint.value) for p in self.zone_presses[zid]])
+            if d <= OFFFLOOR_MAX_M and (best is None or d < best[0]):
+                best = (d, zid)
+        if best is None:
+            return None
+        zid = best[1]
+        prism = _circle_prism(m.x, m.z, m.r, HEIGHT_M[m.cls])
+        for fid in self.zones[zid].framings:
+            b = self._box(fid, prism)
+            if b is not None and b[2] > 0 and b[0] < IMG_W and b[3] > 0 and b[1] < IMG_H:
+                return zid, fid, b
+        return None
+
     def _box(self, fid: str, prism: np.ndarray) -> tuple[float, float, float, float] | None:
         raw, ok = self.true[fid].project(prism)
         if not ok.all():
             return None
         return _bbox(raw)
 
-    def _press_boxes(self) -> dict[str, list[tuple[tuple, float]]]:
-        """Image boxes and depths of the press prisms per framing (static: computed once per camera)."""
+    def _press_boxes(self) -> dict[str, list[tuple[tuple, float, str]]]:
+        """Image boxes, depths and ids of the press prisms per framing (static: computed once per camera)."""
         if self._pboxes is None:
-            out: dict[str, list[tuple[tuple, float]]] = {}
+            out: dict[str, list[tuple[tuple, float, str]]] = {}
             for pid, prism in self.press_prism.items():
                 for fid in self.zones[self.presses[pid].zone].framings:
                     b = self._box(fid, prism)
                     if b is not None:
-                        out.setdefault(fid, []).append((b, self._depth(fid, self.press_centre[pid])))
+                        out.setdefault(fid, []).append((b, self._depth(fid, self.press_centre[pid]), pid))
             self._pboxes = out
         return self._pboxes
 
@@ -538,22 +586,27 @@ class CameraStatV1:
     def observe(self, tick: RealisedTick) -> Detections:
         k = int(round(tick.t * self.hz))
         self.stats["ticks"] += 1
-        seen = []                                                       # (mover, framing, raw foot, box, depth)
+        seen = []                                       # (mover, zone, framing, raw foot | None, box, depth)
         boxes: dict[str, list[tuple[tuple, float, str]]] = {}            # framing -> [(box, depth, id)]
         for m in tick.movers:
-            if m.zone is None or m.zone not in self.zones:
-                continue
-            if not point_in_polygon(m.x, m.z, self.zones[m.zone].floor_polygon.value):
-                continue
-            fo = self._framing_of(m.zone, m.x, m.z)
-            if fo is None:
-                continue
-            fid, raw = fo
-            box = self._box(fid, _circle_prism(m.x, m.z, m.r, HEIGHT_M[m.cls]))
-            if box is None:
-                continue
+            on_floor = (m.zone is not None and m.zone in self.zones
+                        and point_in_polygon(m.x, m.z, self.zones[m.zone].floor_polygon.value))
+            fo = self._framing_of(str(m.zone), m.x, m.z) if on_floor else None
+            if fo is not None:
+                fid, raw = fo
+                box = self._box(fid, _circle_prism(m.x, m.z, m.r, HEIGHT_M[m.cls]))
+                if box is None:
+                    continue
+                zid: str = str(m.zone)
+            else:                                        # off the visible floor: an image-only occluder (item 3)
+                io = self._image_only(m)
+                if io is None:
+                    continue
+                zid, fid, box = io
+                raw = None
+                self.stats["image_only"] += 1
             dep = self._depth(fid, (m.x, m.z))
-            seen.append((m, fid, raw, box, dep))
+            seen.append((m, zid, fid, raw, box, dep))
             boxes.setdefault(fid, []).append((box, dep, m.id))
         press_boxes = self._press_boxes()
         cls_l: list[str] = []
@@ -565,17 +618,22 @@ class CameraStatV1:
         zone_l: list[str] = []
         detected: dict[str, bool] = {}
         present = set()
-        for m, fid, raw, box, dep in seen:
+        for m, zid, fid, raw, box, dep in seen:
             present.add(m.id)
-            self.stats["true"] += 1
-            cam = self.cam_of_zone[str(m.zone)]
+            if raw is not None:
+                self.stats["true"] += 1
+            cam = self.cam_of_zone[zid]
             cn = self.noise[(cam, m.cls)]
             g = self._rng(f"cam:{m.id}", k)
             g_u = g.random(5)                                   # miss, occlusion, gross, class, id switch
             g_n = g.standard_normal(5)                          # pixel u, v; floor x, z; radius
             rr, aa = float(g.uniform(self.gross_lo, self.gross_hi)), float(g.uniform(0.0, 2 * math.pi))
             tk = self._advance(m, cn, k, g_u, g_n, rr, aa)
-            others = [(b, d) for b, d, oid in boxes.get(fid, []) if oid != m.id] + press_boxes.get(fid, [])
+            # a mover inside a press footprint stands at that press's working opening: the press's own prism box does
+            # not hide it (ASSUMED; the real zone-9 ROI occluders' feet project into the footprint and are detected)
+            others = [(b, d) for b, d, oid in boxes.get(fid, []) if oid != m.id] + [
+                (b, d) for b, d, pid in press_boxes.get(fid, [])
+                if not point_in_polygon(m.x, m.z, self.presses[pid].footprint.value)]
             vis = self._visible_share(fid, box, dep, others)
             if vis < VIS_HIDDEN:
                 self.stats["hidden"] += 1
@@ -591,6 +649,8 @@ class CameraStatV1:
                     detected[m.id] = False
                     continue
             detected[m.id] = True
+            if raw is None:
+                continue                                        # image-only: occludes the ROI, no floor detection
             # class
             if m.cls == "forklift" and cam != 14:
                 out_cls = "person"                              # no vehicle class on camera 9: the driver is seen
@@ -634,7 +694,7 @@ class CameraStatV1:
             rs.append(max(m.r + 0.03 * float(g_n[4]), 0.1))
             hs.append(heading)
             mv.append(moving)
-            zone_l.append(str(m.zone))
+            zone_l.append(zid)
             self.stats["seen"] += 1
         for mid in list(self.tracks):                                   # movers gone from view: the chain restarts
             if mid not in present and k - self.tracks[mid].k_last > 1:
@@ -692,16 +752,24 @@ class CameraStatV1:
             fid, (r0, s0, r1, s1) = self.roi[p.id]
             dep_p = self._depth(fid, self.press_centre[p.id])
             u = float(self._rng(f"cam_motion:{p.id}", k).random())
-            blockers = []
-            for m, mfid, _raw, box, dep in seen:
-                if mfid != fid or dep >= dep_p:
+            over, blockers = [], []                     # boxes over the ROI (any depth) / those in front of the press
+            pz = self.presses[p.id].zone
+            for m, zid, mfid, _raw, box, dep in seen:
+                if zid != pz:
                     continue
+                if mfid != fid:                          # the mover's box in the ROI's framing (zone 9: two framings)
+                    b = self._box(fid, _circle_prism(m.x, m.z, m.r, HEIGHT_M[m.cls]))
+                    if b is None:
+                        continue
+                    box, dep = b, self._depth(fid, (m.x, m.z))
                 x0, y0, x1, y1 = box
                 pu, pv = ROI_PAD_FRAC * (x1 - x0), ROI_PAD_FRAC * (y1 - y0)
                 if x0 - pu <= r1 and x1 + pu >= r0 and y0 - pv <= s1 and y1 + pv >= s0:
-                    blockers.append(m)
+                    over.append(m)
+                    if dep < dep_p:
+                        blockers.append(m)
             pool = self._pool(p)
-            if any(detected.get(m.id, False) for m in blockers):
+            if any(detected.get(m.id, False) for m in over):    # a detected box over the ROI, as the real ingest
                 out[p.id] = math.nan                              # T-W6: a detected occluder makes the ROI MISSING
                 self.roi_last_hit[p.id] = k
                 self.stats["roi_missing"] += 1

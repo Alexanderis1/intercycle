@@ -337,6 +337,48 @@ def test_image_space_hold_covers_occluder_outside_the_floor_zone():
     assert all(np.isfinite(v) for v, kk in zip(vals, k_free) if kk - last > cam.hold_ticks)
 
 
+def test_off_floor_person_at_the_press_occludes_the_zone9_roi():
+    """Where the real zone-9 ROI occluders stand (twin/stat_v1_roi_occluders.json: TRAIN foot points of the boxes over
+    the P9a / P9b ROIs lie in or at the press footprint, off the visible floor): a twin person standing there (zone
+    None, off every floor polygon) is an image-only occluder. It makes the ROI MISSING while detected (held after),
+    and gives no floor detection."""
+    pr = [dict(id=p.id, state="running", ram=0.5, stroke=False, freeze=False) for p in SITE.presses]
+    for pid in ("P9a", "P9b"):
+        cam = CAM.CameraStatV1(SITE, WORLD, 1)
+        p = cam.presses[pid]
+        fid, (r0, s0, r1, s1) = cam.roi[pid]
+        fp = np.asarray(p.footprint.value, float)
+        g = np.random.default_rng(1)
+        spot = None
+        for _ in range(20000):
+            x = float(g.uniform(fp[:, 0].min() - 2, fp[:, 0].max() + 2))
+            z = float(g.uniform(fp[:, 1].min() - 2, fp[:, 1].max() + 2))
+            if any(point_in_polygon(x, z, zz.floor_polygon.value) for zz in SITE.zones):
+                continue
+            if not point_in_polygon(x, z, p.footprint.value):    # at the press (70 % of the real occluders' feet)
+                continue
+            b = cam._box(fid, CAM._circle_prism(x, z, 0.3, CAM.HEIGHT_M["person"]))
+            if b is None:
+                continue
+            pu, pv = 0.15 * (b[2] - b[0]), 0.15 * (b[3] - b[1])
+            if b[0] - pu <= r1 and b[2] + pu >= r0 and b[1] - pv <= s1 and b[3] + pv >= s0:
+                spot = (x, z)
+                break
+        assert spot is not None, pid
+        vals, ndet = [], 0
+        for k in range(300):
+            mv = [dict(id="op", cls="person", zone=None, x=spot[0], z=spot[1], heading=0.0, speed=0.0, r=0.3)]
+            d = cam.observe(tick(10.0 + k / 2.0, mv, pr))
+            ndet += len(d)
+            vals.append(d.zone_motion[pid])
+        assert ndet == 0                                     # off the visible floor: no floor detection
+        assert cam.stats["image_only"] == 300
+        nan = np.isnan(vals)
+        assert nan.mean() > 0.9, (pid, nan.mean())         # MISSING while detected, held across misses
+        first = int(np.argmax(nan))
+        assert nan[first:].all()
+
+
 def test_hold_sized_from_fitted_bursts():
     cam = CAM.CameraStatV1(SITE, WORLD, 1)
     assert cam.hold_s >= OM.OCC_HOLD_S          # the occluded regime misses more often than the shim's iid misses
