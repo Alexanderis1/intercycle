@@ -418,6 +418,12 @@ class CameraStatV1:
                 r0 = p.ram_roi.value[0]
                 self.roi[p.id] = (r0.framing, _bbox(np.asarray(r0.polygon_px, float)))
         self.energy = en
+        # zone_vis of an ROI-sourced press = the share of its ROI box inside its framing's image (ObsAdapter roi_vis)
+        self.roi_vis: dict[str, dict[int, float]] = {}
+        for pid, (fid, (r0, s0, r1, s1)) in self.roi.items():
+            area = max(r1 - r0, 0.0) * max(s1 - s0, 0.0)
+            inside = max(min(r1, IMG_W) - max(r0, 0.0), 0.0) * max(min(s1, IMG_H) - max(s0, 0.0), 0.0)
+            self.roi_vis[pid] = {self.cam_of_framing[fid]: (inside / area) if area > 0 else 0.0}
         self.press_centre = {p.id: np.asarray(p.footprint.value, float).mean(0) for p in site.presses}
         self.press_prism = {p.id: _poly_prism(p.footprint.value, PRESS_H_M) for p in site.presses}
         self.tracks: dict[str, _Track] = {}

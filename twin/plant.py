@@ -370,12 +370,17 @@ class ObsAdapter:
     `zone_ids` in order, each camera's visible floor = its zone's floor polygon), per the mapping.py §v2 contract:
     zone_vis = the share of the zone's floor (rect + ZONE_MARGIN_M) that a camera with cam_floor_ok sees (`floor_share`)
     minus the share hidden by person / vehicle detections, and zone_motion NaN where zone_vis < ZONE_VIS_MIN or an
-    occluder touches the zone (held, T-W6), through `mapping.ObsV2Converter`. The camera's own NaN (occlusion seen in
-    truth, T-W6) is kept. The robot is class OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold):
-    call it on every tick in time order."""
+    occluder touches the zone (held, T-W6), through `mapping.ObsV2Converter`. A press whose zone_motion comes from an
+    image ram ROI (`roi_vis`, stat_v1's `CameraStatV1.roi_vis`: press -> {camera: share of the ROI inside its
+    framing's image}) is seen through that ROI, not through the floor: its row of the share matrix is the ROI's
+    visibility (lead decision, S3b fix1), so zone_vis = 1 while the ROI's camera is up and the ROI is in the image,
+    and the walkable-floor share of rect + margin (0-0.40 on twin/site.yaml) no longer forces NaN. Presses without an
+    ROI keep the floor share. The camera's own NaN (ROI occlusion in image space, T-W6) is kept. The robot is class
+    OBS_OTHER (never PERSON: it must not enter L3). Stateful (the T-W6 hold): call it on every tick in time order."""
 
     def __init__(self, site: Site, press_ids: list[str] | None = None, zone_ids: list[str] | None = None,
-                 hold_s: float = OM.OCC_HOLD_S):
+                 *, hold_s: float, roi_vis: dict[str, dict[int, float]] | None = None):
+        # hold_s has no default: it is the camera model's own fitted hold (stat_v1 `hold_s`), never a silent fallback
         self.press_ids = list(press_ids) if press_ids else [p.id for p in site.presses]
         self.zone_ids = list(zone_ids) if zone_ids else [z.id for z in site.zones]
         zones = {z.id: z for z in site.zones}
@@ -383,6 +388,13 @@ class ObsAdapter:
         self.cams = [zones[z].camera for z in self.zone_ids]
         self.rects = [_bbox(presses[p].danger_polygon.value, presses[p].dilation_m.value) for p in self.press_ids]
         self.share = floor_share(self.rects, [zones[z].floor_polygon.value for z in self.zone_ids])
+        for i, pid in enumerate(self.press_ids):
+            if roi_vis and pid in roi_vis:
+                row = np.zeros(len(self.zone_ids))
+                for cam, s in roi_vis[pid].items():
+                    if cam in self.cams:                 # an ROI camera outside `zone_ids` is not seen: row 0, NaN
+                        row[self.cams.index(cam)] = float(s)
+                self.share[i] = row
         self.conv = OM.ObsV2Converter(self.share, self.rects, hold_s=hold_s)
 
     def __call__(self, d: Detections) -> OM.Observation:
@@ -487,7 +499,7 @@ class Plant:
         self.written = -math.inf
         self.camera = make_camera(self.site, self.world_seed, self.day)
         self.adapter = ObsAdapter(self.site, p.get("obs_presses"), p.get("obs_zones"),
-                                  hold_s=float(getattr(self.camera, "hold_s", OM.OCC_HOLD_S)))
+                                  hold_s=float(self.camera.hold_s), roi_vis=self.camera.roi_vis)
         self.obs_path = self.run_dir / "obs_v2.jsonl"
         self._obs_f = open(self.obs_path, "w", encoding="utf-8", newline="\n")
         self._obs_buf: deque[OM.Observation] = deque()            # computed, not yet delivered (t > sim time)

@@ -375,3 +375,73 @@ def test_plant_uses_stat_v1_and_its_hold():
     assert isinstance(cam, CAM.CameraStatV1)
     ad = plant.ObsAdapter(SITE, hold_s=cam.hold_s)
     assert ad.conv.hold_s == cam.hold_s
+    with pytest.raises(TypeError):
+        plant.ObsAdapter(SITE)                         # type: ignore[call-arg]  # no default hold (fail closed)
+
+
+def _site_v1_plant(tmp_path, world: int, seconds: float, intents=(), segments=()):
+    """A twin plant on twin/site.yaml (the real site: 6 presses, all running), with a safety file derived from
+    twin/safety.yaml for the site's id and presses (twin/safety.yaml covers site_v0 only)."""
+    import yaml
+
+    from twin import daygen_stub
+    from twin import plant
+    from twin.schemas.dayscript import DayScript, PressEvent
+
+    pids = [p.id for p in SITE.presses]
+    sd = yaml.safe_load((CAM.REPO / "twin" / "safety.yaml").read_text(encoding="utf-8"))
+    sd["site_id"] = SITE.site_id
+    sd["presses"] = [dict(sd["presses"][0], press=pid) for pid in pids]
+    sp = tmp_path / "safety_v1.yaml"
+    sp.write_text(yaml.safe_dump(sd), encoding="utf-8")
+    t0 = 86_400.0
+    ev = [PressEvent(press=pid, kind="running", t0=0.0, t1=600.0, period_s=2.0, phase_s=0.3, cause="production",
+                     source="prior") for pid in pids]
+    ds = DayScript(contract="twin.day_script/1", generator="test", generator_version="0",
+                   rng_scheme=daygen_stub.RNG_SCHEME, world_seed=world, day=9, t0_s=t0, duration_s=600.0,
+                   zones=["z9", "z14"], presses=pids, press_events=ev, mover_intents=list(intents),
+                   segments=list(segments))
+    dp = tmp_path / f"w{world}.day_script.json"
+    dp.write_text(json.dumps(ds.model_dump(mode="json")), encoding="utf-8")
+    cfg = {"seconds": seconds, "sim": "fake",
+           "plant": {"site": str(CAM.REPO / "twin" / "site.yaml"), "safety": str(sp), "day_script": str(dp),
+                     "run_id": f"w{world}", "zone": "z9", "world": world, "world_split": "dev",
+                     "condition": "learned", "code": {"head": "test"}, "plant_t0": t0,
+                     "run_dir": str(tmp_path / "runs" / f"w{world}"), "allow_short_mission": True}}
+    pl = plant.make(cfg)
+    st = {"pos_w": [-50.0, -50.0, 0.6], "quat_wxyz": [1.0, 0.0, 0.0, 0.0], "v_w": [0.0, 0.0, 0.0],
+          "omega_b": [0.0, 0.0, 0.0]}                  # the robot parked far off both zones
+    k = 0
+    while round((k + 1) * 0.1, 6) <= seconds + 1e-9:
+        t = round((k + 1) * 0.1, 6)
+        pl.poses(t)
+        pl.after_step(t, st, [])
+        pl.frame_extras(t)
+        k += 1
+    pl.finish()
+    obs = [OM.obs_from_dict(json.loads(ln)) for ln in (pl.run_dir / "obs_v2.jsonl").open(encoding="utf-8")]
+    return pl, obs
+
+
+@pytest.mark.parametrize("world", [3, 7])
+def test_site_v1_plant_empty_floor_running_presses_give_finite_zone_motion(tmp_path, monkeypatch, world):
+    """End to end on the real site: camera stat_v1 + twin/site.yaml + ObsAdapter. With an empty floor and every press
+    running, zone_motion is finite on most ticks for every press (the ROI's visibility, not the walkable-floor share
+    of rect + margin (0-0.40 here), sets zone_vis), and the timing signal reaches obs_v2.jsonl."""
+    monkeypatch.setenv("INTERCYCLE_TRUTH_LOG", str(tmp_path / "truth_access.log"))
+    pl, obs = _site_v1_plant(tmp_path, world, 60.0)
+    assert len(obs) >= 100
+    zm = np.array([np.asarray(o.zone_motion, float) for o in obs])
+    zv = np.array([np.asarray(o.zone_vis, float) for o in obs])
+    fin = np.isfinite(zm).mean(0)
+    assert (fin > 0.9).all(), dict(zip(pl.adapter.press_ids, fin))
+    assert (zv == 1.0).all()
+    # the walkable-floor share alone would have forced NaN on every press (ZONE_VIS_MIN = 1)
+    from twin import plant
+    fl = plant.floor_share(pl.adapter.rects, [z.floor_polygon.value for z in SITE.zones])
+    assert (fl.sum(1) < OM.ZONE_VIS_MIN).all()
+    # a running press reads above the fitted motion threshold far more often than an idle press does (fpr_idle 0.12)
+    fpr = float(CAM._P["energy"]["motion_thr"]["fpr_idle"])
+    for j, pid in enumerate(pl.adapter.press_ids):
+        v = zm[np.isfinite(zm[:, j]), j]
+        assert float(np.mean(v > CAM.MOTION_THR)) > 2.5 * fpr, pid
