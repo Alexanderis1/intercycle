@@ -36,9 +36,54 @@ class TargetPlan:
     expanded: int
 
 
+GRAPH_CONTRACT = "twin.sitegraph/1"
+
+
+class GraphData:
+    """The SiteGraph interface (scn, pos, adj, targets, inspect_pose, mission) rebuilt from a twin zone's
+    `sitegraph.json` (twin.compile.graph_json). The scenario is the zone's compiled scenario.yaml (the public site
+    map). Wait poses are final (`wait_poses_final`): TimingCore does not move them. Fails closed on another contract,
+    a zone graph whose machines are not the scenario's, or a mission order naming an unknown target."""
+
+    def __init__(self, scn, d: dict):
+        if d.get("contract") != GRAPH_CONTRACT:
+            raise ValueError(f"sitegraph contract {d.get('contract')!r} != {GRAPH_CONTRACT!r}")
+        self.scn = scn
+        self.zone = str(d["zone"])
+        self.wait_poses_final = bool(d.get("wait_poses_final", False))
+        self.pos: dict[str, tuple[float, float]] = {n: (float(p[0]), float(p[1])) for n, p in d["pos"].items()}
+        self.adj: dict[str, dict[str, float]] = {a: {b: float(w) for b, w in nb.items()} for a, nb in d["adj"].items()}
+        self.targets = [Target(str(t["id"]), str(t["kind"]), str(t["node"]),
+                               None if t.get("machine") is None else str(t["machine"]), float(t["dwell_s"]))
+                        for t in d["targets"]]
+        self.inspect = {k: (float(v[0]), float(v[1])) for k, v in d["inspect"].items()}
+        self.face = {k: (float(v[0]), float(v[1])) for k, v in d.get("face", {}).items()}
+        self._order = [str(i) for i in d["mission_order"]]
+        ids = {t.id for t in self.targets}
+        machines = {m.id for m in scn.machines}
+        bad = [t.id for t in self.targets if t.machine is not None and t.machine not in machines]
+        if bad or set(self._order) - ids or any(t.node not in self.pos for t in self.targets):
+            raise ValueError(f"sitegraph {self.zone}: targets {bad or sorted(set(self._order) - ids)} do not match "
+                             "the scenario / graph")
+
+    @classmethod
+    def load(cls, scn, path: str) -> GraphData:
+        import json
+
+        with open(path, encoding="utf-8") as f:
+            return cls(scn, json.load(f))
+
+    def inspect_pose(self, target: Target) -> tuple[float, float]:
+        return self.inspect[target.id]
+
+    def mission(self) -> list[Target]:
+        by_id = {t.id: t for t in self.targets}
+        return [by_id[i] for i in self._order]
+
+
 @dataclass
 class TimingCore:
-    graph: SiteGraph
+    graph: SiteGraph | GraphData
     speed: float = 0.5                     # nominal walking speed for edge durations (m/s)
     dwell_s: float = 4.0
     margin_s: float = 1.0
@@ -51,19 +96,29 @@ class TimingCore:
 
     @classmethod
     def from_scenario(cls, scn, **kw) -> TimingCore:
+        """Body-shop mode: the provisioned body-shop SiteGraph. Twin mode uses `from_graph_file`."""
         core = cls(SiteGraph(scn), **kw)
+        core._build()
+        return core
+
+    @classmethod
+    def from_graph_file(cls, scn, path: str, **kw) -> TimingCore:
+        """Twin mode (PLAN_TWIN S1b, R-W10): the zone's compiled TwinSiteGraph handed over as data (`sitegraph.json`,
+        written by twin/build_worlds.py next to scenario.yaml); never the body-shop graph."""
+        core = cls(GraphData.load(scn, path), **kw)
         core._build()
         return core
 
     def _build(self) -> None:
         g = self.graph
+        final = bool(getattr(g, "wait_poses_final", False))
         for tg in g.targets:
             if tg.kind != "machine":
                 continue
             ix, iz = g.inspect_pose(tg)
             wx, wz = g.pos[tg.node]
             m = g.scn.machine(tg.machine)
-            if abs(iz - wz) > 1e-6:                      # push the wait pose out along the entry line
+            if not final and abs(iz - wz) > 1e-6:        # push the wait pose out along the entry line (body shop)
                 edge = m.rect[1] if iz > wz else m.rect[3]
                 g.pos[tg.node] = (wx, edge - math.copysign(self.wait_offset_m, iz - wz))
             n = f"IN_{tg.machine}"
@@ -104,6 +159,10 @@ class TimingCore:
 
     def face_psi(self, tg: Target) -> float:
         wx, wz = self.graph.pos[tg.node]
+        face = getattr(self.graph, "face", None)
+        if face and tg.id in face:                       # twin graph: face the checkpoint's target point
+            fx, fz = face[tg.id]
+            return math.atan2(fz - wz, fx - wx)
         if tg.machine is not None:
             m = self.graph.scn.machine(tg.machine)
             return math.atan2(m.z - wz, m.x - wx)

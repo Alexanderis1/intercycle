@@ -45,19 +45,17 @@ BODY_SHOP_BUILDERS = {"SiteGraph", "build_rects"}
 KNOWN = {
     ("intercycle/observer/mapping.py", "data_hall"):
         "S4: _Camera floor (l.605) and build_spec (l.1182) read scn.data_hall['x'][1]; use scn.site_extent[2]",
-    ("ros2/intercycle_nav/intercycle_nav/masks.py", "data_hall"):
-        "S3b: Masks.from_scenario (l.196) builds ext from scn.data_hall; use ext = scn.site_extent",
 }
 # (file, body-shop reach) -> owner and patch: the SiteGraph / build_rects rule applied to the SHARED modules.
 KNOWN_REACH = {
+    # Twin mode no longer reaches it (S1a fix1): TimingCore.from_graph_file builds the core from the zone's
+    # sitegraph.json (twin.compile.graph_json -> timing.GraphData), and timing_planner refuses a twin scenario without
+    # -p sitegraph. What is left is the BODY-SHOP path, which still builds SiteGraph(scn):
     ("ros2/intercycle_nav/intercycle_nav/timing.py", "SiteGraph"):
-        "S1b: TimingCore.from_scenario (l.51-52) builds the body-shop SiteGraph(scn) (CROSS_X nodes); twin mode: "
-        "from_scenario -> TimingCore(compiled_zone.graph)._build(); type TimingCore.graph (l.39) with a SiteGraph-"
-        "interface Protocol (scn, pos, adj, targets, inspect_pose, mission) and import only Target (l.22)",
+        "S1b: body-shop path only: TimingCore.from_scenario builds SiteGraph(scn); to remove the token, ship the "
+        "body-shop graph as data too (GraphData) and import only Target",
     ("ros2/intercycle_nav/intercycle_nav/timing_planner.py", "TimingCore.from_scenario"):
-        "S1b: TimingPlanner (l.55) builds its core with TimingCore.from_scenario(scn); twin mode: build it as "
-        "TimingCore(<the zone's compiled site graph>, ...)._build(), the graph handed over as data via run_cfg "
-        "(intercycle_nav never imports twin, tests/test_no_truth_import.py TWIN_FREE)",
+        "S1b: body-shop path only (no -p sitegraph): TimingCore.from_scenario(scn); twin zones use from_graph_file",
 }
 
 

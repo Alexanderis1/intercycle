@@ -11,6 +11,8 @@ writes, for every zone of the site, `<out>/<zone>/`:
   map.pgm/.yaml   the Nav2 occupancy map (0.1 m) rasterised from the same rects
   world.json      world.py's metadata (extent, dock, frames)
   cameras.json    per framing: the camera placement compile used and its focal length (fitted from H, or the prior)
+  sitegraph.json  the zone's TwinSiteGraph as data (twin.compile.graph_json): the robot-side timing layer builds its
+                  SiteGraph from it (intercycle_nav.timing.GraphData; the robot never imports twin)
   inputs.json     the repo-relative paths, sha256 and stub flag of the site / dynamics / tasks files it was built from
 
 Unseen floor is a wall in both the USD and the map, because both come from the same StaticMap.rects() over the
@@ -33,7 +35,8 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-from twin.compile import TWIN, CompileError, CompiledZone, compile_paths, default_inputs, is_stub, scenario_yaml
+from twin.compile import (TWIN, CompileError, CompiledZone, compile_paths, default_inputs, graph_json, is_stub,
+                          scenario_yaml)
 from twin.schemas.prereg import SplitRow
 
 _SIM_PKG = Path(__file__).resolve().parents[1] / "ros2" / "intercycle_sim"
@@ -44,7 +47,7 @@ from intercycle_sim import world as W  # noqa: E402
 
 log = logging.getLogger(__name__)
 FILES = ("scenario.yaml", "boxes.json", "static.usda", "mesh.npz", "map.pgm", "map.yaml", "world.json", "inputs.json",
-         "cameras.json")
+         "cameras.json", "sitegraph.json")
 REPO = TWIN.parent
 
 
@@ -85,6 +88,7 @@ def build(site: str | Path, dynamics: str | Path, tasks: str | Path, out: str | 
         files = zone_files(cz, scn_path)
         files["inputs.json"] = _input_record({"site": site, "dynamics": dynamics, "tasks": tasks})
         files["cameras.json"] = (json.dumps([c.as_json() for c in cz.cameras.values()], indent=2) + "\n").encode()
+        files["sitegraph.json"] = (json.dumps(graph_json(cz.graph), indent=1) + "\n").encode()
         W.write_world(files, str(d))
         written[zid] = d
     return written

@@ -198,7 +198,7 @@ def test_committed_world_matches_a_fresh_build_and_walls_unseen_floor(d, tmp_pat
         assert B.text_sha256(p) == inputs[k]["sha256"], f"{d.name}: {p} changed since the build; re-run the build"
     fresh = B.build(paths["site"], paths["dynamics"], paths["tasks"], tmp_path, _split_for_tests=TRAIN0)[d.name]
     for name in ("scenario.yaml", "boxes.json", "static.usda", "map.yaml", "world.json", "inputs.json", "cameras.json",
-                 "map.pgm"):
+                 "map.pgm", "sitegraph.json"):
         a, b = (d / name).read_bytes(), (fresh / name).read_bytes()
         if name != "map.pgm":
             a, b = a.replace(b"\r\n", b"\n"), b.replace(b"\r\n", b"\n")

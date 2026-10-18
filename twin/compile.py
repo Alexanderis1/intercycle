@@ -373,6 +373,7 @@ class TwinSiteGraph:
         self.targets: list[Target] = []
         self.inspect: dict[str, tuple[float, float]] = {}    # target id -> capture pose (x, z)
         self.yaw: dict[str, float] = {}                      # target id -> capture yaw (plan yaw)
+        self.face: dict[str, tuple[float, float]] = {}       # target id -> the checkpoint's target point (x, z)
         self._floor = [np.array(p, float) for p in floor]
         self._floor_poly = list(floor)
         self._footprints = list(footprints)
@@ -428,6 +429,7 @@ class TwinSiteGraph:
         cand = sorted(cp.candidate_poses, key=lambda c: _POSE_RANK[c.source])[0]
         px, pz = cand.pose.x, cand.pose.z
         self.inspect[cp.id], self.yaw[cp.id] = (px, pz), cand.pose.yaw
+        self.face[cp.id] = (float(cp.target_xzh[0]), float(cp.target_xzh[1]))
         if cp.inside_danger:
             m = self.scn.machine(cp.press) if cp.press else None
             if m is None:
@@ -494,6 +496,24 @@ class TwinSiteGraph:
         """One inspection round in the zone's fixed mission order (tasks.yaml)."""
         by_id = {t.id: t for t in self.targets}
         return [by_id[i] for i in self._order]
+
+
+GRAPH_CONTRACT = "twin.sitegraph/1"
+
+
+def graph_json(g: TwinSiteGraph) -> dict:
+    """The zone's TwinSiteGraph as data (sitegraph.json, shipped with the world files): what the robot-side timing
+    layer (intercycle_nav.timing.GraphData) rebuilds the SiteGraph interface from, since intercycle_nav never imports
+    twin. Wait poses are final (generated along the target normal, R-W10): the robot side must not move them.
+    Edge weights are seconds at the scenario's robot speed; `face` is each checkpoint's target point (x, z)."""
+    return {"contract": GRAPH_CONTRACT, "zone": g.zone, "wait_poses_final": True,
+            "pos": {n: [float(x), float(z)] for n, (x, z) in g.pos.items()},
+            "adj": {a: {b: float(w) for b, w in nb.items()} for a, nb in g.adj.items()},
+            "targets": [{"id": t.id, "kind": t.kind, "node": t.node, "machine": t.machine, "dwell_s": float(t.dwell_s)}
+                        for t in g.targets],
+            "inspect": {k: [float(v[0]), float(v[1])] for k, v in g.inspect.items()},
+            "face": {k: [float(v[0]), float(v[1])] for k, v in g.face.items()},
+            "mission_order": list(g._order)}
 
 
 # ------------------------------------------------------------------------------------------------ scenario

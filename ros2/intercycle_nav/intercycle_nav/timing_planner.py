@@ -70,15 +70,24 @@ class Planner:
         self.entry_slack = float(dp("entry_slack_s", 3.0).value)       # entry deadline = enter_s + slack        # exit speed (m/s); 0 = exit with a NavigateToPose goal
         sp = dp("scenario", "").value
         scn = S.load(sp) if sp else S.load()
-        self.core = TimingCore.from_scenario(scn, speed=float(dp("speed_mps", 0.5).value),
-                                             enter_s=float(dp("enter_s", 5.0).value), exit_s=float(dp("exit_s", 6.5).value),
-                                             wait_offset_m=float(dp("wait_offset_m", 1.05).value),
-                                             dwell_s=float(dp("dwell_s", scn.inspection.dwell_s).value),
-                                             margin_s=float(dp("margin_s", scn.inspection.safety_margin_s).value))
+        # twin mode: the zone's compiled site graph as data (sitegraph.json next to the twin scenario); body shop: the
+        # provisioned body-shop graph. A twin scenario without its graph fails closed (no body-shop graph on a twin).
+        gp = str(dp("sitegraph", "").value)
+        twin = bool(sp) and float(scn.line.takt_s) == 0.0          # a twin zone has no line (twin/compile.py)
+        if twin and not gp:
+            raise ValueError(f"scenario {sp} is a twin zone: pass -p sitegraph:=<its sitegraph.json>")
+        kw = dict(speed=float(dp("speed_mps", 0.5).value), enter_s=float(dp("enter_s", 5.0).value),
+                  exit_s=float(dp("exit_s", 6.5).value), wait_offset_m=float(dp("wait_offset_m", 1.05).value),
+                  dwell_s=float(dp("dwell_s", scn.inspection.dwell_s).value),
+                  margin_s=float(dp("margin_s", scn.inspection.safety_margin_s).value))
+        self.core = TimingCore.from_graph_file(scn, gp, **kw) if gp else TimingCore.from_scenario(scn, **kw)
         self.cam = CameraGate(confirm_n=int(dp("camera_confirm_n", 2).value),
                               min_span_s=float(dp("camera_span_s", scn.inspection.local_check_latency_s).value))
         by_id = {t.id: t for t in self.core.graph.targets}
-        ids = [s.strip() for s in tl.split(",") if s.strip()] or [t.id for t in self.core.graph.mission() if t.kind == "machine"]
+        # default: the body shop's machine targets (racks excluded); a twin zone's whole mission (tasks.yaml order,
+        # press and point checkpoints)
+        ids = [s.strip() for s in tl.split(",") if s.strip()] or [t.id for t in self.core.graph.mission()
+                                                                   if gp or t.kind == "machine"]
         self.targets = [by_id[i] for i in ids]
         assert_no_truth()
         self.obs: dict | None = None

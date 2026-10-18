@@ -21,21 +21,32 @@ Pipeline (one record per step in <out>/slice_report.json; the process exits 1 if
                 the generated wait pose until the Observation shows the press stroking and then enters, so the
                 mission contains a robot-caused press stop for the propagation assertion. It is a wiring double, not
                 the learned policy, and its mission scores Y = 0 by design.
-              * --modal timing: the fake backend + Nav2 on Modal CPU (cloud/modal_isaac_robot.py fake path, cpu 4,
-                max_rtf 2) with the robot-side learned stack (observer_bridge + timing_planner on the twin scenario).
-              * --modal patrol: the same episode with send_goal.py driving Nav2 through the zone's graph nodes
-                (wiring check of the twin world + Nav2 + plant; no feed, no inspection events).
+              * --modal timing (step 6 proper, the gates' run): the fake backend + Nav2 on Modal CPU
+                (cloud/modal_isaac_robot.py fake path, cpu 4, max_rtf 2), 1 mission of 10 min in the LEARNED
+                condition: twin/broadcast_live.py runs the step-5 observer (it ingests the same 20 min of
+                Observation v2, then tails the mission's obs_v2.jsonl) and broadcasts its signed slow / fast / map
+                layers; observer_bridge verifies them with the episode keyring (fail closed) and builds the Nav2
+                masks; timing_planner runs SIPP on the zone's compiled TwinSiteGraph (sitegraph.json). Next to it,
+                in parallel, a no_map PROBE mission on the same stack (no feed, no masks: it enters on its own
+                camera's no-motion check) provides robot-caused press stops for the stop-in-Observation assertion
+                on the Modal path.
+              * --modal patrol: a WIRING check only (send_goal.py through the zone's graph nodes; no planner, no
+                feed, no inspection events); tagged slice_wiring_patrol_*, plant condition no_map, no metric.
   7. log      the plant writes summary.json and log.parquet (log.jsonl in the Isaac python); both are validated.
-  8. metric   the primary-metric JSON (twin.schemas.runs.PrimaryMetric) of the mission, validated against the
-              model and against the exported JSON schema (twin/schemas/json/primary_metric.schema.json).
+  8. metric   the primary-metric JSON (twin.schemas.runs.PrimaryMetric) of each mission, validated with jsonschema
+              against twin/schemas/json/primary_metric.schema.json and through the pydantic model.
 
 Assertions (PLAN_TWIN §4): the truth-allowlist and Isaac-dependency tests pass; signatures verify with an explicit
 keyring and fail closed; >= 1 inspection attempt; the metric JSON validates against its schema; a press stop caused
-by the robot appears in the Observation within 1 tick + latency.
+by the robot appears in the Observation within 1 tick + latency. With --modal timing each holds on the Modal runs
+too (attempt + metric on the learned mission, plus: its robot side verified map + slow + fast layers; the stop check
+on every robot-caused stop of the Modal missions, at least one required).
 
 Truth: this script is an ORCHESTRATOR (twin/truth_guard.py): it imports the plant and the generator to start them and
 never opens a truth file. Everything it checks is read from the non-truth outputs (obs_v2.jsonl, summary.json, the
-run log). The day event script is written by the generator and opened by the plant only.
+run log). The day event script is written by the generator and opened by the plant only; for the Modal plant it is
+read by twin/plant.py's day_script_payload (an allowlisted reader, through open_truth: logged) and written in the
+container into a plant-only dir (/root/plant/<tag>/), never into the world dir ($IC_WORLD) the robot side is given.
 """
 from __future__ import annotations
 
@@ -438,14 +449,27 @@ def mission_metric(run_dir: Path, planned: list[str], engine: str = "double") ->
 
 
 def check_metric_schema(pm: PrimaryMetric, path: Path) -> dict:
-    """The metric JSON round-trips through the model, and the exported JSON schema is the model's schema."""
+    """The metric JSON file validates against the JSON schema file twin/schemas/json/primary_metric.schema.json
+    (jsonschema, the schema's own draft), round-trips through the pydantic model, and the exported schema file is the
+    model's current schema (python -m twin.schemas)."""
+    import jsonschema
+    from jsonschema.validators import validator_for
+
     text = pm.model_dump_json(indent=1)
     path.write_text(text + "\n", encoding="utf-8")
-    PrimaryMetric.model_validate_json(path.read_text(encoding="utf-8"))
+    inst = json.loads(path.read_text(encoding="utf-8"))
     exported = json.loads((C.TWIN / "schemas" / "json" / "primary_metric.schema.json").read_text(encoding="utf-8"))
+    cls = validator_for(exported)
+    cls.check_schema(exported)
+    try:
+        cls(exported).validate(inst)
+    except jsonschema.ValidationError as e:
+        raise SliceError(f"{path.name} does not validate against primary_metric.schema.json: {e.message}") from None
+    PrimaryMetric.model_validate_json(path.read_text(encoding="utf-8"))
     if exported != json_schema("primary_metric"):
         raise SliceError("twin/schemas/json/primary_metric.schema.json is stale (python -m twin.schemas)")
-    return {"file": str(path), "validated": "pydantic PrimaryMetric + exported JSON schema in sync"}
+    return {"file": str(path), "validated": f"jsonschema {cls.__name__} on primary_metric.schema.json + pydantic "
+                                            "PrimaryMetric; exported schema in sync"}
 
 
 def check_stop_propagation(run_dir: Path, obs_path: Path, adapter: PL.ObsAdapter, thr: float) -> dict:
@@ -494,38 +518,38 @@ def run_guard_tests() -> dict:
 
 # ------------------------------------------------------------------------------------------------ Modal (step 6)
 
+# Modal missions. "timing" = step 6 proper: the LEARNED condition, the twin broadcaster (twin/broadcast_live.py: the
+# observer of step 5, learned on the same 20 min, tailing the mission's obs_v2.jsonl) signs slow / fast / map layers,
+# observer_bridge verifies them with the episode's keyring and builds the Nav2 masks, timing_planner (SIPP on the
+# zone's compiled TwinSiteGraph, sitegraph.json) runs the mission. "probe" = the same stack in condition no_map (no
+# feed, no masks: the robot enters on its own camera's no-motion check alone), run next to it on Modal so the
+# stop-in-Observation assertion is exercised on the Modal path by a robot-caused stop. "patrol" = a WIRING check only
+# (send_goal.py through the graph nodes; no planner, no feed, no inspection events), tagged as such.
+MODAL_PLANNERS = {"timing": ("learned", "learned"), "probe": ("no_map", "none"), "patrol": ("no_map", "")}
+REMOTE_PLANT_DIR = "/root/plant"     # = cloud/modal_isaac_robot.PLANT_DIR (outside $IC_WORLD; tests check)
+LEARN_OBS = "learn_obs.jsonl"        # = twin/broadcast_live.LEARN_FILE
+
+
 def modal_cfg(tag: str, paths: dict[str, Path], script_name: str, cz: C.CompiledZone, t0: float, zone: str,
               world: int, planner: str, max_rtf: float) -> dict:
-    """The episode cfg of the Modal fake-backend mission (intercycle_sim.episode.run_episode). The plant runs in the
-    container from the mounted repo (twin/ under REMOTE_REPO) and the day script shipped with the world files."""
+    """The episode cfg of one Modal fake-backend mission (intercycle_sim.episode.run_episode). The plant runs in the
+    container from the mounted repo (twin/ under REMOTE_REPO); its day script is a plant-only file (REMOTE_PLANT_DIR,
+    never in the world dir the robot side is given). Plant condition per MODAL_PLANNERS."""
+    if planner not in MODAL_PLANNERS:
+        raise SliceError(f"unknown Modal planner {planner!r}")
+    pcond, bcond = MODAL_PLANNERS[planner]
     rel = {k: Path(p).resolve().relative_to(REPO).as_posix() for k, p in paths.items()}
-    wdir = f"/tmp/ic_{tag}/world"                      # episode.run_episode writes the world files here
     pc = dict(site=f"{REMOTE_REPO}/{rel['site']}", safety=f"{REMOTE_REPO}/{rel['safety']}",
               tasks=f"{REMOTE_REPO}/{rel['tasks']}", dynamics=f"{REMOTE_REPO}/{rel['dynamics']}",
-              day_script=f"{wdir}/{script_name}", run_id=tag, zone=zone, world=world, world_split="dev",
-              condition="learned", code={"head": git_head()}, plant_t0=t0, allow_short_mission=True)
+              day_script=f"{REMOTE_PLANT_DIR}/{tag}/{script_name}", run_id=tag, zone=zone, world=world,
+              world_split="dev", condition=pcond, code={"head": git_head()}, plant_t0=t0, allow_short_mission=True)
     dock = cz.graph.pos["DOCK"]
     start = [float(dock[0]), float(dock[1]), 0.0]
     cfg: dict = {"tag": tag, "twin": True, "sim": "fake", "mode": "nav", "nav2": True, "seconds": MISSION_S,
                  "timeout_s": MISSION_S, "max_rtf": max_rtf, "start": start, "goal": start, "scenario": "scenario.yaml",
-                 "mover_source": "twin.plant:make", "plant": pc,
+                 "mover_source": "twin.plant:make", "plant": pc, "slice_planner": planner,
                  "nav2_cmd": "ros2 launch /root/ros2/intercycle_nav/launch/nav.launch.py map:=$IC_WORLD/map.yaml"}
-    from intercycle_nav.masks import scenario_ros_arg  # pyright: ignore[reportMissingImports]
-
-    arg = scenario_ros_arg(cfg)
-    if planner == "timing":
-        sock = "unix://$IC_WORK/observer.sock"
-        wait_vk = "for i in $(seq 1200); do [ -s $IC_WORK/observer_vk.txt ] && break; sleep 0.1; done; "
-        keyring = " -p keyring:=\\\"$(cat $IC_WORK/observer_vk.txt)\\\""
-        cfg["extra_launch"] = [f"{wait_vk}exec python3 -u -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true"
-                               f" -p condition:=learned -p feed:={sock} -p plant_t0:={t0}{keyring}{arg}"]
-        cfg["goal_cmd"] = (f"python3 -u -m intercycle_nav.timing_planner --ros-args -p use_sim_time:=true"
-                           f" -p condition:=learned -p plant_t0:={t0} -p init:=[{start[0]},{start[1]},{start[2]}]"
-                           f" -p mission_timeout_s:=100000.0 -p max_wait_s:=120.0 -p out:=$IC_WORK/goal.json{arg}")
-        from intercycle_eval.broadcaster import check_robot_scenario  # pyright: ignore[reportMissingImports]
-
-        check_robot_scenario(cfg)
-    else:
+    if planner == "patrol":
         nodes, here = [], "DOCK"
         for tg in cz.graph.mission():
             for n in shortest(cz.graph.adj, here, tg.node)[1:]:
@@ -537,28 +561,101 @@ def modal_cfg(tag: str, paths: dict[str, Path], script_name: str, cz: C.Compiled
         cfg["timeout_s"] = 120.0
         cfg["patrol_until_s"] = MISSION_S + 60.0      # past the sim limit: the sim, not the goal client, ends the mission
         cfg["scenario"] = ""                           # send_goal.py takes no scenario parameter (body-shop free)
+        cfg["wiring_only"] = True
+        return cfg
+    from intercycle_eval.broadcaster import check_robot_scenario  # pyright: ignore[reportMissingImports]
+    from intercycle_nav.masks import scenario_ros_arg  # pyright: ignore[reportMissingImports]
+
+    arg = scenario_ros_arg(cfg)
+    x0, z0, x1, z1 = (float(v) for v in cz.extent)
+    grid = f" -p mask_origin:=[{x0},{z0}] -p mask_size:=[{x1 - x0},{z1 - z0}]"     # the zone's extent, not the hall's
+    feed = bcond in ("learned", "oracle")
+    sock = "unix://$IC_WORK/observer.sock" if feed else "none"
+    wait_vk = "for i in $(seq 1200); do [ -s $IC_WORK/observer_vk.txt ] && break; sleep 0.1; done; " if feed else ""
+    keyring = " -p keyring:=\\\"$(cat $IC_WORK/observer_vk.txt)\\\"" if feed else ""
+    extra = []
+    if feed:
+        extra.append("PYTHONPATH=$IC_SIM_PYTHONPATH exec $IC_SIM_PY -u -m twin.broadcast_live --work $IC_WORK"
+                     " --obs $IC_OUT/obs_v2.jsonl --world $IC_WORLD")
+    extra.append(f"{wait_vk}exec python3 -u -m intercycle_nav.observer_bridge --ros-args -p use_sim_time:=true"
+                 f" -p condition:={bcond} -p feed:={sock} -p plant_t0:={t0}{keyring}{grid}{arg}")
+    cfg["extra_launch"] = extra
+    cfg["goal_cmd"] = (f"python3 -u -m intercycle_nav.timing_planner --ros-args -p use_sim_time:=true"
+                       f" -p condition:={bcond} -p plant_t0:={t0} -p init:=[{start[0]},{start[1]},{start[2]}]"
+                       f" -p mission_timeout_s:=100000.0 -p max_wait_s:=120.0 -p sitegraph:=$IC_WORLD/sitegraph.json"
+                       f" -p out:=$IC_WORK/goal.json{arg}")
+    check_robot_scenario(cfg)
     return cfg
 
 
-def world_bytes(zone_dir: Path, script_path: Path) -> dict[str, bytes]:
+def world_bytes(zone_dir: Path, learn_obs: Path, spec: dict, zone_machines: list[str], margin: Path,
+                zone: str) -> dict[str, bytes]:
+    """The world files every process of the episode may read (the robot side is given this dir as $IC_WORLD): the
+    zone's built world (incl. scenario.yaml and sitegraph.json), and for the twin broadcaster the observer spec, the
+    frozen M-W7 margin and the learning period's Observation v2 lines. No truth: the day script ships separately
+    (plant_files, `PL.day_script_payload`)."""
+    from twin import broadcast_live as BL
+
     files = {f: (zone_dir / f).read_bytes() for f in BW.FILES if (zone_dir / f).exists()}
     files["factory_l0.usda"] = files["static.usda"]   # the name the Isaac backend opens (isaac_backend.py)
-    files[script_path.name] = script_path.read_bytes()
+    files[BL.SPEC_FILE] = json.dumps(BL.spec_record(spec, zone, zone_machines)).encode()
+    files[BL.MARGIN_FILE] = margin.read_bytes()
+    files[BL.LEARN_FILE] = learn_obs.read_bytes()
     return files
 
 
-def run_modal(out: Path, cfg: dict, world: dict[str, bytes], cpu: float) -> dict:
+def run_modal(out: Path, cfgs: list[dict], world: dict[str, bytes], plant_files: dict[str, bytes],
+              cpu: float) -> list[dict]:
+    """Run the missions in parallel on Modal CPU (fake backend + Nav2), pull each episode dir from the volume."""
     import modal_isaac_robot as R  # pyright: ignore[reportMissingImports]
 
     t0 = time.time()
+    fn = R.fake_episode_cpu(cpu)
     with R.app.run():
-        res = R.fake_episode_cpu(cpu).remote(cfg, world)
-    res["client_wall_s"] = round(time.time() - t0, 1)
-    (out / f"{cfg['tag']}.episode.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
-    dest = R.pull(cfg["tag"])
-    return {"tag": cfg["tag"], "pulled": str(dest), "error": res.get("error"), "phases": res.get("phases"),
-            "client_wall_s": res["client_wall_s"], "goal": (res.get("goal") or {}).get("result"),
-            "plant_status": (res.get("plant") or {}).get("status"), "log_tail": (res.get("log_tail") or "")[-3000:]}
+        calls = [fn.spawn(c, world, plant_files) for c in cfgs]
+        results = []
+        for c, call in zip(cfgs, calls):
+            try:
+                results.append(call.get())
+            except Exception as e:  # noqa: BLE001 - a provider failure is recorded per mission
+                results.append({"tag": c["tag"], "error": f"modal: {e!r}"})
+    wall = round(time.time() - t0, 1)
+    recs = []
+    for c, res in zip(cfgs, results):
+        res["client_wall_s"] = wall
+        (out / f"{c['tag']}.episode.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
+        dest = R.pull(c["tag"]) if "phases" in res else None
+        recs.append({"tag": c["tag"], "planner": c["slice_planner"], "condition": c["plant"]["condition"],
+                     "pulled": str(dest) if dest else None, "error": res.get("error"), "phases": res.get("phases"),
+                     "client_wall_s": wall, "goal": (res.get("goal") or {}).get("result"),
+                     "n_inspected": (res.get("goal") or {}).get("n_inspected"),
+                     "plant_status": (res.get("plant") or {}).get("status"),
+                     "rtf": (res.get("sim") or {}).get("rtf"), "log_tail": (res.get("log_tail") or "")[-3000:]})
+    return recs
+
+
+def check_feed_verified(run_dir: Path) -> dict:
+    """The learned mission's robot side verified the observer's layers: observer_bridge.jsonl has a state with a
+    verified map AND slow layer AND a fast layer; the counts of verified / rejected records come from the bridge."""
+    p = run_dir / "observer_bridge.jsonl"
+    if not p.exists():
+        raise SliceError("no observer_bridge.jsonl in the learned mission")
+    rows = _read_jsonl(p)
+    ok = [r for r in rows if r.get("map_ok") and r.get("slow_ok") and r.get("fast_age_s") is not None]
+    if not ok:
+        raise SliceError(f"the robot never verified map + slow + fast layers ({len(rows)} bridge states)")
+    last = rows[-1].get("stats") or {}
+    return {"states": len(rows), "verified_states": len(ok), "first_verified_t": ok[0]["t"],
+            "bridge_stats": last.get("bridge"), "keepout_source": (rows[-1].get("keepout") or {}).get("source"),
+            "machines_last": rows[-1].get("machines")}
+
+
+def check_modal_mission(rec: dict) -> dict:
+    if rec.get("error") or not rec.get("pulled"):
+        raise SliceError(f"Modal mission {rec['tag']} failed: {rec.get('error')}")
+    if rec.get("plant_status") != "ok":
+        raise SliceError(f"Modal mission {rec['tag']}: plant status {rec.get('plant_status')}")
+    return {k: rec[k] for k in ("tag", "planner", "condition", "goal", "n_inspected", "rtf", "phases")}
 
 
 # ------------------------------------------------------------------------------------------------ main
@@ -595,7 +692,7 @@ def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: st
             ctx["learn_obs"] = r[1]
             site = load(Site, paths["site"])
             ctx["adapter"] = PL.ObsAdapter(site)
-            spec = observer_spec(site, ctx["compiled"], ctx["adapter"])
+            spec = ctx["spec"] = observer_spec(site, ctx["compiled"], ctx["adapter"])
             r = do("5_observer", lambda: step_observer(out, spec, ctx["learn_obs"], t0 + LEARN_S))
             if r:
                 ctx["observer"] = r[1]
@@ -614,27 +711,67 @@ def run(out: Path, *, world: int = 0, day: int = 9, zone: str = "z14", modal: st
             if "adapter" in ctx:
                 do("stop_in_observation", lambda: check_stop_propagation(
                     rd, rd / OL.OBS_FILE, ctx["adapter"], OL.ObserverLiveConfig.motion_thr), "assertions")
-        if modal:
-            tag = f"slice_{modal}_{time.strftime('%m%d_%H%M%S')}"
-            cfg = modal_cfg(tag, paths, ctx["script_path"].name, cz, t0 + LEARN_S, zone, world, modal, max_rtf)
-            wb = world_bytes(Path(out / "worlds" / zone), ctx["script_path"])
-            mr = do(f"6_mission_modal_{modal}", lambda: run_modal(out, cfg, wb, cpu))
-            if mr:
-                rd = Path(mr["pulled"])
-                if (rd / "summary.json").exists():
-                    m = do("7_8_log_metric_modal", lambda: mission_metric(rd, planned))
-                    if m:
-                        rep["steps"]["7_8_log_metric_modal"].update(m[1])
-                        do("metric_schema_modal", lambda: check_metric_schema(m[0], out / "primary_metric_modal.json"),
-                           "assertions")
-                        do("inspection_attempt_modal", lambda: _attempts(m[1]), "assertions")
-                else:
-                    rep["steps"][f"6_mission_modal_{modal}"].update(ok=False, error="no summary.json on the volume")
+        if modal and "spec" in ctx:
+            run_modal_steps(out, rep, do, ctx, paths, cz, planned, t0 + LEARN_S, zone, world, modal, cpu, max_rtf)
+        elif modal:
+            rep["steps"]["6_mission_modal"] = {"ok": False, "wall_s": 0.0, "error": "steps 3-5 failed: no learned observer"}
     if guard_tests:
         do("guard_tests", run_guard_tests, "assertions")
     rep["green"] = all(v["ok"] for k in ("steps", "assertions") for v in rep[k].values())
     (out / "slice_report.json").write_text(json.dumps(rep, indent=1, default=str), encoding="utf-8")
     return rep
+
+
+def run_modal_steps(out: Path, rep: dict, do: Callable[..., Any], ctx: dict, paths: dict[str, Path],
+                    cz: C.CompiledZone, planned: list[str], t0: float, zone: str, world: int, modal: str, cpu: float,
+                    max_rtf: float) -> None:
+    """Step 6 on Modal + steps 7-8 and the assertions on the Modal runs. modal "timing": the learned mission and the
+    no_map probe mission in parallel; "patrol": the wiring check alone (no metric: it is not a condition run)."""
+    stamp = time.strftime("%m%d_%H%M%S")
+    planners = ("timing", "probe") if modal == "timing" else (modal,)
+    tags = {pl: f"slice_{'wiring_' if pl == 'patrol' else ''}{pl}_{stamp}" for pl in planners}
+    cfgs = [modal_cfg(tags[pl], paths, ctx["script_path"].name, cz, t0, zone, world, pl, max_rtf) for pl in planners]
+    mp, _ = margin_path(out)
+    wb = world_bytes(out / "worlds" / zone, ctx["learn_obs"], ctx["spec"], [m.id for m in cz.scenario.machines], mp,
+                     zone)
+    pf = dict([PL.day_script_payload(ctx["script_path"])])
+    recs = do("6_mission_modal", lambda: {"missions": run_modal(out, cfgs, wb, pf, cpu)})
+    if not recs:
+        return
+    by = {r["planner"]: r for r in rep["steps"]["6_mission_modal"]["missions"]}
+    for pl in planners:
+        rec = by[pl]
+        if not do(f"modal_{pl}_ran", lambda: check_modal_mission(rec), "assertions"):
+            continue
+        rd = Path(rec["pulled"])
+        if pl == "patrol":
+            rep["assertions"][f"modal_{pl}_ran"]["wiring_only"] = True
+            continue
+        m = do(f"7_8_log_metric_modal_{pl}", lambda: mission_metric(rd, planned))
+        if not m:
+            continue
+        rep["steps"][f"7_8_log_metric_modal_{pl}"].update(m[1])
+        do(f"metric_schema_modal_{pl}", lambda: check_metric_schema(m[0], out / f"primary_metric_modal_{pl}.json"),
+           "assertions")
+        if pl == "timing":
+            do("inspection_attempt_modal", lambda: _attempts(m[1]), "assertions")
+            do("feed_verified_modal", lambda: check_feed_verified(rd), "assertions")
+    # a robot-caused stop must reach the Observation within 1 tick + latency on the Modal path too: every stop of the
+    # Modal missions is checked, and at least one must exist (the no_map probe enters on its camera alone)
+    stops = []
+    for pl in planners:
+        rec = by[pl]
+        if pl != "patrol" and rec.get("pulled") and (Path(rec["pulled"]) / "summary.json").exists():
+            rd = Path(rec["pulled"])
+            if any(r["kind"] == "press_trip" for r in read_log(rd)):
+                stops.append((pl, rd))
+    if modal == "timing":
+        def _stops() -> dict:
+            if not stops:
+                raise SliceError("no robot-caused press stop in the Modal missions: the propagation is not exercised")
+            return {pl: check_stop_propagation(rd, rd / OL.OBS_FILE, ctx["adapter"], OL.ObserverLiveConfig.motion_thr)
+                    for pl, rd in stops}
+        do("stop_in_observation_modal", _stops, "assertions")
 
 
 def _attempts(info: dict) -> dict:

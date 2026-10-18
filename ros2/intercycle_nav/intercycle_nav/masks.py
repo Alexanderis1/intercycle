@@ -226,7 +226,8 @@ class Site:
 
         scn = S.load(path) if path else S.load()
         rects = {m.id: tuple(float(v) for v in m.rect) for m in scn.machines}
-        ext = (float(scn.hall["x"][0]), float(scn.hall["z"][0]), float(scn.data_hall["x"][1]), float(scn.hall["z"][1]))
+        ex0, ez0, ex1, ez1 = scn.site_extent             # body shop: hall + data hall; a twin zone: its extent
+        ext = (float(ex0), float(ez0), float(ex1), float(ez1))
         return cls([m.id for m in scn.machines], rects, list(scn.line_stops()), int(scn.site_id), int(scn.key_id), ext)
 
     def zone_of(self, x: float, y: float, pad: float = 0.0) -> str | None:
