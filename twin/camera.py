@@ -53,16 +53,20 @@ ASSUMED (a stated value, no data).
     "quiet" while it runs with the ram at rest, "idle" otherwise. Camera-14 presses never run in the footage: their
     moving / quiet pools are the pooled P9a + P9b pools (ASSUMED). The press is seen through the framing of its first
     ram ROI. T-W6: when a mover's padded image box (ROI_PAD_FRAC) covers the ROI from in front of the press, the
-    sample is MISSING (NaN) if that mover is detected this tick; if it is missed, the blocked ROI reads the "idle"
-    pool for a standing mover (fail-dangerous, as the real pipeline) or the "moving" pool for a walking one. The
-    observer-side hold (`hold_s`) is what covers the missed case. `MOTION_THR` (FITTED, Youden J) is the matching
+    sample is MISSING (NaN) if that mover is detected this tick, and stays MISSING for `hold_s` after the last such
+    tick, in image space, whatever the occluder's floor position (as `occlusion.roi_missing_series` in the real
+    ingest; the observer-side floor hold only arms on detections near the press zone). A blocked ROI outside that
+    hold (the occluder missed on its first ticks, before any detection) reads the "idle" pool for a standing mover
+    (fail-dangerous, as the real pipeline) or the "moving" pool for a walking one: the arrival leak, counted in
+    `stats["roi_blocked_unseen"]`. `MOTION_THR` (FITTED, Youden J) is the matching
     observer_live motion threshold.
 12. **hold_s (FITTED).** The smallest hold k (ticks) such that k + 1 consecutive ticks with the occluder missed in
     the image (chain miss, or the occluded-regime extra miss) have probability <= OCC_EPS, at the per-camera
     Jeffreys means, maximised over camera x class (camera 9's occluded recall sets it: person 21 s, the forklift
     driver 34 s); hold_s = k / 2 Hz. `hold_detail` also gives each hold at the one-sided 95 % lower recall bounds
-    (camera 9 person 34 s, forklift 71 s; disclosed, not used: the twin simulates the mean model). Gross floor errors are not counted: a detected
-    occluder makes the ROI MISSING through the image-space rule of item 11 wherever its floor position lands.
+    (camera 9 person 34 s, forklift 71 s; disclosed, not used: the twin simulates the mean model). The same hold
+    is the camera's image-space ROI hold (item 11) and the converter's floor hold. Gross floor errors do not count:
+    the image-space hold runs on the detection in the image, wherever its floor position lands.
 
 Common random numbers: every draw comes from `twin.rng.keyed_rng(world_seed, day, entity, f"tick:{k}")`, k = the
 absolute 2 Hz tick, entity `cam:<mover>` (a fixed number of draws per call, whatever the state),
@@ -419,9 +423,12 @@ class CameraStatV1:
         self.tracks: dict[str, _Track] = {}
         self._pboxes: dict[str, list[tuple[tuple, float]]] | None = None
         self.hold_s = self._hold_s()
+        self.hold_ticks = int(round(self.hold_s * self.hz))
+        self.roi_last_hit: dict[str, int] = {}       # press -> last tick a DETECTED occluder covered its ROI (image)
         self.err_log: list[tuple[str, float, float]] | None = None   # tests: (mover, dx, dz) per true detection
         self.stats = {"ticks": 0, "true": 0, "seen": 0, "hidden": 0, "occluded": 0, "missed": 0, "gross": 0,
-                      "fp": 0, "idsw": 0, "forklift_as_person_c9": 0, "roi_missing": 0, "roi_blocked_unseen": 0}
+                      "fp": 0, "idsw": 0, "forklift_as_person_c9": 0, "roi_missing": 0, "roi_held": 0,
+                      "roi_blocked_unseen": 0}
 
     # ---------------------------------------------------------------- fitted hold
     def _hold_s(self) -> float:
@@ -688,11 +695,16 @@ class CameraStatV1:
                 if x0 - pu <= r1 and x1 + pu >= r0 and y0 - pv <= s1 and y1 + pv >= s0:
                     blockers.append(m)
             pool = self._pool(p)
+            if any(detected.get(m.id, False) for m in blockers):
+                out[p.id] = math.nan                              # T-W6: a detected occluder makes the ROI MISSING
+                self.roi_last_hit[p.id] = k
+                self.stats["roi_missing"] += 1
+                continue
+            if k - self.roi_last_hit.get(p.id, -10 ** 9) <= self.hold_ticks:
+                out[p.id] = math.nan                              # ... held hold_s after the last such tick (image
+                self.stats["roi_held"] += 1                       # space, as roi_missing_series in the real ingest)
+                continue
             if blockers:
-                if any(detected.get(m.id, False) for m in blockers):
-                    out[p.id] = math.nan                          # T-W6: a detected occluder makes the ROI MISSING
-                    self.stats["roi_missing"] += 1
-                    continue
                 self.stats["roi_blocked_unseen"] += 1
                 pool = "moving" if any(m.speed > MOVING_MPS for m in blockers) else "idle"
             out[p.id] = _quantile_sample(self.energy[p.id][pool]["q"], u)

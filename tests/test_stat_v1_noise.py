@@ -254,16 +254,87 @@ def test_roi_missing_when_detected_occluder_covers_the_ram():
         v = d.zone_motion["P14b"]
         nan += math.isnan(v)
         vals.append(v)
-    assert cam.stats["roi_missing"] + cam.stats["roi_blocked_unseen"] == 200   # the person covers the ROI
-    assert nan == cam.stats["roi_missing"] > 100                                # detected -> MISSING (T-W6)
-    finite = np.asarray([v for v in vals if np.isfinite(v)])                     # missed: the blocked ROI reads idle
-    assert len(finite) == cam.stats["roi_blocked_unseen"]
+    st = cam.stats
+    assert st["roi_missing"] + st["roi_held"] + st["roi_blocked_unseen"] == 200  # the person covers the ROI
+    assert st["roi_missing"] > 100                                              # detected -> MISSING (T-W6)
+    assert nan == st["roi_missing"] + st["roi_held"]                            # missed after a detection: held
+    finite = np.asarray([v for v in vals if np.isfinite(v)])                     # missed before any detection only
+    assert len(finite) == st["roi_blocked_unseen"]
+    first_nan = next(i for i, v in enumerate(vals) if math.isnan(v))
+    assert np.isfinite(vals[:first_nan]).all() and np.isnan(vals[first_nan:]).all()
     # unblocked running press: finite energies from the moving pool, mostly above MOTION_THR
     cam = CAM.CameraStatV1(SITE, WORLD, 1)
     e = [cam.observe(tick(10.0 + k / 2.0, [], pr)).zone_motion["P9a"] for k in range(300)]
     assert np.isfinite(e).all() and float(np.mean(np.asarray(e) > CAM.MOTION_THR)) > 0.75
     idle = [cam.observe(tick(500.0 + k / 2.0, [])).zone_motion["P9a"] for k in range(300)]
     assert float(np.mean(np.asarray(idle) > CAM.MOTION_THR)) < 0.3
+
+
+def _roi_occluder_far_from_zone(cam, pid: str, min_gap: float):
+    """A floor point whose standing person covers press `pid`'s ram ROI in the image (in front of the press) while
+    its floor position is more than `min_gap` from the press's danger rect (+ dilation): the observer's floor rule
+    (rect + 1 m margin, circle r + 0.5 m pad) never arms on it."""
+    from twin import plant
+    from intercycle.observer.occlusion import ROI_PAD_FRAC
+    p = next(pp for pp in SITE.presses if pp.id == pid)
+    fid, (r0, s0, r1, s1) = cam.roi[pid]
+    rect = plant._bbox(p.danger_polygon.value, p.dilation_m.value)
+    poly = cam.zones[p.zone].floor_polygon.value
+    xs, zs = [q[0] for q in poly], [q[1] for q in poly]
+    g = np.random.default_rng(0)
+    for _ in range(50000):
+        x, z = float(g.uniform(min(xs), max(xs))), float(g.uniform(min(zs), max(zs)))
+        if not point_in_polygon(x, z, poly):
+            continue
+        fo = cam._framing_of(p.zone, x, z)
+        if fo is None or fo[0] != fid or cam._depth(fid, (x, z)) >= cam._depth(fid, cam.press_centre[pid]):
+            continue
+        b = cam._box(fid, CAM._circle_prism(x, z, 0.3, CAM.HEIGHT_M["person"]))
+        if b is None:
+            continue
+        pu, pv = ROI_PAD_FRAC * (b[2] - b[0]), ROI_PAD_FRAC * (b[3] - b[1])
+        gap = math.hypot(max(rect[0] - x, 0.0, x - rect[2]), max(rect[1] - z, 0.0, z - rect[3]))
+        if b[0] - pu <= r1 and b[2] + pu >= r0 and b[1] - pv <= s1 and b[3] + pv >= s0 and gap > min_gap:
+            return x, z, gap
+    raise AssertionError(f"no such floor point for {pid}")
+
+
+def test_image_space_hold_covers_occluder_outside_the_floor_zone():
+    """T-W6 inside the camera: a person standing in front of running P14a covers its ROI in the image, but stands
+    > 1.8 m (margin 1 m + pad 0.5 m + r 0.3 m) from the rect, so the observer's floor hold never arms. After the first
+    tick the person is detected, the camera keeps the ROI MISSING for hold_s after every detection: no finite sample
+    (no 'no motion' leak) until the person leaves. On bf91cdd's camera (and params) the same scene leaks 47-79 finite
+    samples in 1200 ticks after the first detection (worlds 3 / 7 / 17), 40-68 of them <= MOTION_THR."""
+    from intercycle.observer.occlusion import occluded_zones
+    from twin import plant
+    pr = [dict(id=p.id, state="running", ram=0.0, stroke=False, freeze=False) for p in SITE.presses]
+    for world in (3, 7, 17):
+        cam = CAM.CameraStatV1(SITE, world, 1)
+        x, z, gap = _roi_occluder_far_from_zone(cam, "P14a", 1.8 + 0.05)
+        p = next(pp for pp in SITE.presses if pp.id == "P14a")
+        rect = plant._bbox(p.danger_polygon.value, p.dilation_m.value)
+        assert not occluded_zones(np.array([x]), np.array([z]), np.array([0.3]), [rect], margin=1.0, pad=0.5).any()
+        first, leaks = None, 0
+        for k in range(1200):
+            d = cam.observe(tick(10.0 + k / 2.0, [person(0, x, z, "z14")], pr))
+            v = d.zone_motion["P14a"]
+            if first is None and math.isnan(v):
+                first = k
+            elif first is not None and np.isfinite(v):
+                leaks += 1
+        assert first is not None and first < 20, (world, first)
+        assert leaks == 0, (world, leaks, gap)
+        assert cam.stats["roi_held"] > 0                     # missed ticks were bridged by the image-space hold
+    # the hold ends: once the occluder leaves, the ROI reads energies again after hold_s
+    cam = CAM.CameraStatV1(SITE, 7, 1)
+    x, z, _ = _roi_occluder_far_from_zone(cam, "P14a", 1.85)
+    for k in range(20):
+        cam.observe(tick(10.0 + k / 2.0, [person(0, x, z, "z14")], pr))
+    last = max(k for k in [cam.roi_last_hit["P14a"]])
+    vals = [cam.observe(tick(20.0 + k / 2.0, [], pr)).zone_motion["P14a"] for k in range(cam.hold_ticks + 10)]
+    k_free = 40 + np.arange(len(vals))
+    assert all(math.isnan(v) for v, kk in zip(vals, k_free) if kk - last <= cam.hold_ticks)
+    assert all(np.isfinite(v) for v, kk in zip(vals, k_free) if kk - last > cam.hold_ticks)
 
 
 def test_hold_sized_from_fitted_bursts():
