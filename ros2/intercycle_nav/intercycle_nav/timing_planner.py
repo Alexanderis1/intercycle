@@ -32,6 +32,9 @@ from intercycle_nav.masks import assert_no_truth
 from intercycle_nav.timing import CameraGate, TimingCore, camera_stub_used, interrupted_result, window_open
 
 RESULT = {TaskResult.SUCCEEDED: "SUCCEEDED", TaskResult.CANCELED: "CANCELED", TaskResult.FAILED: "FAILED"}
+# conditions whose entry rule needs an open idle window, (a) + (b); reactive (E-W4) gets its windows from its own camera
+# through observer_bridge, with the same planner and entry logic as learned
+WINDOW_CONDITIONS = ("learned", "oracle", "reactive")
 
 
 class Planner:
@@ -161,13 +164,13 @@ class Planner:
         return r
 
     def dwell(self, tg, inside: bool) -> dict:
-        """Hold still for dwell_s; inside a hazard zone (learned / oracle) cut it short when the predicted window no
+        """Hold still for dwell_s; inside a hazard zone (learned / oracle / reactive) cut it short when the predicted window no
         longer leaves exit + margin."""
         t0 = self.ros_t()
         cut = False
         while self.ros_t() - t0 < self.core.dwell_s:
             rclpy.spin_once(self.nav, timeout_sec=0.05)
-            if inside and self.condition in ("learned", "oracle"):
+            if inside and self.condition in WINDOW_CONDITIONS:
                 if window_open(self.windows().get(tg.machine), self.plant_t(), self.core.exit_time(tg) + self.core.margin_s) is None:
                     cut = True
                     break
@@ -182,7 +185,7 @@ class Planner:
             rclpy.spin_once(self.nav, timeout_sec=0.05)
             t = self.plant_t()
             win = None
-            if self.condition in ("learned", "oracle"):
+            if self.condition in WINDOW_CONDITIONS:
                 win = window_open(self.windows().get(tg.machine), t, need)
                 if win is None:
                     continue
