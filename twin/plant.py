@@ -8,7 +8,8 @@ script only, and the press ram is the only moving machine part.
 
 cfg["plant"] (fail closed: the EVAL identity fields have no defaults): site, safety, day_script, run_id, zone, world,
 world_split, condition, code{head, ...}; optional tasks (twin/tasks.yaml: checked against the site), dynamics,
-plant_t0, run_dir, obs_presses / obs_zones, reset_override_s (the U4 descriptive reset sweep, see below).
+plant_t0, run_dir, obs_presses / obs_zones, reset_override_s (the U4 descriptive reset sweep, see below),
+allow_short_mission (dev only, see "Mission length").
 
 Truth and files (the plant's output reaches the observer side ONLY through files):
   * `runs/<id>/realised_state.jsonl` (TRUTH, for EVAL): the engine's 2 Hz stream over the mission, the robot added as
@@ -39,10 +40,15 @@ press's danger polygon dilated by its `dilation_m`:
   * hold: while the robot is inside, a restart that falls due (a scheduled running bout begins, or a reset ends) is
     delayed: the press is frozen `held` while the robot stays inside, at most to the end of that running bout. One
     `press_hold` row per delayed restart, valued at the measure of its held freezes.
-  * restart after a hold: a light curtain with manual reset cannot sense the robot inside (W-W4), so the curtain break
-    latches the restart interlock: after a visit in which a restart was held, the press restarts only after a manual
-    reset from outside, drawn like the trip reset (key "t0=<plant_t0>:hold_reset:<n>"), state `resetting`, starting
-    when the robot has left. Other guards (auto reset) restart as soon as the robot has left.
+  * latched restart interlock (W-W4, U4 "light curtain plus manual reset", R-W2(b) "manual reset on ANY entry"): a
+    light curtain with manual reset cannot sense the robot inside, so EVERY entry latches the restart interlock,
+    whatever the press state: after any visit that did not trip it, the press restarts only after a manual reset from
+    outside, drawn like the trip reset (key "t0=<plant_t0>:entry_reset:<n>"), state `resetting`, starting when the
+    robot has left. A reset that delays a scheduled restart is a hold (one press_hold row, value = the delayed
+    running seconds, unless that restart was already held during the visit). So leaving a stopped press just before
+    its restart costs about as much as leaving just after it (no cost cliff at the restart). Not latched: an entry
+    the rules `allow` into a running press (a muted curtain: an incident instead). Other guards (auto reset) restart
+    as soon as the robot has left.
   * incident: the robot inside the danger zone of a press that is running unfrozen (an entry the rules allow), or a
     geometric overlap with a person or a forklift while the robot moves (> MOVING_MPS). Stationary overlaps (someone
     walking into a parked robot) are logged as contacts, not incidents.
@@ -51,8 +57,16 @@ press's danger polygon dilated by its `dilation_m`:
   the time the robot's freezes (tripped + reset + held) overlap the scheduled running bouts, reset tails past the
   mission end included (the production is lost either way).
   * reset sweep (U4, descriptive only): cfg["plant"]["reset_override_s"] replaces every manual-reset draw by that fixed
-    duration (it must lie in each press's `reset.sweep_s`); the run is tagged a sweep run in plant_summary.json, the
-    mission_start row and every reset row.
+    duration (it must lie in each press's `reset.sweep_s`); the run is tagged a sweep run in summary.json
+    (`variant` "reset_sweep" + `reset_override_s`), plant_summary.json, the mission_start row and every reset row.
+
+Mission length: Summary.T_s is the fixed 720 s denominator, so cfg["seconds"] != 720 is refused at init unless
+cfg["plant"]["allow_short_mission"] is True on a dev world (tests, the slice); such a run is `variant` "short_dev".
+Only `variant` "primary" runs may enter the primary metric (`twin.schemas.runs.require_primary`).
+
+Fail closed during the mission: an exception inside a runner hook (poses, after_step, frame_extras, on_ros) is
+recorded, the plant stops its work for the rest of the mission, and `finish` writes summary.json with status "error"
+(the runner's loop never sees the exception, so it always reaches `finish`).
 
 World interface (`TwinWorld`, the shape of intercycle.sim.world.World the robot stack uses): active, active_many,
 trip, group(...).freezes, groups, true_idle_windows, idle_remaining, next_start_after; one group per press (presses
@@ -318,7 +332,7 @@ class _PressGuard:
         self.hold_s = 0.0                 # measure of the open hold's held freezes
         self.hold_cp: str | None = None
         self.visit_held = False           # a restart was held during the current visit
-        self.n_hold_resets = 0
+        self.n_entry_resets = 0           # latched-interlock manual resets drawn so far (key entry_reset:<n>)
         self.incident_entry = False
         self.chunk_end = -math.inf        # end of the latest freeze this plant applied to the press
 
@@ -438,7 +452,8 @@ class Plant:
         if abs(self.t0 * TICK_HZ - round(self.t0 * TICK_HZ)) > 1e-6:
             raise ValueError(f"plant_t0={self.t0} is not on the {TICK_HZ} Hz grid")
         self.T = float(cfg.get("seconds", MISSION_T_S))
-        if self.t0 < self.engine.t0 - EPS_T or self.t0 + self.T > self.engine.t_end + EPS_T:
+        self.short_mission = self._check_mission_length(p.get("allow_short_mission"))
+        if self.t0 <self.engine.t0 - EPS_T or self.t0 + self.T > self.engine.t_end + EPS_T:
             raise ValueError(f"mission [{self.t0}, {self.t0 + self.T}) is outside the scripted day "
                              f"[{self.engine.t0}, {self.engine.t_end})")
         self.run_id = str(p["run_id"])
@@ -501,10 +516,33 @@ class Plant:
         self.wall_plant = 0.0
         self.finished: dict | None = None
         self._ended = False
+        self._broken = False                                       # a runner hook raised: no further plant work
+        self._last_poses: dict[str, tuple[float, float, float]] = {}
         self._log_row(0.0, "mission_start", ROBOT_ID, zone=self.zone,
                       detail={"plant_t0": self.t0, "T_s": self.T, "condition": self.condition,
                               "world": self.world_idx, "world_split": self.world_split,
-                              "reset_override_s": self.reset_override_s})
+                              "reset_override_s": self.reset_override_s, "variant": self.variant})
+
+    @property
+    def variant(self) -> str:
+        """Summary.variant: "primary" only for a full 720 s mission on the U4 lognormal reset; a short dev/test
+        mission is "short_dev", a U4 reset-sweep run "reset_sweep" (both never pooled into the primary metric)."""
+        if self.short_mission:
+            return "short_dev"
+        return "reset_sweep" if self.reset_override_s is not None else "primary"
+
+    def _check_mission_length(self, allow) -> bool:
+        """Summary.T_s is the fixed 720 s denominator (PLAN_TWIN §5): a mission of another length is refused (fail
+        closed), unless cfg["plant"]["allow_short_mission"] is True on a dev world (tests, the slice); such a run is
+        tagged variant "short_dev". Returns True for an allowed short mission."""
+        if abs(self.T - MISSION_T_S) <= EPS_T:
+            return False
+        if allow is not True:
+            raise ValueError(f"cfg seconds={self.T} != the fixed mission length T={MISSION_T_S} s; set "
+                             "cfg['plant']['allow_short_mission']=True for a dev/test run (tagged short_dev)")
+        if self.world_split != "dev":
+            raise ValueError("allow_short_mission is refused on a test world (fail closed)")
+        return True
 
     def _reset_override(self, v) -> float | None:
         """The U4 descriptive reset sweep: a fixed reset duration inside every press's sweep interval, or None."""
@@ -558,8 +596,26 @@ class Plant:
         return out
 
     def poses(self, t: float) -> dict[str, tuple[float, float, float]]:
-        """Mover poses in the ROS frame (x = plan x, y = plan z, psi from +x counter-clockwise)."""
-        return {m.id: (x, z, math.pi / 2 - h) for m, (x, z, h, _) in self._mover_states(self.t0 + t)}
+        """Mover poses in the ROS frame (x = plan x, y = plan z, psi from +x counter-clockwise). A broken plant
+        returns the last poses it computed (the mission is already an error)."""
+        if self._broken:
+            return dict(self._last_poses)
+        try:
+            self._last_poses = {m.id: (x, z, math.pi / 2 - h) for m, (x, z, h, _) in self._mover_states(self.t0 + t)}
+        except Exception as e:  # noqa: BLE001 - fail closed: recorded, the mission ends with status "error"
+            self._hook_failed("poses", t, e)
+        return dict(self._last_poses)
+
+    def _hook_failed(self, hook: str, t: float, exc: Exception) -> None:
+        """A runner hook raised during the mission: record it, stop all further plant work (`_broken`) and let
+        `finish` write summary.json with status "error" (PLAN_TWIN §5: a failure, never missing logs)."""
+        self._broken = True
+        reason = f"plant {hook} failed at sim t={t:.2f} s: {exc!r}"[:500]
+        self.errors.append(reason)
+        try:
+            self._log_row(t, "error", ROBOT_ID, zone=self.zone, detail={"reason": reason})
+        except Exception:  # noqa: BLE001 - the reason is in self.errors either way
+            pass
 
     def mover_prims(self, T: float) -> dict[str, np.ndarray]:
         """Analytic mover primitives (ROS frame): circles (cx, cy, r, zmax) = people, boxes (cx, cy, hw, hd, yaw, zmax)
@@ -583,8 +639,19 @@ class Plant:
                          (cx + a, cz + a, zr)])
 
     def after_step(self, t: float, st: dict, contacts: list[dict]) -> None:
-        w = time.time()
+        """Runner hook after every physics step. Fail closed: an exception is recorded (`_hook_failed`) and the
+        plant does no further work; `finish` then writes status "error"."""
         self.t = t
+        if self._broken:
+            return
+        w = time.time()
+        try:
+            self._after_step(t, st, contacts)
+        except Exception as e:  # noqa: BLE001 - recorded as the mission's error (scored as a failure)
+            self._hook_failed("after_step", t, e)
+        self.wall_plant += time.time() - w
+
+    def _after_step(self, t: float, st: dict, contacts: list[dict]) -> None:
         x, y, z = (float(v) for v in st["pos_w"][:3])
         psi = yaw_of(st["quat_wxyz"])
         vw = st["v_w"]
@@ -601,10 +668,19 @@ class Plant:
         self._write_ticks(t)
         if self.gate.due(t):
             self._gate(t)
-        self.wall_plant += time.time() - w
 
     def frame_extras(self, t: float) -> dict:
-        """What ROS gets from the plant: the robot camera's gate observations and inspection outcomes, nothing else."""
+        """What ROS gets from the plant: the robot camera's gate observations and inspection outcomes, nothing else.
+        Fail closed like `after_step` (a broken plant sends nothing)."""
+        if self._broken:
+            return {}
+        try:
+            return self._frame_extras(t)
+        except Exception as e:  # noqa: BLE001 - recorded as the mission's error (scored as a failure)
+            self._hook_failed("frame_extras", t, e)
+            return {}
+
+    def _frame_extras(self, t: float) -> dict:
         out: dict = {}
         obs = self.gate.ready(t)
         if obs:
@@ -616,7 +692,16 @@ class Plant:
 
     def on_ros(self, t: float, events: list[dict]) -> None:
         """The timing planner's inspection events: dwell_start / dwell_end (capture), decline (checkpoint declined).
-        With tasks.yaml, a target outside the mission zone's mission_order is an error (not counted)."""
+        With tasks.yaml, a target outside the mission zone's mission_order is an error (not counted). Fail closed like
+        `after_step`."""
+        if self._broken:
+            return
+        try:
+            self._on_ros(t, events)
+        except Exception as e:  # noqa: BLE001 - recorded as the mission's error (scored as a failure)
+            self._hook_failed("on_ros", t, e)
+
+    def _on_ros(self, t: float, events: list[dict]) -> None:
         for e in events:
             kind, cp = e.get("event"), e.get("target")
             if kind not in ("dwell_start", "dwell_end", "decline"):
@@ -812,22 +897,45 @@ class Plant:
                           value=round(reset, 3), detail={"t_abs": r0 + reset, "after": "manual reset"})
             g.tripped = False
         else:
-            cp = g.hold_cp
+            held = g.visit_held
+            cp = g.hold_cp if held else self._checkpoint_for(g)
             self._close_hold(g, t)
-            if g.visit_held and g.latching:
-                # W-W4: the light curtain cannot sense the robot inside, so its break latched the restart interlock:
-                # the held press restarts only after a manual reset from outside, once the robot has left
-                reset = self._reset_s(g, f"hold_reset:{g.n_hold_resets}")
-                g.n_hold_resets += 1
-                r0 = max(g.chunk_end, T, self.written + EPS_T)
-                self._freeze(g, r0, r0 + reset, "resetting")
-                self._log_row(r0 + reset - self.t0, "press_restart", g.id, zone=zone, checkpoint=cp,
-                              value=round(reset, 3),
-                              detail={"t_abs0": r0, "t_abs": r0 + reset, "reset_s": round(reset, 3),
-                                      "after": "manual reset after a held restart (light-curtain restart interlock)",
-                                      "guard": g.cfg.guard.device, **self._reset_tag()})
+            muted = g.entry_action == "allow" and g.entry_state == "running"
+            if g.latching and not muted:
+                self._entry_reset(g, t, T, zone, cp, held)
         g.visit_held = False
         g.entry_state = g.entry_action = None
+
+    def _running_measure(self, pid: str, a: float, b: float) -> float:
+        """Seconds of [a, b) inside the press's scheduled running bouts."""
+        p = self.engine.presses[pid]
+        return sum(max(0.0, min(b, e1) - max(a, e0)) for e, e0, e1 in zip(p.events, p.e0, p.e1)
+                   if e.kind == "running")
+
+    def _entry_reset(self, g: _PressGuard, t: float, T: float, zone: str, cp: str | None, held: bool) -> None:
+        """W-W4 / U4: the robot broke a light curtain with manual reset. The curtain cannot sense the robot inside, so
+        the break latched the restart interlock on entry, whatever the press state: the press restarts only after a
+        manual reset from outside, drawn from the press's lognormal (key entry_reset:<n>), state `resetting` from the
+        exit. A reset that delays a scheduled restart is a hold (one hold per delayed restart: a visit that already
+        held that restart is not counted again)."""
+        reset = self._reset_s(g, f"entry_reset:{g.n_entry_resets}")
+        g.n_entry_resets += 1
+        r0 = max(T, self.written + EPS_T)
+        self._freeze(g, r0, r0 + reset, "resetting")
+        delayed = self._running_measure(g.id, r0, r0 + reset)
+        counted = not held and delayed > 0.0
+        if counted:
+            self.holds += 1
+            self.events.append({"t": round(t, 3), "type": "hold", "press": g.id, "via": "entry_reset"})
+            self._log_row(t, "press_hold", g.id, zone=zone, checkpoint=cp, value=round(delayed, 3),
+                          detail={"t_abs0": r0, "t_abs1": r0 + reset, "held_s": 0.0, "delayed_s": round(delayed, 3),
+                                  "cause": "restart delayed by the manual reset after the robot's curtain break "
+                                           "(latched restart interlock)"})
+        self._log_row(r0 + reset - self.t0, "press_restart", g.id, zone=zone, checkpoint=cp, value=round(reset, 3),
+                      detail={"t_abs0": r0, "t_abs": r0 + reset, "reset_s": round(reset, 3),
+                              "after": "manual reset after a curtain break (light-curtain restart interlock)",
+                              "held_restart": held, "delays_restart": delayed > 0.0, "entry_state": g.entry_state,
+                              "guard": g.cfg.guard.device, **self._reset_tag()})
 
     def world_trip(self, mid: str, T: float, who: str, where: str | None = None, reset_s: float | None = None) -> dict:
         """TwinWorld.trip: a protective stop of press `mid` at absolute time T, counted and logged like a robot entry.
@@ -989,7 +1097,8 @@ class Plant:
                        zone=self.zone, condition=self.condition, T_s=MISSION_T_S, status=status,  # type: ignore[arg-type]
                        status_reason=reason, robot_caused_press_stops=self.trips, holds=self.holds,
                        incidents=self.incidents, press_time_lost_s=round(lost_s, 3),
-                       path_length_m=round(self.path_len, 3), code=self.code,
+                       path_length_m=round(self.path_len, 3), code=self.code, variant=self.variant,  # type: ignore[arg-type]
+                       reset_override_s=self.reset_override_s,
                        wall_s=None if sim_summary is None else sim_summary.get("wall_s"), **counts)
 
     def finish(self, out_dir: str | None = None, sim_summary: dict | None = None) -> dict:
@@ -1013,11 +1122,10 @@ class Plant:
         try:
             self.writer.__exit__(None, None, None)         # publishes realised_state.jsonl (fail closed: >= 1 tick)
         except Exception as e:  # noqa: BLE001 - recorded as the mission's error, never swallowed silently
-            status, reason = "error", f"realised stream not published: {e!r}"
-            self.errors.append(reason)
+            self.errors.append(f"realised stream not published: {e!r}")
         self._deliver(None)                                # observations still in flight at the mission end
         self._obs_f.close()
-        if self.errors and status == "ok":
+        if self.errors:                                    # in order: a mission hook's failure comes first
             status, reason = "error", "; ".join(self.errors)[:500]
         if self.k_next < self.k_end and status == "ok":
             status, reason = "error", f"mission ended at sim t={t_end:.2f} s before T={self.T} s"
@@ -1083,7 +1191,7 @@ class Plant:
         try:
             out = self._summary("error", reason, c, lost_s, sim_summary).model_dump(mode="json")
         except Exception as e:  # noqa: BLE001 - last resort: still a summary.json with status error
-            out = {"contract": "twin.summary/1", "run_id": self.run_id, "status": "error",
+            out = {"contract": "twin.summary/1", "run_id": self.run_id, "status": "error", "variant": self.variant,
                    "status_reason": f"{reason}; summary invalid: {e!r}"[:1000]}
         _write_json(self.run_dir / "summary.json", out)
         try:

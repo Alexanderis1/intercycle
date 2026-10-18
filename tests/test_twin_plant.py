@@ -20,7 +20,7 @@ from twin import plant as PL
 from twin import robot_camera as RC
 from twin.schemas import load
 from twin.schemas.dayscript import DayScript, MoverIntent, PressEvent, Segment
-from twin.schemas.runs import Summary, parse_realised
+from twin.schemas.runs import Summary, parse_realised, require_primary
 from twin.schemas.safety import Safety
 from twin.schemas.site import Site
 from twin.schemas.tables import LogRow, validate_table
@@ -58,13 +58,14 @@ def _script(p9a: list[PressEvent], intents=(), segments=(), duration=600.0, worl
 
 def _cfg(tmp_path, script: DayScript, seconds=120.0, safety=SAFETY_PATH, name="r1", **plant) -> dict:
     """The tests' cfg: the EVAL identity fields (world, world_split, condition, code) are set here only; the plant
-    itself has no defaults for them."""
+    itself has no defaults for them. Test missions are shorter than T = 720 s, so allow_short_mission is set."""
     sp = tmp_path / f"{name}.day_script.json"
     sp.write_text(json.dumps(script.model_dump(mode="json")), encoding="utf-8")
     return {"seconds": seconds, "sim": "fake",
             "plant": {"site": str(SITE_PATH), "safety": str(safety), "day_script": str(sp), "run_id": name,
                       "zone": "z9", "world": 0, "world_split": "dev", "condition": "learned",
-                      "code": {"head": "test"}, "plant_t0": T0, "run_dir": str(tmp_path / "runs" / name), **plant}}
+                      "code": {"head": "test"}, "plant_t0": T0, "run_dir": str(tmp_path / "runs" / name),
+                      "allow_short_mission": True, **plant}}
 
 
 def _plant(tmp_path, script: DayScript, seconds=120.0, safety=SAFETY_PATH, name="r1", **plant) -> PL.Plant:
@@ -212,7 +213,7 @@ def test_restart_due_while_the_robot_is_inside_is_held_then_needs_a_manual_reset
     t_exit = max(f.t1 for f in held)
     assert t_exit == pytest.approx(T0 + 40.1, abs=0.11)
     # light curtain + manual reset (W-W4): the held restart needs a manual reset from outside once the robot has left
-    reset = PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:hold_reset:0")
+    reset = PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:entry_reset:0")
     rs = [f for f in pl.engine.freezes() if f.state == "resetting"]
     assert len(rs) == 1 and rs[0].t0 == pytest.approx(t_exit) and rs[0].t1 - rs[0].t0 == pytest.approx(reset)
     _, ts = _ticks(pl)
@@ -230,7 +231,8 @@ def test_restart_due_while_the_robot_is_inside_is_held_then_needs_a_manual_reset
     assert "restart delayed" in json.loads(hold[0]["detail"])["cause"]
     rst = [r for r in rows if r["kind"] == "press_restart"]
     assert len(rst) == 1 and rst[0]["value"] == pytest.approx(reset, abs=1e-3)
-    assert "after a held restart" in json.loads(rst[0]["detail"])["after"]
+    det = json.loads(rst[0]["detail"])
+    assert "curtain break" in det["after"] and det["held_restart"] is True and det["entry_state"] == "stopped"
     assert s.press_time_lost_s == pytest.approx(min(t_exit + reset, T0 + 600.0) - (T0 + 30.0), abs=0.11)
 
 
@@ -263,12 +265,54 @@ def test_each_delayed_restart_is_its_own_hold_valued_at_its_held_time(tmp_path):
                if f.state == "held")
 
 
-def test_entering_and_leaving_a_stopped_press_costs_nothing(tmp_path):
+def test_entering_a_stopped_press_latches_the_curtain_and_needs_a_manual_reset(tmp_path):
+    """W-W4 / U4: a light-curtain break latches the restart interlock on ANY entry. Stopped 0-100 s, robot inside
+    10-40 s: a manual reset from the exit (40 s); it outlasts the stop, so the restart at 100 s is delayed (a hold,
+    lost time > 0). With the stop lasting to 300 s the same reset ends before the restart: no hold, no lost time."""
     pl = _plant(tmp_path, _script([_stop(t1=100.0), _run(t0=100.0)]), seconds=60.0)
     _drive(pl, lambda t: IN if 10.0 <= t < 40.0 else OUT, 60.0)
     s = pl.finish()
-    assert (s["robot_caused_press_stops"], s["holds"], s["incidents"], s["press_time_lost_s"]) == (0, 0, 0, 0.0)
-    assert pl.engine.freezes() == []
+    reset = PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:entry_reset:0")
+    assert 60.0 < reset < 260.0                                     # this world's draw outlasts the 100 s stop only
+    rs = [f for f in pl.engine.freezes() if f.press == "P9a"]
+    assert len(rs) == 1 and rs[0].state == "resetting" and rs[0].t0 == pytest.approx(T0 + 40.0, abs=0.11)
+    assert rs[0].t1 - rs[0].t0 == pytest.approx(reset)
+    assert (s["robot_caused_press_stops"], s["holds"], s["incidents"]) == (0, 1, 0)
+    assert s["press_time_lost_s"] > 0
+    assert s["press_time_lost_s"] == pytest.approx(rs[0].t1 - (T0 + 100.0), abs=1e-3)
+    rows = _log(pl)
+    hold = [r for r in rows if r["kind"] == "press_hold"]
+    assert len(hold) == 1 and hold[0]["value"] == pytest.approx(s["press_time_lost_s"], abs=1e-3)
+    assert "curtain break" in json.loads(hold[0]["detail"])["cause"]
+    rst = [r for r in rows if r["kind"] == "press_restart"]
+    assert len(rst) == 1 and rst[0]["value"] == pytest.approx(reset, abs=1e-3)
+    assert json.loads(rst[0]["detail"])["delays_restart"] is True
+    long = _plant(tmp_path, _script([_stop(t1=300.0), _run(t0=300.0)]), seconds=60.0, name="long")
+    _drive(long, lambda t: IN if 10.0 <= t < 40.0 else OUT, 60.0)
+    s2 = long.finish()
+    assert [f.state for f in long.engine.freezes()] == ["resetting"]
+    assert (s2["holds"], s2["press_time_lost_s"]) == (0, 0.0)
+    rst2 = [r for r in _log(long) if r["kind"] == "press_restart"]
+    assert len(rst2) == 1 and json.loads(rst2[0]["detail"])["delays_restart"] is False
+
+
+def test_no_cost_cliff_at_the_scheduled_restart(tmp_path):
+    """Audit repro: stopped 0-30 s, running from 30 s, robot inside from 10 s. Leaving just before the restart (29.5 s)
+    and just after it (30.5 s) both give a manual reset, a hold and lost time; the lost times differ by the extra
+    second of presence, not by a whole reset."""
+    out = {}
+    for name, leave in (("before", 29.5), ("after", 30.5)):
+        pl = _plant(tmp_path, _script([_stop(t1=30.0), _run(t0=30.0)]), seconds=60.0, name=name)
+        _drive(pl, lambda t, leave=leave: IN if 10.0 <= t < leave else OUT, 60.0)
+        out[name] = pl.finish()
+        rs = [f for f in pl.engine.freezes() if f.state == "resetting"]
+        assert len(rs) == 1 and rs[0].t0 == pytest.approx(T0 + leave, abs=0.11)
+    reset = PL.reset_draw(load(Safety, SAFETY_PATH).presses[0], 5, 9, f"t0={T0:.1f}:entry_reset:0")
+    a, b = out["before"], out["after"]
+    assert a["holds"] == b["holds"] == 1
+    assert a["press_time_lost_s"] == pytest.approx(reset - 0.5, abs=0.11)
+    assert b["press_time_lost_s"] == pytest.approx(reset + 0.5, abs=0.11)
+    assert b["press_time_lost_s"] - a["press_time_lost_s"] == pytest.approx(1.0, abs=0.25)
 
 
 def test_an_allowed_entry_into_a_running_press_is_an_incident(tmp_path):
@@ -356,6 +400,65 @@ def test_an_exception_inside_finish_still_writes_an_error_summary_and_the_log(tm
     assert pl.finish() is s                                         # idempotent
 
 
+def test_an_exception_inside_a_mission_hook_still_writes_an_error_summary(tmp_path, monkeypatch):
+    """A plant hook that raises during the mission (here the camera model) must not leave the runner without
+    summary.json / log.parquet / plant_summary.json: the plant records the error, stops its work and finish() writes
+    status "error"."""
+    pl = _plant(tmp_path, _script([_run()]), seconds=30.0)
+    calls = {"n": 0}
+    real = pl.camera.observe
+
+    def flaky(tk):
+        calls["n"] += 1
+        if calls["n"] == 10:
+            raise RuntimeError("camera model failed (test)")
+        return real(tk)
+    monkeypatch.setattr(pl.camera, "observe", flaky)
+    _drive(pl, lambda t: OUT, 30.0)                                 # the runner loop never sees the exception
+    pl.on_ros(20.0, [{"event": "dwell_start", "target": "cp1", "inside": False}])
+    assert pl._broken and calls["n"] == 10                          # no plant work after the failure
+    s = pl.finish()
+    disk = Summary.model_validate(json.loads((pl.run_dir / "summary.json").read_text(encoding="utf-8")))
+    assert disk.model_dump(mode="json") == s
+    assert s["status"] == "error" and "after_step" in s["status_reason"] and "camera model failed" in s["status_reason"]
+    assert s["attempted"] == 0
+    kinds = [r["kind"] for r in _log(pl)]
+    assert kinds[0] == "mission_start" and "error" in kinds and kinds[-1] == "mission_end"
+    assert (pl.run_dir / "plant_summary.json").exists()
+
+    def boom(*a, **k):
+        raise RuntimeError("hook failed (test)")
+    for hook, target, call in (("poses", "_mover_states", lambda q: q.poses(1.0)),
+                               ("frame_extras", "_frame_extras", lambda q: q.frame_extras(1.0)),
+                               ("on_ros", "_on_ros", lambda q: q.on_ros(1.0, [{"event": "decline", "target": "x"}]))):
+        q = _plant(tmp_path, _script([_run()]), seconds=30.0, name=f"h_{hook}")
+        monkeypatch.setattr(q, target, boom)
+        out = call(q)
+        assert q._broken and out in ({}, None)
+        r = q.finish()
+        assert r["status"] == "error" and f"plant {hook} failed" in r["status_reason"]
+        assert (q.run_dir / "summary.json").exists() and (q.run_dir / "log.parquet").exists()
+
+
+def test_a_mission_length_other_than_t_is_refused_unless_allowed_on_dev(tmp_path):
+    with pytest.raises(ValueError, match="fixed mission length"):
+        _plant(tmp_path, _script([_run()]), seconds=300.0, name="m1", allow_short_mission=None)
+    with pytest.raises(ValueError, match="test world"):
+        _plant(tmp_path, _script([_run()]), seconds=300.0, name="m2", world_split="test")
+    full = _plant(tmp_path, _script([_run(t1=800.0)], duration=800.0), seconds=720.0, name="m3",
+                  allow_short_mission=None)
+    _drive(full, lambda t: OUT, 720.0, dt=0.5)
+    s = full.finish()
+    assert s["status"] == "ok" and s["T_s"] == 720.0 and s["variant"] == "primary" and s["reset_override_s"] is None
+    assert require_primary(Summary.model_validate(s)).run_id == "m3"
+    short = _plant(tmp_path, _script([_run()]), seconds=30.0, name="m4")
+    _drive(short, lambda t: OUT, 30.0)
+    s4 = short.finish()
+    assert s4["variant"] == "short_dev" and s4["T_s"] == 720.0
+    with pytest.raises(ValueError, match="not a primary run"):
+        require_primary(Summary.model_validate(s4))
+
+
 def test_eval_identity_fields_have_no_defaults(tmp_path):
     for k in ("world", "world_split", "condition", "code"):
         cfg = _cfg(tmp_path, _script([_run()]), name=f"id_{k}")
@@ -397,6 +500,19 @@ def test_reset_override_runs_the_u4_sweep_and_is_tagged(tmp_path):
     assert json.loads(rows[0]["detail"])["reset_override_s"] == 60.0
     trip = next(r for r in rows if r["kind"] == "press_trip")
     assert json.loads(trip["detail"])["reset_source"] == "sweep_override"
+    # summary.json itself says it is not a primary run (an EVAL aggregator reading only summary.json refuses it)
+    summ = Summary.model_validate(json.loads((pl.run_dir / "summary.json").read_text(encoding="utf-8")))
+    assert summ.variant == "short_dev" and summ.reset_override_s == 60.0       # a short test mission carrying it
+    full = _plant(tmp_path, _script([_run(t1=800.0)], duration=800.0), seconds=720.0, name="rf", reset_override_s=60.0,
+                  allow_short_mission=None)
+    _drive(full, lambda t: OUT, 720.0, dt=0.5)
+    sf = Summary.model_validate(full.finish())
+    assert sf.variant == "reset_sweep" and sf.reset_override_s == 60.0 and sf.status == "ok"
+    with pytest.raises(ValueError, match="not a primary run"):
+        require_primary(sf)
+    for bad in ({"variant": "primary", "reset_override_s": 60.0}, {"variant": "reset_sweep", "reset_override_s": None}):
+        with pytest.raises(ValueError, match="reset_override_s"):
+            Summary.model_validate({**sf.model_dump(mode="json"), **bad})
     with pytest.raises(ValueError, match="outside press"):
         _plant(tmp_path, _script([_run()]), name="r2", reset_override_s=30.0)    # below the 60-900 s sweep
     plain = _plant(tmp_path, _script([_run()]), name="r3", seconds=10.0)
@@ -459,7 +575,7 @@ def test_world_interface_follows_the_freezes(tmp_path):
     assert w.true_idle_windows("P9a", T0 + 10, 60) == [(T0 + 10, T0 + 30)]
     assert w.idle_remaining("P9a", T0 + 10) == pytest.approx(20.0)
     _drive(pl, lambda t: IN if 10.0 <= t < 40.0 else OUT, 60.0)
-    reset = PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:hold_reset:0")
+    reset = PL.reset_draw(pl.safety.presses[0], 5, 9, f"t0={T0:.1f}:entry_reset:0")
     t_go = T0 + 40.1 + reset                                       # held, then the manual reset after exit
     assert not w.active("P9a", T0 + 35) and not w.active("P9a", T0 + 45) and w.active("P9a", t_go + 1.0)
     assert w.group("P9a").is_frozen(T0 + 35) and w.group("P9a").frozen_until(T0 + 35) == pytest.approx(t_go, abs=0.11)

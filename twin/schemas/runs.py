@@ -95,6 +95,9 @@ def parse_realised(lines: Iterable[str]) -> tuple[RealisedHeader, Iterator[Reali
 # ------------------------------------------------------------------------------------------------ summary.json
 
 
+SummaryVariant = Literal["primary", "reset_sweep", "short_dev"]
+
+
 class CodeHashes(Strict):
     head: str
     generator_sha256: str | None = None
@@ -124,6 +127,11 @@ class Summary(Strict):
     path_length_m: float = Field(ge=0)
     code: CodeHashes
     wall_s: float | None = None
+    # "primary" = a full 720 s mission on the U4 lognormal reset; "reset_sweep" = the U4 descriptive reset sweep
+    # (reset_override_s replaced every reset draw); "short_dev" = a dev mission shorter than T (tests, the slice).
+    # Only "primary" runs may enter the primary metric (`require_primary`).
+    variant: SummaryVariant = "primary"
+    reset_override_s: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _counts(self):
@@ -131,7 +139,20 @@ class Summary(Strict):
             raise ValueError("need passed <= attempted and attempted + declined <= checkpoints_planned")
         if self.status != "ok" and not self.status_reason:
             raise ValueError("a non-ok status needs status_reason")
+        if (self.variant == "reset_sweep") != (self.reset_override_s is not None) and self.variant != "short_dev":
+            raise ValueError("reset_override_s is set exactly on a reset_sweep run (a short_dev run may carry it)")
+        if self.variant == "short_dev" and self.world_split != "dev":
+            raise ValueError("a short_dev run must be on a dev world")
         return self
+
+
+def require_primary(s: Summary) -> Summary:
+    """The EVAL primary path's gate (PLAN_TWIN §5): refuse a summary.json that is not a primary run (a U4 reset-sweep
+    run or a short dev mission), so descriptive runs are never pooled into the primary metric."""
+    if s.variant != "primary" or s.reset_override_s is not None:
+        raise ValueError(f"run {s.run_id} is a {s.variant!r} run (reset_override_s={s.reset_override_s}), "
+                         "not a primary run: it may not enter the primary metric")
+    return s
 
 
 # ------------------------------------------------------------------------------------------- primary metric JSON
